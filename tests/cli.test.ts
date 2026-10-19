@@ -232,3 +232,25 @@ test("a project whose directory is gone is skipped by install and forgotten by u
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test("a partial uninstall puts the shared block back into a pre-existing AGENTS.md", () => {
+  const repo = mkdtempSync(join(tmpdir(), "model-ladder-repo-"));
+  try {
+    writeFileSync(join(repo, "AGENTS.md"), "# Our agents\n");
+    const rt = ["--runtime", "opencode", "--runtime", "codex"];
+    const url = ["--url", "https://k.example.com"];
+    expect(run("install", "kaneo", "--project", repo, ...rt, ...url, "--yes").code).toBe(0);
+    for (const runtime of ["opencode", "codex"]) {
+      const left = run("uninstall", "kaneo", "--project", repo, "--runtime", runtime, "--yes");
+      expect(left.code).toBe(0);
+      if (runtime === "opencode") {
+        const text = read(join(repo, "AGENTS.md"));
+        expect(text).toContain("# Our agents");
+        expect(text).toContain("<!-- BEGIN agent-config:kaneo");
+      }
+    }
+    expect(read(join(repo, "AGENTS.md"))).toBe("# Our agents\n");
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
