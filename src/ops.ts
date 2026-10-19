@@ -513,9 +513,17 @@ function isDangling(path: string): boolean {
   try {
     if (!lstatSync(path).isSymbolicLink()) return false;
   } catch {
-    return false;
+    return false; // Nothing there at all.
   }
-  return !existsSync(path);
+  try {
+    statSync(path);
+    return false;
+  } catch (error) {
+    // Only a target that is truly missing: a loop (ELOOP) or an unreadable target (EACCES) is a
+    // live link the user still owns, and is left alone.
+    const code = (error as { code?: string }).code;
+    return code === "ENOENT" || code === "ENOTDIR";
+  }
 }
 
 /**
@@ -636,10 +644,36 @@ export function applyOp(
   existing: ManifestRecord | undefined,
   notes: string[] = [],
 ): ManifestRecord | undefined {
-  const { op, action } = planned;
-  if (action === "skip") return existing;
+  if (planned.action === "skip") return existing;
   // Replaced before anything else, so the missing directories below are real ones to create.
-  const replacedLinks = [...(existing?.replacedLinks ?? []), ...replaceDanglingLinks(op.path)];
+  const fresh = replaceDanglingLinks(planned.op.path);
+  try {
+    return writeTarget(planned, existing, notes, [...(existing?.replacedLinks ?? []), ...fresh]);
+  } catch (error) {
+    // Nothing was recorded, so put the links back now or they would be lost.
+    for (const link of fresh) {
+      try {
+        rmdirSync(link.path);
+      } catch {
+        // Not created, or not empty.
+      }
+      try {
+        symlinkSync(link.target, link.path);
+      } catch {
+        // Occupied: the error below still reports the failed write.
+      }
+    }
+    throw error;
+  }
+}
+
+function writeTarget(
+  planned: PlannedOp,
+  existing: ManifestRecord | undefined,
+  notes: string[],
+  replacedLinks: { path: string; target: string }[],
+): ManifestRecord {
+  const { op, action } = planned;
   const base: ManifestRecord = {
     kind: op.kind,
     runtime: op.runtime,
@@ -741,7 +775,8 @@ export function applyPlan(plan: PlannedOp[]): ApplyResult {
           );
         } else {
           pruneCreatedDirs([record]);
-          restoreLinks([record]);
+          for (const note of restoreLinks([record], [...byKey.values()]).values())
+            result.notes.push(note);
         }
         result.applied.push(planned);
       } catch (error) {
@@ -890,21 +925,54 @@ function pruneCreatedDirs(records: ManifestRecord[]): void {
   }
 }
 
-/** Puts back the broken symlinks agent-config replaced, once nothing it wrote is in their place. */
-function restoreLinks(records: ManifestRecord[]): void {
-  for (const link of records.flatMap((r) => r.replacedLinks ?? [])) {
-    try {
-      lstatSync(link.path);
-      continue; // Something lives there now: leave it.
-    } catch {
-      // Free again: restore the link.
-    }
-    try {
-      symlinkSync(link.target, link.path);
-    } catch {
-      // Its parent is gone or not writable: leave it.
+/**
+ * Puts back the broken symlinks these undone records replaced. A link whose folder still holds
+ * other managed files moves to one of those records (`remaining`), to come back when the last one
+ * goes. Returns why each link that could not be put back was not, by record.
+ */
+function restoreLinks(
+  records: ManifestRecord[],
+  remaining: ManifestRecord[],
+): Map<ManifestRecord, string> {
+  const failed = new Map<ManifestRecord, string>();
+  for (const r of records) {
+    for (const link of r.replacedLinks ?? []) {
+      const lost = `could not restore the symlink ${link.path} -> ${link.target}`;
+      let occupied = true;
+      try {
+        lstatSync(link.path);
+      } catch {
+        occupied = false;
+      }
+      if (occupied) {
+        const heir = remaining.find(
+          (k) => k !== r && (k.path === link.path || k.path.startsWith(`${link.path}/`)),
+        );
+        if (heir) {
+          heir.replacedLinks = [
+            ...(heir.replacedLinks ?? []).filter((l) => l.path !== link.path),
+            link,
+          ];
+          // The folders created in the link's place go along, so the heir prunes them first.
+          const inside = (r.createdDirs ?? []).filter(
+            (d) => d === link.path || d.startsWith(`${link.path}/`),
+          );
+          heir.createdDirs = [...new Set([...(heir.createdDirs ?? []), ...inside])].sort(
+            (a, b) => b.length - a.length,
+          );
+        } else {
+          failed.set(r, `${lost}: something else is there now`);
+        }
+        continue;
+      }
+      try {
+        symlinkSync(link.target, link.path);
+      } catch (error) {
+        failed.set(r, `${lost}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
+  return failed;
 }
 
 export function uninstall(filter: (r: ManifestRecord) => boolean, force = false): UndoResult[] {
@@ -923,7 +991,11 @@ export function uninstall(filter: (r: ManifestRecord) => boolean, force = false)
   }
   const undone = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record);
   pruneCreatedDirs(undone);
-  restoreLinks(undone);
+  const failed = restoreLinks(undone, keep);
+  for (const res of results) {
+    const note = failed.get(res.record);
+    if (note) res.note = res.note ? `${res.note}; ${note}` : note;
+  }
   saveManifest({ version: 1, records: keep });
   return results;
 }

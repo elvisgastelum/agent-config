@@ -408,3 +408,49 @@ describe("broken symlinks on the target path", () => {
     expect(skill?.reason).toContain("broken symlink");
   });
 });
+
+describe("broken symlinks: no link is lost", () => {
+  const op = (path: string): PlannedOp => ({
+    op: { kind: "file", runtime: "codex", component: "skill", path, content: "x\n", label: path },
+    action: "create",
+  });
+
+  test("a symlink loop is not broken: it is left alone and the write fails", () => {
+    const dir = join(box.home, ".codex/skills");
+    put(join(dir, "keep.txt"), "x");
+    const loop = join(dir, "loop");
+    symlinkSync(loop, loop);
+    const result = applyPlan([op(join(loop, "SKILL.md"))]);
+    expect(result.errors).toHaveLength(1);
+    expect(lstatSync(loop).isSymbolicLink()).toBe(true);
+  });
+
+  test("undoing the record that replaced a shared folder link hands the link to a sibling", () => {
+    const skills = join(box.home, ".codex/skills");
+    put(join(skills, "keep.txt"), "x");
+    const link = join(skills, "kaneo");
+    symlinkSync(join(box.home, "gone"), link);
+    const a = join(link, "a.md");
+    const b = join(link, "b.md");
+    expect(applyPlan([op(a), op(b)]).errors).toEqual([]);
+
+    uninstall((r) => r.path === a);
+    expect(lstatSync(link).isDirectory()).toBe(true);
+    uninstall((r) => r.path === b);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+
+  test("a link that cannot be put back is reported, not dropped silently", () => {
+    const skills = join(box.home, ".codex/skills");
+    put(join(skills, "keep.txt"), "x");
+    const link = join(skills, "kaneo");
+    symlinkSync(join(box.home, "gone"), link);
+    const file = join(link, "SKILL.md");
+    expect(applyPlan([op(file)]).errors).toEqual([]);
+    // Something the user created in the folder keeps it from being removed.
+    put(join(link, "mine.md"), "mine");
+    const results = uninstall(() => true);
+    expect(lstatSync(link).isDirectory()).toBe(true);
+    expect(results.find((r) => r.record.path === file)?.note).toContain("could not restore");
+  });
+});
