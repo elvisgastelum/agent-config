@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { catalogOps, entryKey } from "./catalog.ts";
 import type { Config } from "./config.ts";
 import {
   loadManifest,
@@ -49,20 +50,29 @@ export function detectedRuntimes(): Runtime[] {
     .map((d) => d.runtime);
 }
 
-export function buildPlan(config: Config): PlannedOp[] {
+/**
+ * Plans the whole saved configuration, or with `only` just those catalog entries (keys such as
+ * "kaneo@user"), leaving the ladder and other entries alone.
+ */
+export function buildPlan(config: Config, only?: string[]): PlannedOp[] {
   const manifest = loadManifest().records;
   const records = new Map(manifest.map((r) => [recordKey(r), r]));
-  const ops = allOps(config);
+  const ladder = only ? [] : allOps(config);
+  const catalog = catalogOps(config, only);
+  const ops = [...ladder, ...catalog];
   const wanted = new Set(ops.map(opKey));
+  const planned = new Set(only ?? config.catalog.map(entryKey));
   // Installed items of the selected runtimes and parts that the configuration no longer
-  // produces (a moved hook, a renamed setting) are undone, so nothing stale stays behind.
-  // Parts that were not selected are left alone.
+  // produces (a moved hook, a renamed setting, a runtime dropped from a catalog entry) are
+  // undone, so nothing stale stays behind. Parts that were not selected are left alone.
   const stale = manifest
-    .filter(
-      (r) =>
-        config.runtimes.includes(r.runtime) &&
-        config.components.includes(r.component) &&
-        !wanted.has(recordKey(r)),
+    .filter((r) =>
+      r.component === "catalog"
+        ? r.item !== undefined && planned.has(r.item) && !wanted.has(recordKey(r))
+        : !only &&
+          config.runtimes.includes(r.runtime) &&
+          config.components.includes(r.component) &&
+          !wanted.has(recordKey(r)),
     )
     .map(planRemoval);
   return [...stale, ...ops.map((op) => planOp(op, records.get(opKey(op))))];

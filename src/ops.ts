@@ -39,7 +39,9 @@ export const COMPONENTS = [
   "read-guard",
   "review-models",
 ] as const;
-export type Component = (typeof COMPONENTS)[number];
+export type LadderComponent = (typeof COMPONENTS)[number];
+/** Ladder parts, plus "catalog" for items installed from the catalog (see `item`). */
+export type Component = LadderComponent | "catalog";
 
 export const COMPONENT_LABELS: Record<Component, string> = {
   agents: "Ladder agents (read + edit on fast, balanced, deep)",
@@ -47,6 +49,7 @@ export const COMPONENT_LABELS: Record<Component, string> = {
   instructions: "Always-on instructions block (CLAUDE.md / AGENTS.md)",
   "read-guard": "Read guard hook: blocks full reads of large files (Claude Code)",
   "review-models": "Gentle AI review agents on ladder models",
+  catalog: "Catalog items",
 };
 
 interface OpBase {
@@ -54,11 +57,16 @@ interface OpBase {
   component: Component;
   path: string;
   label: string;
+  /** catalog: the catalog item and scope this op belongs to, such as "kaneo@user". */
+  item?: string;
 }
+
+/** BEGIN/END marker lines; the first pair is written, later pairs are older markers replaced in place. */
+export type Markers = [string, string][];
 
 export type Op =
   | (OpBase & { kind: "file"; content: string; executable?: boolean })
-  | (OpBase & { kind: "block"; content: string })
+  | (OpBase & { kind: "block"; content: string; markers?: Markers; conflict?: string })
   | (OpBase & { kind: "json-set"; pointer: string[]; value: unknown; requireParent?: boolean })
   | (OpBase & { kind: "json-hook"; event: string; matcher: string; command: string })
   | (OpBase & { kind: "frontmatter"; key: string; value: string; requireFile?: boolean });
@@ -81,6 +89,7 @@ export function planRemoval(record: ManifestRecord): PlannedOp {
     component: record.component,
     path: record.path,
     label: record.label,
+    ...(record.item ? { item: record.item } : {}),
   } as Op;
   return { op, action: "remove", reason: "no longer part of the configuration", record };
 }
@@ -91,6 +100,8 @@ export interface ManifestRecord {
   component: Component;
   path: string;
   label: string;
+  /** catalog: the catalog item and scope, such as "kaneo@user". */
+  item?: string;
   /** file: hash of the content written. */
   sha?: string;
   /** file: where the replaced file was saved. */
@@ -113,6 +124,8 @@ export interface ManifestRecord {
   hookCreated?: HookCreated;
   /** block: whether the file ended with a newline before the block was added. */
   trailingNewline?: boolean;
+  /** block: its own markers; absent for the agent-config block. */
+  markers?: Markers;
 }
 
 export interface Manifest {
@@ -170,8 +183,13 @@ export function recordKey(r: {
   pointer?: string[];
   key?: string;
   command?: string;
+  markers?: Markers;
 }): string {
-  return [r.kind, r.path, r.pointer?.join("/") ?? r.key ?? r.command ?? ""].join("\u0000");
+  return [
+    r.kind,
+    r.path,
+    r.pointer?.join("/") ?? r.key ?? r.command ?? r.markers?.[0]?.[0] ?? "",
+  ].join("\u0000");
 }
 
 export function opKey(op: Op): string {
@@ -182,6 +200,8 @@ export function opKey(op: Op): string {
       return recordKey({ kind: op.kind, path: op.path, key: op.key });
     case "json-hook":
       return recordKey({ kind: op.kind, path: op.path, command: op.command });
+    case "block":
+      return recordKey({ kind: op.kind, path: op.path, markers: op.markers });
     default:
       return recordKey({ kind: op.kind, path: op.path });
   }
@@ -322,9 +342,12 @@ const MARKERS: [string, string][] = [
   [LEGACY_BLOCK_BEGIN, LEGACY_BLOCK_END],
 ];
 
-/** The managed block's position, under the current or the pre-rename markers. */
-function findBlock(text: string): { begin: number; end: number } | undefined {
-  for (const [open, close] of MARKERS) {
+/** The managed block's position, under the current or the older markers. */
+function findBlock(
+  text: string,
+  markers: Markers = MARKERS,
+): { begin: number; end: number } | undefined {
+  for (const [open, close] of markers) {
     const begin = text.indexOf(open);
     const endIdx = begin >= 0 ? text.indexOf(close, begin) : -1;
     if (begin >= 0 && endIdx >= 0) return { begin, end: endIdx + close.length };
@@ -332,12 +355,12 @@ function findBlock(text: string): { begin: number; end: number } | undefined {
   return undefined;
 }
 
-export function hasBlock(text: string): boolean {
-  return findBlock(text) !== undefined;
+export function hasBlock(text: string, markers?: Markers): boolean {
+  return findBlock(text, markers) !== undefined;
 }
 
-export function stripBlock(text: string): string {
-  const found = findBlock(text);
+export function stripBlock(text: string, markers?: Markers): string {
+  const found = findBlock(text, markers);
   if (!found) return text;
   const before = text.slice(0, found.begin).replace(/\n+$/, "");
   const after = text.slice(found.end).replace(/^\n+/, "");
@@ -345,9 +368,10 @@ export function stripBlock(text: string): string {
   return after ? `${before}\n\n${after}` : `${before}\n`;
 }
 
-export function withBlock(text: string, content: string): string {
-  const block = `${BLOCK_BEGIN}\n${content.trim()}\n${BLOCK_END}\n`;
-  const found = findBlock(text);
+export function withBlock(text: string, content: string, markers: Markers = MARKERS): string {
+  const [open, close] = markers[0] ?? [BLOCK_BEGIN, BLOCK_END];
+  const block = `${open}\n${content.trim()}\n${close}\n`;
+  const found = findBlock(text, markers);
   if (found) {
     const tail = text.slice(found.end).replace(/^\n/, "");
     return `${text.slice(0, found.begin)}${block}${tail}`;
@@ -494,7 +518,17 @@ export function planOp(op: Op, recorded?: ManifestRecord): PlannedOp {
       return { op, action: "update" };
     case "block": {
       if (current === undefined) return { op, action: "create" };
-      return { op, action: withBlock(current, op.content) === current ? "unchanged" : "update" };
+      // A line the block would define twice (a TOML table the user already has) wins over it.
+      if (op.conflict && !hasBlock(current, op.markers)) {
+        const line = op.conflict;
+        if (current.split("\n").some((l) => l.trim() === line)) {
+          return { op, action: "skip", reason: `already configured (${line})` };
+        }
+      }
+      return {
+        op,
+        action: withBlock(current, op.content, op.markers) === current ? "unchanged" : "update",
+      };
     }
     case "json-set": {
       if (current === undefined) {
@@ -567,6 +601,7 @@ export function applyOp(
     component: op.component,
     path: op.path,
     label: op.label,
+    ...(op.item ? { item: op.item } : {}),
   };
   const current = readText(op.path);
   base.createdDirs = existing?.createdDirs ?? missingDirs(dirname(op.path));
@@ -593,11 +628,17 @@ export function applyOp(
       return { ...base, sha: sha256(op.content), ...(backup ? { backup } : {}) };
     }
     case "block": {
-      if (action !== "unchanged") writeAtomic(op.path, withBlock(current ?? "", op.content));
+      if (action !== "unchanged")
+        writeAtomic(op.path, withBlock(current ?? "", op.content, op.markers));
       const trailingNewline =
         existing?.trailingNewline ??
         (current === undefined || current === "" || current.endsWith("\n"));
-      return { ...base, createdFile, trailingNewline };
+      return {
+        ...base,
+        createdFile,
+        trailingNewline,
+        ...(op.markers ? { markers: op.markers } : {}),
+      };
     }
     case "json-set": {
       const text = current ?? "{}\n";
@@ -693,7 +734,7 @@ export function recordState(r: ManifestRecord): RecordState {
     case "file":
       return sha256(current) === r.sha ? "ok" : "drifted";
     case "block":
-      return hasBlock(current) ? "ok" : "missing";
+      return hasBlock(current, r.markers) ? "ok" : "missing";
     case "json-set": {
       const got = getAt(parseJson(r.path, current), r.pointer ?? []);
       return got.present && deepEqual(got.value, r.value) ? "ok" : "drifted";
@@ -742,7 +783,7 @@ export function undoRecord(r: ManifestRecord, force = false): UndoResult {
       return { record: r, outcome: "removed" };
     }
     case "block": {
-      let next = stripBlock(current);
+      let next = stripBlock(current, r.markers);
       if (next === current) return { record: r, outcome: "already-gone" };
       if (r.trailingNewline === false) next = next.replace(/\n$/, "");
       if (r.createdFile && !next.trim()) {

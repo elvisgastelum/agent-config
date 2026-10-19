@@ -43,6 +43,12 @@ export function claudeDir(): string {
   return process.env.CLAUDE_CONFIG_DIR || join(home(), ".claude");
 }
 
+/** Claude Code's user-scope MCP servers live in .claude.json, beside (not inside) ~/.claude. */
+export function claudeJsonPath(): string {
+  const dir = process.env.CLAUDE_CONFIG_DIR;
+  return dir ? join(dir, ".claude.json") : join(home(), ".claude.json");
+}
+
 export function opencodeDir(): string {
   return join(process.env.XDG_CONFIG_HOME || join(home(), ".config"), "opencode");
 }

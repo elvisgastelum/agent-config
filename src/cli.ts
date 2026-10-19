@@ -6,11 +6,27 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import {
+  CATALOG,
+  catalogItem,
+  entryKey,
+  scopeLabel,
+  upsertEntry,
+  type CatalogEntry,
+  type CatalogItem,
+} from "./catalog.ts";
 import { buildPlan, detectedRuntimes, doctor, status, tildify } from "./commands.ts";
 import { loadConfig, saveConfig, type Config } from "./config.ts";
 import { migrateLegacyLayout } from "./migrate.ts";
 import { configPath, setting } from "./paths.ts";
-import { applyPlan, COMPONENTS, uninstall, type Component } from "./ops.ts";
+import {
+  applyPlan,
+  COMPONENTS,
+  uninstall,
+  type LadderComponent,
+  type ManifestRecord,
+  type PlannedOp,
+} from "./ops.ts";
 import { EFFORTS, isReviewLens, isRuntime, isTier, type Effort, type Runtime } from "./tiers.ts";
 import { formatPlan, runTui } from "./tui.ts";
 import { DELEGATED_ENV, LEGACY_DELEGATED_ENV, delegate } from "./delegate.ts";
@@ -31,8 +47,12 @@ Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.
 Usage:
   agent-config                     open the TUI (in a terminal)
   agent-config install [flags]     apply the saved (or flagged) configuration
+  agent-config install <item>      add a catalog item, e.g. \`agi install kaneo\` (--project <dir>
+                                   for one repository instead of your user config)
+  agent-config catalog             list catalog items and where they are installed
   agent-config status              list what agent-config installed and whether it changed
   agent-config uninstall [flags]   remove it and restore what it replaced
+  agent-config uninstall <item>    remove only that catalog item (--project <dir> for its project copy)
   agent-config doctor              check runtimes and prerequisites
   agent-config config              print the saved configuration and its path
   agent-config self-update         update agent-config itself (--dry-run only checks)
@@ -50,6 +70,9 @@ Flags:
   --min-lines <n>                read guard threshold (default 350)
   --yes                          apply or uninstall without asking
   --dry-run                      show the plan, write nothing
+  --project <dir>                catalog item: install into this repository instead of user scope
+  --url <base-url>               kaneo: Kaneo base URL, e.g. https://kaneo.example.com (default:
+                                 saved, else an existing kaneo MCP entry, else asked)
   --force                        uninstall files even if they changed since install
   --json                         print one JSON document to stdout
   -v, --version / -h, --help
@@ -70,7 +93,10 @@ Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
 class UsageError extends Error {}
 
 const DELEGATE_ONLY = ["tier", "cwd", "no-climb", "timeout", "max-time", "verify"];
+const CATALOG_ONLY = ["project", "url"];
+const LADDER_ONLY = ["component", "model", "effort", "review", "min-lines"];
 const NOT_FOR_DELEGATE = [
+  ...CATALOG_ONLY,
   "component",
   "model",
   "effort",
@@ -101,7 +127,7 @@ function applyFlags(config: Config, values: Record<string, unknown>): void {
       if (!(COMPONENTS as readonly string[]).includes(c))
         throw new UsageError(`unknown component "${c}"`);
     }
-    config.components = list("component") as Component[];
+    config.components = list("component") as LadderComponent[];
   }
   for (const raw of list("model")) {
     const { left, tier, value } = parseAssign(raw, "--model");
@@ -142,6 +168,149 @@ function out(json: boolean, data: unknown, text: string): void {
   process.stdout.write(json ? `${JSON.stringify(data, null, 2)}\n` : `${text}\n`);
 }
 
+function catalogTarget(
+  id: string,
+  values: Record<string, unknown>,
+): { item: CatalogItem; project?: string } {
+  const item = catalogItem(id);
+  if (!item) {
+    throw new UsageError(
+      `unknown catalog item "${id}"; available: ${CATALOG.map((i) => i.id).join(", ")}`,
+    );
+  }
+  const raw = values.project as string | undefined;
+  if (raw === undefined) return { item };
+  const project = resolve(raw);
+  if (!existsSync(project) || !statSync(project).isDirectory())
+    throw new UsageError(`--project ${project} is not a directory`);
+  return { item, project };
+}
+
+/** The catalog entry to install: flags first, then what was saved, detected, or asked. */
+async function catalogEntryFor(
+  item: CatalogItem,
+  project: string | undefined,
+  config: Config,
+  values: Record<string, unknown>,
+): Promise<CatalogEntry> {
+  const saved = config.catalog.find((e) => entryKey(e) === entryKey({ item: item.id, project }));
+  const flagged = (values.runtime as string[] | undefined) ?? [];
+  for (const r of flagged) if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
+  const runtimes =
+    flagged.length > 0
+      ? (flagged as Runtime[])
+      : saved?.runtimes.length
+        ? saved.runtimes
+        : config.runtimes.length > 0
+          ? config.runtimes
+          : detectedRuntimes();
+  if (runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
+  const discovered = item.discover();
+  const settings: Record<string, string> = {};
+  for (const s of item.settings) {
+    const raw = values[s.flag] as string | undefined;
+    if (raw !== undefined) {
+      const value = s.normalize(raw);
+      if (!value) throw new UsageError(`--${s.flag} expects a value like ${s.placeholder}`);
+      settings[s.key] = value;
+      continue;
+    }
+    const known = saved?.settings[s.key] ?? discovered[s.key];
+    if (known) {
+      settings[s.key] = known;
+      continue;
+    }
+    if (!process.stdin.isTTY || !process.stdout.isTTY)
+      throw new UsageError(`${item.id} needs --${s.flag} <${s.placeholder}>`);
+    const answer = await p.text({
+      message: s.message,
+      placeholder: s.placeholder,
+      validate: (v) => (s.normalize(v ?? "") ? undefined : `Enter a value like ${s.placeholder}`),
+    });
+    if (p.isCancel(answer)) throw new Cancelled();
+    settings[s.key] = s.normalize(answer) ?? "";
+  }
+  return { item: item.id, ...(project ? { project } : {}), runtimes, settings };
+}
+
+class Cancelled extends Error {}
+
+/** Shows the plan, asks unless --yes, applies it and saves the configuration. */
+async function applyAndReport(
+  plan: PlannedOp[],
+  config: Config,
+  values: Record<string, unknown>,
+  json: boolean,
+): Promise<number> {
+  const changes = plan.filter(
+    (x) => x.action === "create" || x.action === "update" || x.action === "remove",
+  );
+  const planJson = plan.map(({ op, action, reason }) => ({
+    runtime: op.runtime,
+    component: op.component,
+    ...(op.item ? { item: op.item } : {}),
+    label: op.label,
+    path: op.path,
+    action,
+    reason,
+  }));
+  if (values["dry-run"] || changes.length === 0) {
+    if (changes.length === 0 && !values["dry-run"]) saveConfig(config);
+    out(
+      json,
+      { plan: planJson, applied: false },
+      `${formatPlan(plan)}\n\n${changes.length} change(s)${values["dry-run"] ? " (dry run)" : ""}.`,
+    );
+    return 0;
+  }
+  if (!values.yes) {
+    if (!process.stdin.isTTY) {
+      process.stderr.write(
+        `${formatPlan(plan)}\n\nerror: refusing to apply without --yes outside a terminal.\n`,
+      );
+      return 2;
+    }
+    process.stdout.write(`${formatPlan(plan)}\n\n`);
+    const ok = await p.confirm({ message: `Apply ${changes.length} change(s)?` });
+    if (p.isCancel(ok) || !ok) return 130;
+  }
+  const result = applyPlan(plan);
+  saveConfig(config);
+  const failed = result.errors
+    .map((e) => `${pc.red("failed")} ${e.op.label}: ${e.error}`)
+    .join("\n");
+  out(
+    json,
+    {
+      plan: planJson,
+      applied: true,
+      notes: result.notes,
+      errors: result.errors.map((e) => ({
+        label: e.op.label,
+        path: e.op.path,
+        error: e.error,
+      })),
+    },
+    [
+      formatPlan(plan),
+      "",
+      ...result.notes.map((n) => `${pc.yellow("note")} ${n}`),
+      failed ||
+        `${pc.green("Applied")} ${changes.length} change(s). Restart running agent sessions to load them.`,
+    ].join("\n"),
+  );
+  return result.errors.length > 0 ? 1 : 0;
+}
+
+/** Drops uninstalled runtimes from catalog entries, and entries left with none. */
+function forgetCatalog(config: Config, match: (e: CatalogEntry) => boolean, runtimes: string[]) {
+  config.catalog = config.catalog.flatMap((e) => {
+    if (!match(e)) return [e];
+    const left = runtimes.length === 0 ? [] : e.runtimes.filter((r) => !runtimes.includes(r));
+    return left.length > 0 ? [{ ...e, runtimes: left }] : [];
+  });
+}
+
 async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -153,6 +322,8 @@ async function main(argv: string[]): Promise<number> {
       effort: { type: "string", multiple: true },
       review: { type: "string", multiple: true },
       "min-lines": { type: "string" },
+      project: { type: "string" },
+      url: { type: "string" },
       tier: { type: "string" },
       cwd: { type: "string" },
       "no-climb": { type: "boolean" },
@@ -195,6 +366,19 @@ async function main(argv: string[]): Promise<number> {
         : `--${misplaced} only applies to delegate`,
     );
   }
+  const itemId = command === "install" || command === "uninstall" ? positionals[1] : undefined;
+  const catalogFlag = given.find((k) => CATALOG_ONLY.includes(k));
+  if (catalogFlag && (!itemId || (catalogFlag === "url" && command !== "install"))) {
+    throw new UsageError(
+      `--${catalogFlag} only applies to ${catalogFlag === "url" ? "install" : "install or uninstall"} <item>`,
+    );
+  }
+  const ladderFlag = itemId ? given.find((k) => LADDER_ONLY.includes(k)) : undefined;
+  if (ladderFlag) {
+    throw new UsageError(
+      `--${ladderFlag} configures the ladder; run it with \`agent-config install\` without an item`,
+    );
+  }
   switch (command) {
     case "": {
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -206,66 +390,47 @@ async function main(argv: string[]): Promise<number> {
     case "install":
     case "apply": {
       const config = loadConfig();
+      if (itemId) {
+        const { item, project } = catalogTarget(itemId, values);
+        const entry = await catalogEntryFor(item, project, config, values);
+        upsertEntry(config, entry);
+        return applyAndReport(buildPlan(config, [entryKey(entry)]), config, values, json);
+      }
       applyFlags(config, values);
       if (config.runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
-      const plan = buildPlan(config);
-      const changes = plan.filter(
-        (x) => x.action === "create" || x.action === "update" || x.action === "remove",
-      );
-      const planJson = plan.map(({ op, action, reason }) => ({
-        runtime: op.runtime,
-        component: op.component,
-        label: op.label,
-        path: op.path,
-        action,
-        reason,
-      }));
-      if (values["dry-run"] || changes.length === 0) {
-        if (changes.length === 0 && !values["dry-run"]) saveConfig(config);
-        out(
-          json,
-          { plan: planJson, applied: false },
-          `${formatPlan(plan)}\n\n${changes.length} change(s)${values["dry-run"] ? " (dry run)" : ""}.`,
-        );
-        return 0;
-      }
-      if (!values.yes) {
-        if (!process.stdin.isTTY) {
-          process.stderr.write(
-            `${formatPlan(plan)}\n\nerror: refusing to apply without --yes outside a terminal.\n`,
-          );
-          return 2;
-        }
-        process.stdout.write(`${formatPlan(plan)}\n\n`);
-        const ok = await p.confirm({ message: `Apply ${changes.length} change(s)?` });
-        if (p.isCancel(ok) || !ok) return 130;
-      }
-      const result = applyPlan(plan);
-      saveConfig(config);
-      const failed = result.errors
-        .map((e) => `${pc.red("failed")} ${e.op.label}: ${e.error}`)
-        .join("\n");
-      out(
-        json,
-        {
-          plan: planJson,
-          applied: true,
-          notes: result.notes,
-          errors: result.errors.map((e) => ({
-            label: e.op.label,
-            path: e.op.path,
-            error: e.error,
+      return applyAndReport(buildPlan(config), config, values, json);
+    }
+    case "catalog": {
+      const config = loadConfig();
+      const records = status();
+      const items = CATALOG.map((item) => ({
+        id: item.id,
+        title: item.title,
+        description: item.description,
+        entries: config.catalog
+          .filter((e) => e.item === item.id)
+          .map((e) => ({
+            ...e,
+            scope: e.project ? "project" : "user",
+            files: records.filter((r) => r.record.item === entryKey(e)).length,
           })),
-        },
-        [
-          formatPlan(plan),
-          "",
-          ...result.notes.map((n) => `${pc.yellow("note")} ${n}`),
-          failed ||
-            `${pc.green("Applied")} ${changes.length} change(s). Restart running agent sessions to load them.`,
-        ].join("\n"),
-      );
-      return result.errors.length > 0 ? 1 : 0;
+      }));
+      const text = items
+        .map((i) =>
+          [
+            `${pc.bold(i.id.padEnd(8))} ${i.title}`,
+            `         ${i.description}`,
+            `         installed: ${
+              i.entries.length === 0
+                ? "no"
+                : i.entries.map((e) => `${scopeLabel(e)} (${e.runtimes.join(", ")})`).join("; ")
+            }`,
+            `         install: agent-config install ${i.id} [--project <dir>]`,
+          ].join("\n"),
+        )
+        .join("\n\n");
+      out(json, { items }, text);
+      return 0;
     }
     case "status": {
       const entries = status();
@@ -284,9 +449,28 @@ async function main(argv: string[]): Promise<number> {
     case "uninstall": {
       const runtimes = (values.runtime ?? []) as string[];
       for (const r of runtimes) if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
-      const entries = status().filter(
-        (e) => runtimes.length === 0 || runtimes.includes(e.record.runtime),
-      );
+      const key = itemId
+        ? (() => {
+            const { item, project } = catalogTarget(itemId, values);
+            return entryKey({ item: item.id, project });
+          })()
+        : undefined;
+      const match = (r: ManifestRecord) =>
+        (key === undefined || r.item === key) &&
+        (runtimes.length === 0 || runtimes.includes(r.runtime));
+      const forget = (config: Config) => {
+        if (key) return forgetCatalog(config, (e) => entryKey(e) === key, runtimes);
+        config.runtimes =
+          runtimes.length === 0 ? [] : config.runtimes.filter((r) => !runtimes.includes(r));
+        forgetCatalog(config, () => true, runtimes);
+      };
+      const entries = status().filter((e) => match(e.record));
+      if (entries.length === 0 && key) {
+        // Nothing on disk, but forget a saved entry so `install` does not bring it back.
+        const config = loadConfig();
+        forget(config);
+        saveConfig(config);
+      }
       if (entries.length === 0) return (out(json, { results: [] }, "Nothing to uninstall."), 0);
       if (values["dry-run"]) {
         out(
@@ -304,13 +488,9 @@ async function main(argv: string[]): Promise<number> {
         const ok = await p.confirm({ message: `Undo ${entries.length} change(s)?` });
         if (p.isCancel(ok) || !ok) return 130;
       }
-      const results = uninstall(
-        (r) => runtimes.length === 0 || runtimes.includes(r.runtime),
-        values.force === true,
-      );
+      const results = uninstall(match, values.force === true);
       const config = loadConfig();
-      config.runtimes =
-        runtimes.length === 0 ? [] : config.runtimes.filter((r) => !runtimes.includes(r));
+      forget(config);
       saveConfig(config);
       out(
         json,
@@ -473,6 +653,7 @@ async function main(argv: string[]): Promise<number> {
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (error: unknown) => {
+    if (error instanceof Cancelled) process.exit(130);
     if (
       error instanceof UsageError ||
       (error as { code?: string })?.code?.startsWith("ERR_PARSE_ARGS")
