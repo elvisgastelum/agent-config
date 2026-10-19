@@ -646,7 +646,12 @@ export function applyPlan(plan: PlannedOp[]): ApplyResult {
         // the user changed is left as they have it instead of being offered again each run.
         byKey.delete(recordKey(record));
         if (res.outcome === "kept-modified") {
-          result.notes.push(`${record.path} was left as you changed it and is no longer managed`);
+          // Its backup is no longer referenced, so say where the original is.
+          const original = record.backup ? resolveBackup(record.backup) : undefined;
+          result.notes.push(
+            `${record.path} was left as you changed it and is no longer managed` +
+              (original && existsSync(original) ? `; your original is saved at ${original}` : ""),
+          );
         } else {
           pruneCreatedDirs([record]);
         }

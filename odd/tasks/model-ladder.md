@@ -30,7 +30,8 @@ Objective: one-liner installable tool that configures Claude Code, OpenCode, Cod
 - T11 [S1, S5, L14] `model-ladder delegate` for agents that cannot spawn subagents — inline — done (a9fea93; native review approved and acknowledged, 14 non-blocking advisories)
 - T12 [L16] fix every advisory from the T10 and T11 reviews and untrack `.atl` — inline — done
 - T13 [L18-L20] rename the repo to agent-config (2ffb666) and the tool/binary to `agent-config` with migration and a `model-ladder` alias — inline — done (9c2b790, af78b60; review approved after one correction)
-- T14 [L22] fix the 6 warnings from the rename review — inline — done
+- T14 [L22] fix the 6 warnings from the rename review — inline — done (a07678a; review approved)
+- T15 [L24] fix the 9 non-blocking findings from the T14 review — inline — done
 
 Route evidence: all inline; units depend on the shared engine (no Writer trigger).
 
@@ -59,3 +60,5 @@ Route evidence: all inline; units depend on the shared engine (no Writer trigger
 - L21 T13 evidence: binary `agent-config` (alias `model-ladder`), v0.3.0; folders, env (`AGENT_CONFIG_*` with `MODEL_LADDER_*` fallback), hook path, block markers renamed with migration: legacy state/config moved at startup with backup paths rewritten, stale installed items planned as `remove` (scoped to selected runtimes and parts), legacy block markers found and replaced, installer moves `~/.local/share/model-ladder` and rewrites only the official old remote, self-update relocates a legacy copy even when up to date. 21 new or changed tests RED on 2ffb666 sources (15 failing in the affected files), GREEN after; `vp test` 67/67, `vp check` clean. Feature names kept: `model-ladder` skill, `ladder-*` agents, this document.
 - L22 (2026-10-19, user): "push" (pushed af78b60), then "Fix 6 new warnings"
 - L23 T14 evidence: migration merges an old state folder into an existing new one (records and backups) instead of skipping it, resolves old backup paths at use time, and never stops a command (warning + current layout); stale removals are error-isolated like other ops; an edited stale item is left in place and dropped from management so installs converge. 4 new tests RED on af78b60 sources, GREEN after; `vp test` 73/73, `vp check` clean.
+- L24 (2026-10-19, user): "Fix all non blocking findings"
+- L25 T15 evidence: merge keeps the oldest original (backup, previous value, created flags) when both installs managed the same target; colliding backup stamps renamed; leftover files moved to `model-ladder-leftovers` so the old folder never survives a run; a successful move with an unreadable manifest is reported as moved with a precise warning; manifest rewrites keep other fields; the "no longer managed" note names the saved original; the permission test skips as root. 4 new tests RED on a07678a sources, GREEN after; `vp test` 77/77, `vp check` clean.

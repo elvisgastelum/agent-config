@@ -2647,6 +2647,16 @@ const RUNTIME_BIN = {
 };
 //#endregion
 //#region src/migrate.ts
+/** The fields that describe what was there before any install touched the target. */
+const ORIGINAL_FIELDS = [
+	"backup",
+	"createdFile",
+	"createdDirs",
+	"trailingNewline",
+	"prev",
+	"existingDepth",
+	"hookCreated"
+];
 function key(r) {
 	return [
 		r.kind,
@@ -2654,22 +2664,22 @@ function key(r) {
 		r.pointer?.join("/") ?? r.key ?? r.command ?? ""
 	].join("\0");
 }
-function readRecords(manifest) {
-	if (!existsSync(manifest)) return void 0;
-	const data = JSON.parse(readFileSync(manifest, "utf8"));
-	return Array.isArray(data.records) ? data.records : [];
+function readManifest(path) {
+	if (!existsSync(path)) return void 0;
+	return JSON.parse(readFileSync(path, "utf8"));
 }
-function writeRecords(manifest, records) {
-	mkdirSync(dirname(manifest), { recursive: true });
-	writeFileSync(manifest, `${JSON.stringify({
+/** Writes the records back, keeping every other top-level field of the manifest. */
+function writeManifest(path, base, records) {
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${JSON.stringify({
 		version: 1,
+		...base,
 		records
 	}, null, 2)}\n`);
 }
-function removeIfEmpty(dir) {
-	try {
-		if (readdirSync(dir).length === 0) rmdirSync(dir);
-	} catch {}
+function uniquePath(path) {
+	if (!existsSync(path)) return path;
+	for (let i = 2;; i++) if (!existsSync(`${path}-${i}`)) return `${path}-${i}`;
 }
 /** Old backup paths point into the old state folder; map them to where the backups are now. */
 function resolveBackup(path) {
@@ -2678,42 +2688,55 @@ function resolveBackup(path) {
 	if (!path.startsWith(`${legacy}/`)) return path;
 	return statePaths().dir + path.slice(legacy.length);
 }
-/** Moves the old state folder, or merges it into an existing new one. */
-function migrateState(moved) {
-	const legacy = legacyDirs().state;
+/**
+* Both installs managed the same target: keep the current record, but with what the older
+* install saw before it touched the target, since that is the user's original.
+*/
+function withOriginal(current, older) {
+	const merged = { ...current };
+	for (const field of ORIGINAL_FIELDS) if (field in older) merged[field] = older[field];
+	else delete merged[field];
+	return merged;
+}
+/** Merges an old state folder into an existing new one and removes the old one. */
+function mergeState(legacy, warnings) {
 	const state = statePaths();
-	if (!existsSync(legacy)) return;
-	if (!existsSync(state.dir)) {
-		mkdirSync(dirname(state.dir), { recursive: true });
-		renameSync(legacy, state.dir);
-		moved.push(legacy);
-		const records = readRecords(state.manifest);
-		if (records) writeRecords(state.manifest, records.map((r) => ({
-			...r,
-			backup: r.backup && resolveBackup(r.backup)
-		})));
-		return;
-	}
 	const legacyManifest = join(legacy, "manifest.json");
-	const oldRecords = readRecords(legacyManifest) ?? [];
+	const old = readManifest(legacyManifest);
+	const current = readManifest(state.manifest);
+	const moves = /* @__PURE__ */ new Map();
 	const legacyBackups = join(legacy, "backups");
 	if (existsSync(legacyBackups)) for (const stamp of readdirSync(legacyBackups)) {
-		const to = join(state.backups, stamp);
-		if (existsSync(to)) continue;
+		const to = uniquePath(join(state.backups, stamp));
 		mkdirSync(state.backups, { recursive: true });
 		renameSync(join(legacyBackups, stamp), to);
+		moves.set(join(legacyBackups, stamp), to);
 	}
-	const current = readRecords(state.manifest) ?? [];
-	const known = new Set(current.map(key));
-	const merged = [...current, ...oldRecords.filter((r) => !known.has(key(r))).map((r) => ({
+	const relocate = (backup) => {
+		if (!backup) return backup;
+		for (const [from, to] of moves) if (backup.startsWith(`${from}/`)) return to + backup.slice(from.length);
+		return backup;
+	};
+	const olderByKey = new Map((old?.records ?? []).map((r) => [key(r), {
 		...r,
-		backup: r.backup && resolveBackup(r.backup)
-	}))];
-	writeRecords(state.manifest, merged);
+		backup: relocate(r.backup)
+	}]));
+	const records = (current?.records ?? []).map((r) => {
+		const older = olderByKey.get(key(r));
+		if (!older) return r;
+		olderByKey.delete(key(r));
+		return withOriginal(r, older);
+	});
+	writeManifest(state.manifest, current, [...records, ...olderByKey.values()]);
 	rmSync(legacyManifest, { force: true });
-	removeIfEmpty(legacyBackups);
-	removeIfEmpty(legacy);
-	moved.push(legacy);
+	try {
+		rmdirSync(legacyBackups);
+	} catch {}
+	if ((existsSync(legacy) ? readdirSync(legacy) : []).length > 0) {
+		const aside = uniquePath(join(state.dir, "model-ladder-leftovers"));
+		renameSync(legacy, aside);
+		warnings.push(`kept unrecognized files from ${legacy} in ${aside}`);
+	} else if (existsSync(legacy)) rmdirSync(legacy);
 }
 function migrateLegacyLayout() {
 	const result = {
@@ -2722,6 +2745,7 @@ function migrateLegacyLayout() {
 	};
 	const legacy = legacyDirs();
 	const config = dirname(configPath());
+	const state = statePaths();
 	try {
 		if (existsSync(legacy.config) && !existsSync(config)) {
 			mkdirSync(dirname(config), { recursive: true });
@@ -2731,10 +2755,35 @@ function migrateLegacyLayout() {
 	} catch (error) {
 		result.warnings.push(`could not move ${legacy.config}: ${error.message}`);
 	}
+	if (!existsSync(legacy.state)) return result;
+	if (!existsSync(state.dir)) {
+		try {
+			mkdirSync(dirname(state.dir), { recursive: true });
+			renameSync(legacy.state, state.dir);
+		} catch (error) {
+			result.warnings.push(`could not move ${legacy.state}: ${error.message}`);
+			return result;
+		}
+		result.moved.push(legacy.state);
+		try {
+			const manifest = readManifest(state.manifest);
+			if (manifest) {
+				const records = (manifest.records ?? []).map((r) => ({
+					...r,
+					backup: r.backup && resolveBackup(r.backup)
+				}));
+				writeManifest(state.manifest, manifest, records);
+			}
+		} catch (error) {
+			result.warnings.push(`moved ${legacy.state}, but could not update the backup paths in its manifest (${error.message}); they are resolved when used`);
+		}
+		return result;
+	}
 	try {
-		migrateState(result.moved);
+		mergeState(legacy.state, result.warnings);
+		result.moved.push(legacy.state);
 	} catch (error) {
-		result.warnings.push(`could not move ${legacy.state}: ${error.message}`);
+		result.warnings.push(`could not merge ${legacy.state}: ${error.message}`);
 	}
 	return result;
 }
@@ -3280,8 +3329,10 @@ function applyPlan(plan) {
 			try {
 				const res = undoRecord(record);
 				byKey.delete(recordKey(record));
-				if (res.outcome === "kept-modified") result.notes.push(`${record.path} was left as you changed it and is no longer managed`);
-				else pruneCreatedDirs([record]);
+				if (res.outcome === "kept-modified") {
+					const original = record.backup ? resolveBackup(record.backup) : void 0;
+					result.notes.push(`${record.path} was left as you changed it and is no longer managed` + (original && existsSync(original) ? `; your original is saved at ${original}` : ""));
+				} else pruneCreatedDirs([record]);
 				result.applied.push(planned);
 			} catch (error) {
 				result.errors.push({

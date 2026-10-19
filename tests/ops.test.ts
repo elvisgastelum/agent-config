@@ -250,6 +250,19 @@ test("a removal that fails is reported and the rest of the plan still applies", 
   expect(read(agent)).toContain("ladder-read-fast");
 });
 
+test("an edited item dropped from management says where its original is saved", () => {
+  const agent = join(box.home, ".claude/agents/ladder-read-fast.md");
+  put(agent, "my own agent\n");
+  install(config(["claude"]));
+  const record = loadManifest().records.find((r) => r.path === agent);
+  put(agent, "edited after install\n");
+  const result = applyPlan([planRemoval(record as ManifestRecord)]);
+  const note = result.notes.find((n) => n.includes("no longer managed")) ?? "";
+  const saved = note.split("your original is saved at ")[1] ?? "";
+  expect(read(saved)).toBe("my own agent\n");
+  expect(read(agent)).toBe("edited after install\n");
+});
+
 describe("gentle ai review models", () => {
   const lens = (model: string) =>
     `---\nname: review-risk\ndescription: R1 Risk reviewer\nmodel: ${model}\ntools: []\n---\n\n# R1\n`;

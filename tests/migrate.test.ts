@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
@@ -130,19 +138,23 @@ test("merges the old records into a new state folder that already exists", () =>
   expect(read(p(".claude/skills/model-ladder/SKILL.md"))).toBe(original.skill);
 });
 
-test("a migration that cannot run warns and leaves commands working", () => {
-  legacyInstall();
-  const stateRoot = p(".local/state");
-  chmodSync(stateRoot, 0o500);
-  try {
-    const res = run("status", "--json");
-    expect(res.code).toBe(0);
-    expect(res.stderr).toContain("warning: could not move");
-    expect(existsSync(p(".local/state/model-ladder/manifest.json"))).toBe(true);
-  } finally {
-    chmodSync(stateRoot, 0o755);
-  }
-});
+// Root ignores directory permissions, so the move cannot be made to fail that way.
+test.skipIf(process.getuid?.() === 0)(
+  "a migration that cannot run warns and leaves commands working",
+  () => {
+    legacyInstall();
+    const stateRoot = p(".local/state");
+    chmodSync(stateRoot, 0o500);
+    try {
+      const res = run("status", "--json");
+      expect(res.code).toBe(0);
+      expect(res.stderr).toContain("warning: could not move");
+      expect(existsSync(p(".local/state/model-ladder/manifest.json"))).toBe(true);
+    } finally {
+      chmodSync(stateRoot, 0o755);
+    }
+  },
+);
 
 test("an edited old item is left in place once and not offered again", () => {
   legacyInstall();
@@ -154,4 +166,51 @@ test("an edited old item is left in place once and not offered again", () => {
   expect(
     again.plan.filter((x: { action: string }) => x.action !== "unchanged" && x.action !== "skip"),
   ).toEqual([]);
+});
+
+test("when both installs managed the same file, uninstall restores the user's original", () => {
+  const original = legacyInstall();
+  // A fresh agent-config install that also took over the skill: its backup holds the old
+  // install's output, not the user's file.
+  const skill = p(".claude/skills/model-ladder/SKILL.md");
+  const oldRecords = JSON.parse(read(p(".local/state/model-ladder/manifest.json"))).records;
+  const skillRecord = oldRecords.find((r: { path: string }) => r.path === skill);
+  const newer = p(".local/state/agent-config/backups/newer/SKILL.md");
+  put(newer, read(skill));
+  put(
+    p(".local/state/agent-config/manifest.json"),
+    JSON.stringify({ version: 1, records: [{ ...skillRecord, backup: newer }] }),
+  );
+  run("status");
+  const merged = JSON.parse(read(p(".local/state/agent-config/manifest.json"))).records;
+  expect(merged.filter((r: { path: string }) => r.path === skill)).toHaveLength(1);
+  expect(run("uninstall", "--yes").code).toBe(0);
+  expect(read(skill)).toBe(original.skill);
+});
+
+test("a merge with a colliding backup folder or extra files finishes in one run", () => {
+  const original = legacyInstall();
+  const stamp = readdirSync(p(".local/state/model-ladder/backups"))[0] ?? "";
+  put(p(`.local/state/agent-config/backups/${stamp}/unrelated.txt`), "x");
+  put(p(".local/state/agent-config/manifest.json"), `{ "version": 1, "records": [] }\n`);
+  put(p(".local/state/model-ladder/notes.txt"), "kept");
+
+  const first = run("status");
+  expect(first.stderr).toContain("renamed from model-ladder");
+  expect(first.stderr).toContain("kept unrecognized files");
+  expect(existsSync(p(".local/state/model-ladder"))).toBe(false);
+  expect(read(p(".local/state/agent-config/model-ladder-leftovers/notes.txt"))).toBe("kept");
+  expect(run("status").stderr).toBe("");
+
+  expect(run("uninstall", "--yes").code).toBe(0);
+  expect(read(p(".claude/skills/model-ladder/SKILL.md"))).toBe(original.skill);
+});
+
+test("a moved state folder with an unreadable manifest is reported as moved, not as failed", () => {
+  legacyInstall();
+  writeFileSync(p(".local/state/model-ladder/manifest.json"), "{ broken");
+  const res = run("status");
+  expect(res.stderr).toContain("renamed from model-ladder");
+  expect(res.stderr).toContain("could not update the backup paths");
+  expect(res.stderr).not.toContain("could not move");
 });
