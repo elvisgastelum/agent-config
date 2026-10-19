@@ -10,6 +10,7 @@ import {
   CATALOG,
   catalogItem,
   entryKey,
+  forgetCatalog,
   scopeLabel,
   upsertEntry,
   type CatalogEntry,
@@ -300,15 +301,6 @@ async function applyAndReport(
     ].join("\n"),
   );
   return result.errors.length > 0 ? 1 : 0;
-}
-
-/** Drops uninstalled runtimes from catalog entries, and entries left with none. */
-function forgetCatalog(config: Config, match: (e: CatalogEntry) => boolean, runtimes: string[]) {
-  config.catalog = config.catalog.flatMap((e) => {
-    if (!match(e)) return [e];
-    const left = runtimes.length === 0 ? [] : e.runtimes.filter((r) => !runtimes.includes(r));
-    return left.length > 0 ? [{ ...e, runtimes: left }] : [];
-  });
 }
 
 async function main(argv: string[]): Promise<number> {
