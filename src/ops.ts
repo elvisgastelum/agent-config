@@ -12,8 +12,10 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmdirSync,
+  statSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -111,12 +113,25 @@ function readText(path: string): string | undefined {
   }
 }
 
+/**
+ * Writes through symlinks (dotfile managers link these files) and keeps the existing
+ * file's permissions, so a private settings.json stays private.
+ */
 function writeAtomic(path: string, text: string, executable = false): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.model-ladder-tmp`;
+  let target = path;
+  let mode: number | undefined;
+  try {
+    target = realpathSync(path);
+    mode = statSync(target).mode & 0o7777;
+  } catch {
+    // New file: write it at the given path with default permissions.
+  }
+  mkdirSync(dirname(target), { recursive: true });
+  const tmp = `${target}.model-ladder-tmp`;
   writeFileSync(tmp, text);
-  if (executable) chmodSync(tmp, 0o755);
-  renameSync(tmp, path);
+  if (executable) chmodSync(tmp, (mode ?? 0o644) | 0o111);
+  else if (mode !== undefined) chmodSync(tmp, mode);
+  renameSync(tmp, target);
 }
 
 export function recordKey(r: {
@@ -236,12 +251,17 @@ function unquote(raw: string): string {
   return v;
 }
 
-export function getFrontmatter(text: string, key: string): { present: boolean; value?: string } {
+/** `value` is unquoted for comparison; `raw` is the text as written, used to restore it exactly. */
+export function getFrontmatter(
+  text: string,
+  key: string,
+): { present: boolean; value?: string; raw?: string } {
   const fm = splitFrontmatter(text);
   if (!fm) return { present: false };
   const i = frontmatterLine(fm, key);
   if (i < 0) return { present: false };
-  return { present: true, value: unquote((fm.lines[i] ?? "").slice(key.length + 1)) };
+  const raw = (fm.lines[i] ?? "").slice(key.length + 1).trim();
+  return { present: true, value: unquote(raw), raw };
 }
 
 export function setFrontmatter(text: string, key: string, value: string | undefined): string {
@@ -254,8 +274,8 @@ export function setFrontmatter(text: string, key: string, value: string | undefi
   } else if (i >= 0) {
     lines[i] = `${key}: ${value}`;
   } else {
-    const after = frontmatterLine(fm, "description");
-    lines.splice(after >= 0 ? after + 1 : fm.end, 0, `${key}: ${value}`);
+    // Append before the closing fence: inserting mid-way could split a multi-line value.
+    lines.splice(fm.end, 0, `${key}: ${value}`);
   }
   return lines.join("\n");
 }
@@ -407,9 +427,9 @@ export function applyOp(
   switch (op.kind) {
     case "file": {
       let backup = existing?.backup;
-      // Back up a file model-ladder did not write, the first time it is replaced.
-      if (current !== undefined && !existing && current !== op.content)
-        backup = backupFile(op.path);
+      // Back up a file model-ladder did not write the first time it takes it over, even when
+      // identical, so uninstall gives it back instead of deleting it.
+      if (current !== undefined && !existing) backup = backupFile(op.path);
       if (action !== "unchanged") writeAtomic(op.path, op.content, op.executable);
       else if (op.executable) chmodSync(op.path, 0o755);
       return { ...base, sha: sha256(op.content), ...(backup ? { backup } : {}) };
@@ -443,7 +463,8 @@ export function applyOp(
     }
     case "frontmatter": {
       const text = current ?? "";
-      const prev = existing?.prev ?? getFrontmatter(text, op.key);
+      const got = getFrontmatter(text, op.key);
+      const prev = existing?.prev ?? { present: got.present, value: got.raw };
       if (action !== "unchanged") writeAtomic(op.path, setFrontmatter(text, op.key, op.value));
       return { ...base, key: op.key, value: op.value, prev };
     }
@@ -529,7 +550,7 @@ export function undoRecord(r: ManifestRecord, force = false): UndoResult {
         };
       }
       if (r.backup && existsSync(r.backup)) {
-        copyFileSync(r.backup, r.path);
+        writeAtomic(r.path, readFileSync(r.backup, "utf8"));
         return { record: r, outcome: "restored", note: `restored from ${r.backup}` };
       }
       rmSync(r.path, { force: true });
@@ -576,7 +597,7 @@ export function undoRecord(r: ManifestRecord, force = false): UndoResult {
           note: "value changed since install (gentle-ai sync?); left as is",
         };
       }
-      const prev = r.prev?.present ? String(r.prev.value) : undefined;
+      const prev = r.prev?.present ? String(r.prev.value) : undefined; // raw text as found
       writeAtomic(r.path, setFrontmatter(current, r.key ?? "", prev));
       return { record: r, outcome: r.prev?.present ? "restored" : "removed" };
     }

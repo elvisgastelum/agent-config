@@ -45,8 +45,14 @@ main() {
     exit 1
   }
 
-  if [ "${1:-}" = "--uninstall" ]; then
-    shift
+  # `--uninstall` may appear anywhere; the remaining arguments go to `model-ladder uninstall`.
+  local uninstall=0 arg
+  local -a rest=()
+  for arg in "$@"; do
+    if [ "$arg" = "--uninstall" ]; then uninstall=1; else rest+=("$arg"); fi
+  done
+  if [ "$uninstall" = 1 ]; then
+    set -- ${rest[@]+"${rest[@]}"}
     if [ -f "$entry" ] && command -v node >/dev/null 2>&1; then
       say "Removing model-ladder configuration from your agents"
       node "$entry" uninstall --yes "$@" </dev/null >&2 ||
@@ -55,14 +61,15 @@ main() {
       die "the model-ladder checkout is missing, so its changes cannot be undone automatically." \
         "re-run the installer without --uninstall, then run it again with --uninstall."
     fi
-    rm -f "$bin_dir/model-ladder"
-    rm -rf "$home_dir" "$config_dir"
-    # Keep the state dir (backups, records of edited files that were kept) unless it is empty.
-    if [ -f "$state_dir/manifest.json" ] && grep -q '"records": \[\]' "$state_dir/manifest.json"; then
-      rm -rf "$state_dir"
-    elif [ -d "$state_dir" ]; then
-      warn "kept $state_dir: it records files you edited after installing (re-run with --uninstall --force to remove them)."
+    # Files you edited after installing are kept and stay recorded. Keep the tool too, so
+    # `--uninstall --force` can still remove them.
+    if [ -f "$state_dir/manifest.json" ] && ! grep -q '"records": \[\]' "$state_dir/manifest.json"; then
+      warn "kept files you edited after installing (listed above), and model-ladder itself so they can still be removed."
+      warn "to remove them too: re-run with --uninstall --force (or keep them and delete $home_dir by hand)."
+      return 0
     fi
+    rm -f "$bin_dir/model-ladder"
+    rm -rf "$home_dir" "$config_dir" "$state_dir"
     say "model-ladder uninstalled. Restart running agent sessions."
     return 0
   fi

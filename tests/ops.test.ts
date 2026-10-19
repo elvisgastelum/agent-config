@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { buildPlan } from "../src/commands.ts";
@@ -142,6 +142,43 @@ describe("uninstall", () => {
   });
 });
 
+describe("existing files", () => {
+  test("writes through symlinks and leaves them linked after uninstall", () => {
+    const real = join(box.home, "dotfiles/CLAUDE.md");
+    const link = join(box.home, ".claude/CLAUDE.md");
+    put(real, "# mine\n");
+    put(join(box.home, ".claude/.keep"), "");
+    symlinkSync(real, link);
+    install(config(["claude"]));
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(real)).toContain(BLOCK_BEGIN);
+    uninstall(() => true);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(real)).toBe("# mine\n");
+  });
+
+  test("keeps file permissions", () => {
+    const settings = join(box.home, ".claude/settings.json");
+    put(settings, '{ "env": { "TOKEN": "s3cret" } }\n');
+    chmodSync(settings, 0o600);
+    install(config(["claude"]));
+    expect(statSync(settings).mode & 0o777).toBe(0o600);
+    uninstall(() => true);
+    expect(statSync(settings).mode & 0o777).toBe(0o600);
+  });
+
+  test("gives back a pre-existing file identical to the one it writes", () => {
+    install(config(["claude"]));
+    const agent = join(box.home, ".claude/agents/ladder-read-fast.md");
+    const content = read(agent);
+    uninstall(() => true);
+    put(agent, content);
+    install(config(["claude"]));
+    uninstall(() => true);
+    expect(read(agent)).toBe(content);
+  });
+});
+
 describe("gentle ai review models", () => {
   const lens = (model: string) =>
     `---\nname: review-risk\ndescription: R1 Risk reviewer\nmodel: ${model}\ntools: []\n---\n\n# R1\n`;
@@ -156,6 +193,20 @@ describe("gentle ai review models", () => {
     expect(read(readability)).toContain("model: claude-haiku-5-5\n");
     uninstall(() => true);
     expect(read(risk)).toBe(lens("sonnet"));
+  });
+
+  test("adds a missing key without breaking a multi-line description, restores quoted values", () => {
+    const risk = join(box.home, ".claude/agents/review-risk.md");
+    const original = `---\nname: review-risk\ndescription: >-\n  R1 Risk reviewer\n  across lines\n---\n\n# R1\n`;
+    put(risk, original);
+    const quoted = join(box.home, ".claude/agents/review-readability.md");
+    const quotedText = `---\nname: review-readability\ndescription: x\nmodel: "sonnet"\n---\n`;
+    put(quoted, quotedText);
+    install(config(["claude"]));
+    expect(read(risk)).toContain("  across lines\nmodel: claude-sonnet-5-5\n---");
+    uninstall(() => true);
+    expect(read(risk)).toBe(original);
+    expect(read(quoted)).toBe(quotedText);
   });
 
   test("skips lenses Gentle AI did not install", () => {
