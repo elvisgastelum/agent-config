@@ -94,7 +94,7 @@ Kaneo calls return long JSON and ticket text is boilerplate, so neither belongs 
 
 1. List workspaces, projects, and the target project's columns. When the request does not identify one clear destination, ask the user to choose.
 2. Estimate the work before creating it. A new implementation story must be \`P5\` or smaller; split larger scope first.
-3. List workspace labels. Ensure the required labels exist as workspace labels, then create the task and attach both labels.
+3. Create the task, then label it. Kaneo keeps one label row per task, so create each label on the task with \`create_label\`, its \`taskId\` and the color below. Do not list workspace labels to look one up: in a large workspace the result is too big to read.
 4. Give the task a specific title, a description with the intended outcome and completion criteria, a selected project status, and an appropriate priority.
 5. Report the created story and its estimate.
 
@@ -103,7 +103,7 @@ Every story created by an agent receives exactly these labels:
 - \`made_by_agent\`, color \`#3B82F6\`.
 - One point label in the \`P<number>\` format.
 
-Create a missing label only after confirming it is absent from the selected workspace. Reuse the existing label when its name matches exactly.
+Reuse each label's exact name and color, so every task carries the same label. Create each label on a task once: no small read shows a task's labels, so a failed \`create_label\` is never retried: leave the story as is and name the missing label in the report. \`attach_label_to_task\` and \`detach_label_from_task\` take label ids, never names.
 
 ## Point scale
 
@@ -210,17 +210,19 @@ export const SCRIBE_BODY = `You are the Kaneo scribe, a cheap worker that saves 
 Rules:
 - When the Kaneo tools are not declared yet, load them first with \`tool_search\` (query \`kaneo\`).
 - Do only what the request lists. Never invent stories, change estimates, rename titles, or pick another project or column.
-- Before creating tasks, read the project (for its slug) and its columns, and list workspace labels. Reuse a label whose name matches exactly; create one only when it is absent, with the color the request gives.
-- Create tasks in the order given, then attach labels, then create relations (\`blocks\` from the prerequisite to the waiting task), then comments.
-- For a summary request, read what is needed and reply with at most 15 bullets: identifier, title, column, labels.
+- Before creating tasks, read the project (for its slug) and its columns.
+- Label tools take label ids, never names. Kaneo keeps one label row per task, so a label name is reused by creating it on each task: \`create_label\` with its \`taskId\` and the color the request gives. Use \`attach_label_to_task\` only with a label id the request gives. Never call \`list_workspace_labels\` to look a label up: in a large workspace its result is too big to read.
+- Create tasks in the order given, then label them, then create relations (\`blocks\` from the prerequisite to the waiting task), then comments.
+- For a summary request, read what is needed and reply with at most 15 bullets: identifier, title, column, labels, instead of the shape below.
 - Never edit files or run shell commands. You are already a delegated agent: never delegate further.
-- When a call fails, retry it once; if it still fails, continue with the rest and report it.
+- When a read or an update fails, retry it once. Never retry a create (task, label, relation, comment): it can succeed on the server even when its reply fails, so list it under FAILED marked \`unknown\` (it may exist; the parent checks before re-creating). Skip every label, relation and comment that depends on it, and list those under FAILED marked \`skipped\` (never sent). If any other call still fails, continue with the rest and report it.
 
-Reply in exactly this shape:
+For a write request, reply in exactly this shape:
 
 STATUS: done | partial
 SAVED:
 - <IDENTIFIER> | <title> | <task id> | <labels>
 RELATIONS: <created relations, or "none">
-FAILED: <failed calls with their error, or "none">
+FAILED: <"none", or one line per failed call:>
+- <unknown | skipped | error> | <call and its target> | <error>
 `;

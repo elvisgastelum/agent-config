@@ -12,7 +12,7 @@ import {
 } from "../src/catalog.ts";
 import { buildPlan, restoreShared, status, uninstallSelection } from "../src/commands.ts";
 import { defaultConfig, loadConfig, saveConfig, type Config } from "../src/config.ts";
-import { kaneoBaseUrl, kaneoSkillMarkdown, kaneoUrlWarning } from "../src/kaneo.ts";
+import { kaneoBaseUrl, kaneoSkillMarkdown, kaneoUrlWarning, SCRIBE_BODY } from "../src/kaneo.ts";
 import { applyPlan, uninstall } from "../src/ops.ts";
 import { configPath } from "../src/paths.ts";
 import type { Runtime } from "../src/tiers.ts";
@@ -377,6 +377,32 @@ describe("kaneoSkillMarkdown", () => {
     const link = lines.findIndex((l) => l.startsWith("- Link every other ticket"));
     expect(link).toBeGreaterThan(-1);
     expect(lines[link + 1]).toMatch(/^- Keep the PR title/);
+  });
+
+  test("creates each label on its task instead of looking it up in the workspace", () => {
+    const text = kaneoSkillMarkdown("claude", "m");
+    expect(text).not.toContain("List workspace labels");
+    expect(text).toContain("create each label on the task with `create_label`");
+    expect(text).toContain("a failed `create_label` is never retried");
+  });
+});
+
+describe("SCRIBE_BODY", () => {
+  test("labels each task without listing workspace labels", () => {
+    expect(SCRIBE_BODY).not.toContain("and list workspace labels");
+    expect(SCRIBE_BODY).toContain("Never call `list_workspace_labels`");
+  });
+
+  test("never retries a create and marks each failed call", () => {
+    expect(SCRIBE_BODY).toContain("Never retry a create (task, label, relation, comment)");
+    expect(SCRIBE_BODY).toContain(
+      "- <unknown | skipped | error> | <call and its target> | <error>",
+    );
+  });
+
+  test("keeps the summary reply apart from the write reply shape", () => {
+    expect(SCRIBE_BODY).toContain("instead of the shape below");
+    expect(SCRIBE_BODY).toContain("For a write request, reply in exactly this shape:");
   });
 });
 
