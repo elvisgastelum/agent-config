@@ -8,6 +8,7 @@ import {
   loadManifest,
   opKey,
   planOp,
+  planRemoval,
   recordKey,
   recordState,
   type ManifestRecord,
@@ -16,6 +17,7 @@ import {
 } from "./ops.ts";
 import { codexDir, home, piDir, RUNTIME_BIN, runtimeDir } from "./paths.ts";
 import { allOps } from "./runtimes.ts";
+import { defaultInstallHome, legacyInstallHome } from "./selfupdate.ts";
 import { RUNTIMES, type Runtime } from "./tiers.ts";
 
 export function onPath(bin: string): boolean {
@@ -48,8 +50,22 @@ export function detectedRuntimes(): Runtime[] {
 }
 
 export function buildPlan(config: Config): PlannedOp[] {
-  const records = new Map(loadManifest().records.map((r) => [recordKey(r), r]));
-  return allOps(config).map((op) => planOp(op, records.get(opKey(op))));
+  const manifest = loadManifest().records;
+  const records = new Map(manifest.map((r) => [recordKey(r), r]));
+  const ops = allOps(config);
+  const wanted = new Set(ops.map(opKey));
+  // Installed items of the selected runtimes and parts that the configuration no longer
+  // produces (a moved hook, a renamed setting) are undone, so nothing stale stays behind.
+  // Parts that were not selected are left alone.
+  const stale = manifest
+    .filter(
+      (r) =>
+        config.runtimes.includes(r.runtime) &&
+        config.components.includes(r.component) &&
+        !wanted.has(recordKey(r)),
+    )
+    .map(planRemoval);
+  return [...stale, ...ops.map((op) => planOp(op, records.get(opKey(op))))];
 }
 
 export function tildify(path: string): string {
@@ -114,6 +130,13 @@ export function doctor(): DoctorCheck[] {
         : "install a Pi subagent extension (for example gentle-pi) so Pi can call ladder agents",
     });
   }
+  if (existsSync(legacyInstallHome())) {
+    checks.push({
+      name: "install location",
+      ok: false,
+      detail: `${tildify(legacyInstallHome())} is the pre-rename location; run \`agent-config self-update\` or the install one-liner to move it to ${tildify(defaultInstallHome())}`,
+    });
+  }
   const gentle = onPath("gentle-ai");
   checks.push({
     name: "gentle-ai",
@@ -127,7 +150,7 @@ export function doctor(): DoctorCheck[] {
     detail:
       drifted.length === 0
         ? "all as installed"
-        : `${drifted.length} changed or missing (often \`gentle-ai sync\` resetting review models); run \`model-ladder install\` to reapply`,
+        : `${drifted.length} changed or missing (often \`gentle-ai sync\` resetting review models); run \`agent-config install\` to reapply`,
   });
   return checks;
 }

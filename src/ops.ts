@@ -2,7 +2,7 @@
 //
 // Each operation records what it replaced (a backup file, or the previous JSON or
 // frontmatter value). Uninstall restores that only while the target still holds the
-// value model-ladder wrote; anything the user or another tool changed since is left alone.
+// value agent-config wrote; anything the user or another tool changed since is left alone.
 
 import { createHash } from "node:crypto";
 import {
@@ -62,12 +62,26 @@ export type Op =
   | (OpBase & { kind: "json-hook"; event: string; matcher: string; command: string })
   | (OpBase & { kind: "frontmatter"; key: string; value: string; requireFile?: boolean });
 
-export type Action = "create" | "update" | "unchanged" | "skip";
+export type Action = "create" | "update" | "unchanged" | "skip" | "remove";
 
 export interface PlannedOp {
   op: Op;
   action: Action;
   reason?: string;
+  /** remove: the installed item to undo, because the configuration no longer produces it. */
+  record?: ManifestRecord;
+}
+
+/** Plans undoing an installed item that the current configuration no longer produces. */
+export function planRemoval(record: ManifestRecord): PlannedOp {
+  const op = {
+    kind: record.kind,
+    runtime: record.runtime,
+    component: record.component,
+    path: record.path,
+    label: record.label,
+  } as Op;
+  return { op, action: "remove", reason: "no longer part of the configuration", record };
 }
 
 export interface ManifestRecord {
@@ -80,14 +94,14 @@ export interface ManifestRecord {
   sha?: string;
   /** file: where the replaced file was saved. */
   backup?: string;
-  /** block, json-set, json-hook: the file did not exist before model-ladder created it. */
+  /** block, json-set, json-hook: the file did not exist before agent-config created it. */
   createdFile?: boolean;
-  /** Directories model-ladder created for this path, deepest first; removed on uninstall when empty. */
+  /** Directories agent-config created for this path, deepest first; removed on uninstall when empty. */
   createdDirs?: string[];
   /** json-set: JSON pointer segments; frontmatter: the key. */
   pointer?: string[];
   key?: string;
-  /** json-set / frontmatter: the value model-ladder wrote and what was there before. */
+  /** json-set / frontmatter: the value agent-config wrote and what was there before. */
   value?: unknown;
   prev?: { present: boolean; value?: unknown };
   /** json-set: how many leading pointer segments existed before; deeper parents are pruned on uninstall when empty. */
@@ -106,8 +120,8 @@ export interface Manifest {
 }
 
 export const BLOCK_BEGIN =
-  "<!-- BEGIN model-ladder: managed by model-ladder, edits inside this block are overwritten -->";
-export const BLOCK_END = "<!-- END model-ladder -->";
+  "<!-- BEGIN agent-config: managed by agent-config, edits inside this block are overwritten -->";
+export const BLOCK_END = "<!-- END agent-config -->";
 
 /** Matches the file's own indentation so edits do not reformat what they did not touch. */
 function formatFor(text: string) {
@@ -142,7 +156,7 @@ function writeAtomic(path: string, text: string, executable = false): void {
     // New file: write it at the given path with default permissions.
   }
   mkdirSync(dirname(target), { recursive: true });
-  const tmp = `${target}.model-ladder-tmp`;
+  const tmp = `${target}.agent-config-tmp`;
   writeFileSync(tmp, text);
   if (executable) chmodSync(tmp, (mode ?? 0o644) | 0o111);
   else if (mode !== undefined) chmodSync(tmp, mode);
@@ -211,7 +225,7 @@ function existingPrefix(root: unknown, pointer: string[]): number {
   return depth;
 }
 
-/** Removes the now-empty parent objects model-ladder created for a key. */
+/** Removes the now-empty parent objects agent-config created for a key. */
 function pruneParents(text: string, pointer: string[], keepDepth: number): string {
   let out = text;
   for (let depth = pointer.length - 1; depth > keepDepth; depth--) {
@@ -297,24 +311,45 @@ export function setFrontmatter(text: string, key: string, value: string | undefi
 
 // ---------------------------------------------------------------- managed block helpers
 
+/** The block markers written before the rename to agent-config; still found and replaced. */
+export const LEGACY_BLOCK_BEGIN =
+  "<!-- BEGIN model-ladder: managed by model-ladder, edits inside this block are overwritten -->";
+export const LEGACY_BLOCK_END = "<!-- END model-ladder -->";
+
+const MARKERS: [string, string][] = [
+  [BLOCK_BEGIN, BLOCK_END],
+  [LEGACY_BLOCK_BEGIN, LEGACY_BLOCK_END],
+];
+
+/** The managed block's position, under the current or the pre-rename markers. */
+function findBlock(text: string): { begin: number; end: number } | undefined {
+  for (const [open, close] of MARKERS) {
+    const begin = text.indexOf(open);
+    const endIdx = begin >= 0 ? text.indexOf(close, begin) : -1;
+    if (begin >= 0 && endIdx >= 0) return { begin, end: endIdx + close.length };
+  }
+  return undefined;
+}
+
+export function hasBlock(text: string): boolean {
+  return findBlock(text) !== undefined;
+}
+
 export function stripBlock(text: string): string {
-  const begin = text.indexOf(BLOCK_BEGIN);
-  if (begin < 0) return text;
-  const endIdx = text.indexOf(BLOCK_END, begin);
-  if (endIdx < 0) return text;
-  const before = text.slice(0, begin).replace(/\n+$/, "");
-  const after = text.slice(endIdx + BLOCK_END.length).replace(/^\n+/, "");
+  const found = findBlock(text);
+  if (!found) return text;
+  const before = text.slice(0, found.begin).replace(/\n+$/, "");
+  const after = text.slice(found.end).replace(/^\n+/, "");
   if (!before) return after;
   return after ? `${before}\n\n${after}` : `${before}\n`;
 }
 
 export function withBlock(text: string, content: string): string {
   const block = `${BLOCK_BEGIN}\n${content.trim()}\n${BLOCK_END}\n`;
-  const begin = text.indexOf(BLOCK_BEGIN);
-  const endIdx = begin >= 0 ? text.indexOf(BLOCK_END, begin) : -1;
-  if (begin >= 0 && endIdx >= 0) {
-    const tail = text.slice(endIdx + BLOCK_END.length).replace(/^\n/, "");
-    return `${text.slice(0, begin)}${block}${tail}`;
+  const found = findBlock(text);
+  if (found) {
+    const tail = text.slice(found.end).replace(/^\n/, "");
+    return `${text.slice(0, found.begin)}${block}${tail}`;
   }
   if (!text.trim()) return block;
   return `${text.replace(/\n*$/, "")}\n\n${block}`;
@@ -386,7 +421,7 @@ function removeFromArray(text: string, pointer: (string | number)[], index: numb
   return `${text.slice(0, item.offset)}${text.slice(next?.offset ?? item.offset + item.length)}`;
 }
 
-/** The outermost container model-ladder had to create for its hook entry. */
+/** The outermost container agent-config had to create for its hook entry. */
 export type HookCreated = "hooks" | "event" | "group" | "entry";
 
 /** Adds one hook entry in place, touching nothing else in the file. */
@@ -413,7 +448,7 @@ function addHook(
   return { text: appendToArray(text, ["hooks", event, idx, "hooks"], entry), created: "entry" };
 }
 
-/** Removes the hook entry and only the containers model-ladder created for it. */
+/** Removes the hook entry and only the containers agent-config created for it. */
 function removeHook(text: string, event: string, command: string, created: HookCreated): string {
   const groups = hookGroups(parseJson("settings", text), event);
   const gi = groups.findIndex((g) => (g.hooks ?? []).some((h) => h.command === command));
@@ -498,7 +533,7 @@ function missingDirs(dir: string): string[] {
   return dirs;
 }
 
-/** Deletes a JSON file model-ladder created once nothing but `{}` is left in it. */
+/** Deletes a JSON file agent-config created once nothing but `{}` is left in it. */
 function writeOrDropJson(r: ManifestRecord, text: string): void {
   const value = parseJson(r.path, text);
   if (r.createdFile && value && typeof value === "object" && Object.keys(value).length === 0) {
@@ -538,7 +573,7 @@ export function applyOp(
   switch (op.kind) {
     case "file": {
       let backup = existing?.backup;
-      // Back up a file model-ladder did not write the first time it takes it over, even when
+      // Back up a file agent-config did not write the first time it takes it over, even when
       // identical, so uninstall gives it back instead of deleting it.
       if (current !== undefined && !existing) backup = backupFile(op.path);
       // A ladder file the user edited after install: keep their copy before overwriting it.
@@ -602,6 +637,18 @@ export function applyPlan(plan: PlannedOp[]): ApplyResult {
   const byKey = new Map(manifest.records.map((r) => [recordKey(r), r]));
   const result: ApplyResult = { applied: [], notes: [], errors: [] };
   for (const planned of plan) {
+    if (planned.action === "remove" && planned.record) {
+      const res = undoRecord(planned.record);
+      if (res.outcome === "kept-modified") {
+        result.notes.push(`${planned.record.path} was kept: ${res.note}`);
+      } else {
+        byKey.delete(recordKey(planned.record));
+        pruneCreatedDirs([planned.record]);
+      }
+      result.applied.push(planned);
+      saveManifest({ version: 1, records: [...byKey.values()] });
+      continue;
+    }
     const key = opKey(planned.op);
     try {
       const record = applyOp(planned, byKey.get(key), result.notes);
@@ -630,7 +677,7 @@ export function recordState(r: ManifestRecord): RecordState {
     case "file":
       return sha256(current) === r.sha ? "ok" : "drifted";
     case "block":
-      return current.includes(BLOCK_BEGIN) ? "ok" : "missing";
+      return hasBlock(current) ? "ok" : "missing";
     case "json-set": {
       const got = getAt(parseJson(r.path, current), r.pointer ?? []);
       return got.present && deepEqual(got.value, r.value) ? "ok" : "drifted";
@@ -726,6 +773,18 @@ export function undoRecord(r: ManifestRecord, force = false): UndoResult {
   }
 }
 
+/** Removes directories agent-config created for these records, deepest first, once empty. */
+function pruneCreatedDirs(records: ManifestRecord[]): void {
+  const dirs = new Set(records.flatMap((r) => r.createdDirs ?? []));
+  for (const dir of [...dirs].sort((a, b) => b.length - a.length)) {
+    try {
+      if (readdirSync(dir).length === 0) rmdirSync(dir);
+    } catch {
+      // Already gone or not removable: leave it.
+    }
+  }
+}
+
 export function uninstall(filter: (r: ManifestRecord) => boolean, force = false): UndoResult[] {
   const manifest = loadManifest();
   const results: UndoResult[] = [];
@@ -740,17 +799,7 @@ export function uninstall(filter: (r: ManifestRecord) => boolean, force = false)
     results.push(res);
     if (res.outcome === "kept-modified") keep.unshift(r);
   }
-  // Remove directories model-ladder created, deepest first, once they are empty.
-  const dirs = new Set(
-    results.filter((r) => r.outcome !== "kept-modified").flatMap((r) => r.record.createdDirs ?? []),
-  );
-  for (const dir of [...dirs].sort((a, b) => b.length - a.length)) {
-    try {
-      if (readdirSync(dir).length === 0) rmdirSync(dir);
-    } catch {
-      // Already gone or not removable: leave it.
-    }
-  }
+  pruneCreatedDirs(results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record));
   saveManifest({ version: 1, records: keep });
   return results;
 }

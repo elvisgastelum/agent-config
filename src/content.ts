@@ -97,9 +97,9 @@ Every ladder agent replies with \`STATUS: done | partial | escalate\`. Edit agen
 If you are yourself a subagent or a parallel worker without an agent tool, run the same ladder from the shell:
 
 \`\`\`sh
-model-ladder delegate read --runtime ${runtime} "<the read handoff above>"
-model-ladder delegate edit --runtime ${runtime} --tier balanced --verify "<verify command>" "<the edit handoff above>"
-printf '%s' "<long handoff>" | model-ladder delegate read --runtime ${runtime} -
+agent-config delegate read --runtime ${runtime} "<the read handoff above>"
+agent-config delegate edit --runtime ${runtime} --tier balanced --verify "<verify command>" "<the edit handoff above>"
+printf '%s' "<long handoff>" | agent-config delegate read --runtime ${runtime} -
 \`\`\`
 
 It runs the ladder agent headlessly, climbs fast → balanced → deep by itself on \`partial\`, \`escalate\` or failure, and prints only the final reply (rung and timing go to stderr; \`--json\` for structured output, \`--no-climb\` to stay on one rung, \`-\` to read the task from stdin). Edits may run only the \`--verify\` command; without it the edit agent gets no shell. Exit codes: 0 done, 3 still partial after the last rung, 1 failed, 4 refused because you are already running inside a delegated agent: then do the work yourself or reply \`STATUS: escalate\`. Ladder agents never call it.
@@ -113,7 +113,7 @@ It runs the ladder agent headlessly, climbs fast → balanced → deep by itself
 
 ## Gentle AI reviews
 
-Gentle AI review agents (\`review-risk\`, \`review-resilience\`, \`review-readability\`, \`review-reliability\`, \`review-refuter\`) run on the rungs model-ladder assigned them. The review lifecycle stays Gentle AI's: never relaunch a lens on another model yourself, and follow only the transitions the review returns. A bounded review correction is an edit like any other: hand the frozen finding as the spec to a ladder edit agent and verify it yourself before capturing the result.
+Gentle AI review agents (\`review-risk\`, \`review-resilience\`, \`review-readability\`, \`review-reliability\`, \`review-refuter\`) run on the rungs agent-config assigned them. The review lifecycle stays Gentle AI's: never relaunch a lens on another model yourself, and follow only the transitions the review returns. A bounded review correction is an edit like any other: hand the frozen finding as the spec to a ladder edit agent and verify it yourself before capturing the result.
 `;
 }
 
@@ -125,7 +125,7 @@ Reads and edits go to the cheapest capable model; this session keeps the reasoni
 - Reads start at \`ladder-read-fast\`; edits start at \`ladder-edit-fast\` for pattern work and \`ladder-edit-balanced\` for new logic. Context offload is a named delegation reason.
 - Climb one rung (fast → balanced → deep) only when a reply is \`partial\` or \`escalate\` or fails verification; after deep fails, do it yourself.
 - Before editing, read the exact lines yourself with offset/limit. Keep debugging, design and security, data or concurrency changes in this session, and verify every delegated edit.
-- Without an agent tool (for example as a parallel subagent), use \`model-ladder delegate read|edit --runtime ${runtime} "<task>"\` from the shell instead.`;
+- Without an agent tool (for example as a parallel subagent), use \`agent-config delegate read|edit --runtime ${runtime} "<task>"\` from the shell instead.`;
 }
 
 const ROLE_BODY: Record<Role, string> = {
@@ -133,7 +133,7 @@ const ROLE_BODY: Record<Role, string> = {
 
 Rules:
 - Read, search and summarize only. Never edit files, never run commands that change anything.
-- You are already a ladder agent: never delegate further (no subagents, no \`model-ladder delegate\`).
+- You are already a ladder agent: never delegate further (no subagents, no \`agent-config delegate\`).
 - Cite evidence as \`path:line\` using the line numbers your read tool shows. Never estimate a line number.
 - Quote at most 5 lines per excerpt, and only when the exact text matters. Never paste whole files.
 - Keep the whole reply under 300 words unless the parent set another budget.
@@ -152,7 +152,7 @@ Rules:
 - Write only inside the allowed edit surfaces. If the change needs another file, stop and say so in STATUS.
 - Run the verify command once after the change. If it fails, fix and run it once more. If it still fails, stop.
 - Never commit, push, install dependencies, or run repository-wide formatters or generators.
-- You are already a ladder agent: never delegate further (no subagents, no \`model-ladder delegate\`).
+- You are already a ladder agent: never delegate further (no subagents, no \`agent-config delegate\`).
 - Never paste the code you wrote into your reply. The parent reads the diff.
 
 Reply in exactly this shape:

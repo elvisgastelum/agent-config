@@ -18,7 +18,7 @@ const args = process.argv.slice(2);
 const stdin = args.includes("-") ? fs.readFileSync(0, "utf8") : "";
 const flag = args.includes("--model") ? "--model" : args.includes("-m") ? "-m" : "";
 const model = flag ? args[args.indexOf(flag) + 1] : "default";
-fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ bin: process.argv[1].split("/").pop(), args, stdin, delegated: process.env.MODEL_LADDER_DELEGATED }) + "\\n");
+fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ bin: process.argv[1].split("/").pop(), args, stdin, delegated: process.env.AGENT_CONFIG_DELEGATED }) + "\\n");
 const plan = Object.fromEntries((process.env.FAKE_PLAN || "").split(",").filter(Boolean).map((p) => p.split("=")));
 const status = plan[model] || "done";
 if (status === "crash") { process.stderr.write("boom\\n"); process.exit(7); }
@@ -124,12 +124,12 @@ test("claude edits get a shell only for the --verify command", () => {
   );
 });
 
-test("refuses to run inside an agent it started", () => {
-  const nested = run(["delegate", "read", "--runtime", "claude", "x"], {
-    MODEL_LADDER_DELEGATED: "1",
-  });
-  expect(nested.code).toBe(4);
-  expect(nested.stderr).toContain("no nested delegation");
+test("refuses to run inside an agent it started, under the new or the pre-rename marker", () => {
+  for (const marker of ["AGENT_CONFIG_DELEGATED", "MODEL_LADDER_DELEGATED"]) {
+    const nested = run(["delegate", "read", "--runtime", "claude", "x"], { [marker]: "1" });
+    expect(nested.code).toBe(4);
+    expect(nested.stderr).toContain("no nested delegation");
+  }
   expect(calls()).toHaveLength(0);
 });
 
@@ -275,11 +275,12 @@ test("a missing runtime or agent fails once instead of climbing", () => {
   expect(missing.attempts[0].error).toContain("ladder-read-fast is not installed for claude");
 });
 
-test("picks the runtime from MODEL_LADDER_RUNTIME, then Claude Code, then the configured one", () => {
-  run(["delegate", "read", "q"], { MODEL_LADDER_RUNTIME: "codex", CLAUDECODE: "1" });
+test("picks the runtime from AGENT_CONFIG_RUNTIME, then Claude Code, then the configured one", () => {
+  run(["delegate", "read", "q"], { AGENT_CONFIG_RUNTIME: "codex", CLAUDECODE: "1" });
   run(["delegate", "read", "q"], { CLAUDECODE: "1" });
   run(["delegate", "read", "q"]);
-  expect(calls().map((c) => c.bin)).toEqual(["codex", "claude", "claude"]);
+  run(["delegate", "read", "q"], { MODEL_LADDER_RUNTIME: "pi" });
+  expect(calls().map((c) => c.bin)).toEqual(["codex", "claude", "claude", "pi"]);
 });
 
 test("usage errors exit 2 without starting an agent", () => {

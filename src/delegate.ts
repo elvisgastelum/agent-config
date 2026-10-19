@@ -1,4 +1,4 @@
-// `model-ladder delegate`: run one ladder read or edit headlessly through a runtime's own
+// `agent-config delegate`: run one ladder read or edit headlessly through a runtime's own
 // CLI and return only the agent's reply. For agents that cannot spawn subagents (parallel
 // workers, nested agents): they shell out to this instead.
 //
@@ -16,7 +16,9 @@ import { claudeDir, opencodeDir } from "./paths.ts";
 import { TIERS, agentName, type Role, type Runtime, type Tier, type TierMap } from "./tiers.ts";
 
 /** Set in every process `delegate` starts; its presence means "already delegated". */
-export const DELEGATED_ENV = "MODEL_LADDER_DELEGATED";
+export const DELEGATED_ENV = "AGENT_CONFIG_DELEGATED";
+/** The same marker under the pre-rename name, still honoured. */
+export const LEGACY_DELEGATED_ENV = "MODEL_LADDER_DELEGATED";
 
 export type ReplyStatus = "done" | "partial" | "escalate" | "error";
 
@@ -146,7 +148,7 @@ export function agentFileProblem(runtime: Runtime, role: Role, tier: Tier): stri
         ? join(opencodeDir(), "agents", `${name}.md`)
         : undefined;
   if (!file) return undefined;
-  const fix = `run \`model-ladder install --runtime ${runtime}\``;
+  const fix = `run \`agent-config install --runtime ${runtime}\``;
   if (!existsSync(file)) return `${name} is not installed for ${runtime}; ${fix}`;
   if (runtime === "opencode" && role === "read") {
     const text = readFileSync(file, "utf8");
@@ -199,7 +201,7 @@ function runOnce(
   const model = tiers[tier].model || "session model";
   const problem = agentFileProblem(req.runtime, req.role, tier);
   if (problem) return { tier, model, status: "error", durationMs: 0, reply: "", error: problem };
-  const scratch = mkdtempSync(join(tmpdir(), "model-ladder-delegate-"));
+  const scratch = mkdtempSync(join(tmpdir(), "agent-config-delegate-"));
   try {
     const inv = invocation(req, tier, tiers, prompt, scratch);
     const res = spawnSync(inv.bin, inv.args, {

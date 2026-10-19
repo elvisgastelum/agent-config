@@ -11,7 +11,7 @@ const VARS = [
   "PI_CODING_AGENT_DIR",
 ];
 
-/** Points every path model-ladder resolves at a fresh temporary HOME. */
+/** Points every path agent-config resolves at a fresh temporary HOME. */
 export function sandbox(): { home: string; restore: () => void } {
   const saved = Object.fromEntries(VARS.map((v) => [v, process.env[v]]));
   const home = mkdtempSync(join(tmpdir(), "model-ladder-test-"));

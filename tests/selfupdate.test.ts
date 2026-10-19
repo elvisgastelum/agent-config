@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
@@ -9,7 +17,7 @@ const repo = join(import.meta.dirname, "..");
 const root = mkdtempSync(join(tmpdir(), "model-ladder-update-"));
 const origin = join(root, "origin");
 const home = join(root, "home");
-const installed = join(home, ".local", "share", "model-ladder");
+const installed = join(home, ".local", "share", "agent-config");
 const gitEnv = {
   GIT_AUTHOR_NAME: "test",
   GIT_AUTHOR_EMAIL: "test@example.com",
@@ -65,6 +73,50 @@ test("reports up to date when origin has nothing new", () => {
   expect(JSON.parse(res.stdout).check).toMatchObject({ updatable: true, behind: 0 });
 });
 
+// A pre-rename install: the same checkout under ~/.local/share/model-ladder.
+function legacyHome(name: string): { home: string; legacy: string } {
+  const h = join(root, name);
+  const legacy = join(h, ".local", "share", "model-ladder");
+  mkdirSync(join(h, ".local", "share"), { recursive: true });
+  git(root, "clone", "-q", origin, legacy);
+  return { home: h, legacy };
+}
+
+test("install.sh moves a pre-rename install and adds both commands", () => {
+  const { home: h, legacy } = legacyHome("legacy-installer");
+  const res = spawnSync("bash", [join(legacy, "install.sh")], {
+    env: { PATH: process.env.PATH, HOME: h, AGENT_CONFIG_NO_RUN: "1", NO_COLOR: "1" },
+    encoding: "utf8",
+  });
+  expect(res.status).toBe(0);
+  expect(res.stderr).toContain("model-ladder is now agent-config");
+  const moved = join(h, ".local", "share", "agent-config");
+  expect(existsSync(legacy)).toBe(false);
+  expect(git(moved, "remote", "get-url", "origin")).toBe(origin);
+  for (const name of ["agent-config", "model-ladder"]) {
+    const bin = join(h, ".local", "bin", name);
+    expect(readFileSync(bin, "utf8")).toContain(`export AGENT_CONFIG_HOME='${moved}'`);
+    expect(spawnSync(bin, ["--version"], { encoding: "utf8" }).stdout.trim()).toMatch(
+      /^\d+\.\d+\.\d+$/,
+    );
+  }
+});
+
+test("self-update moves a pre-rename install even when it is up to date", () => {
+  const { home: h, legacy } = legacyHome("legacy-selfupdate");
+  // The pre-rename command exported MODEL_LADDER_HOME.
+  const env = { HOME: h, MODEL_LADDER_HOME: legacy };
+  const check = JSON.parse(
+    cliIn(env, join(legacy, "dist", "cli.mjs"), "self-update", "--dry-run", "--json").stdout,
+  ).check;
+  expect(check).toMatchObject({ updatable: true, behind: 0, relocate: true });
+  const res = cliIn(env, join(legacy, "dist", "cli.mjs"), "self-update", "--yes", "--json");
+  expect(res.code).toBe(0);
+  expect(JSON.parse(res.stdout).message).toContain("moved to");
+  expect(existsSync(legacy)).toBe(false);
+  expect(existsSync(join(h, ".local", "share", "agent-config", "dist", "cli.mjs"))).toBe(true);
+});
+
 test("pulls a newer version and rewrites the command", () => {
   commitToOrigin("v9.9.9", () => {
     const pkg = JSON.parse(readFileSync(join(origin, "package.json"), "utf8"));
@@ -84,8 +136,10 @@ test("pulls a newer version and rewrites the command", () => {
   expect(res.code).toBe(0);
   expect(JSON.parse(res.stdout).updated).toBe(true);
   expect(git(installed, "rev-parse", "HEAD")).toBe(git(origin, "rev-parse", "HEAD"));
-  const wrapper = readFileSync(join(home, ".local", "bin", "model-ladder"), "utf8");
-  expect(wrapper).toContain(`export MODEL_LADDER_HOME='${installed}'`);
+  for (const name of ["agent-config", "model-ladder"]) {
+    const wrapper = readFileSync(join(home, ".local", "bin", name), "utf8");
+    expect(wrapper).toContain(`export AGENT_CONFIG_HOME='${installed}'`);
+  }
 });
 
 test("rolls back when the new version does not run", () => {
@@ -108,7 +162,7 @@ function cloneTo(name: string): string {
 }
 
 test("refuses to update a checkout that is not the installed copy", () => {
-  // A git checkout too, just not the one MODEL_LADDER_HOME points at.
+  // A git checkout too, just not the one AGENT_CONFIG_HOME points at.
   const res = cli(join(cloneTo("dev"), "dist", "cli.mjs"), "self-update", "--dry-run", "--json");
   expect(res.code).toBe(1);
   expect(JSON.parse(res.stdout).check.reason).toContain("not the installed copy");
@@ -118,7 +172,7 @@ test("reports an unreachable origin with git's own reason", () => {
   const copy = cloneTo("offline");
   git(copy, "remote", "set-url", "origin", join(root, "does-not-exist"));
   const res = cliIn(
-    { MODEL_LADDER_HOME: copy },
+    { AGENT_CONFIG_HOME: copy },
     join(copy, "dist", "cli.mjs"),
     "self-update",
     "--dry-run",
@@ -134,7 +188,7 @@ test("explains a copy pinned to a fixed commit instead of fetching a branch call
   const copy = cloneTo("pinned");
   git(copy, "checkout", "-q", "--detach");
   const res = cliIn(
-    { MODEL_LADDER_HOME: copy },
+    { AGENT_CONFIG_HOME: copy },
     join(copy, "dist", "cli.mjs"),
     "self-update",
     "--dry-run",

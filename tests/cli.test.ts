@@ -36,7 +36,7 @@ test("install, status and uninstall round-trip with --json", () => {
   expect(read(join(home, ".claude/agents/ladder-read-deep.md"))).toContain(
     "model: claude-opus-5-5",
   );
-  expect(JSON.parse(read(join(home, ".config/model-ladder/config.json"))).runtimes).toEqual([
+  expect(JSON.parse(read(join(home, ".config/agent-config/config.json"))).runtimes).toEqual([
     "claude",
   ]);
 

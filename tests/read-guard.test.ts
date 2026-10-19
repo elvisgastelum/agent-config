@@ -32,11 +32,21 @@ describe("Read", () => {
     expect(
       decide(
         { tool_name: "Read", tool_input: { file_path: big } },
-        { MODEL_LADDER_MIN_LINES: "500" },
+        { AGENT_CONFIG_MIN_LINES: "500" },
       ),
     ).toBeUndefined();
     expect(
+      decide({ tool_name: "Read", tool_input: { file_path: big } }, { AGENT_CONFIG_GUARD: "off" }),
+    ).toBeUndefined();
+    // The pre-rename names still work.
+    expect(
       decide({ tool_name: "Read", tool_input: { file_path: big } }, { MODEL_LADDER_GUARD: "off" }),
+    ).toBeUndefined();
+    expect(
+      decide(
+        { tool_name: "Read", tool_input: { file_path: big } },
+        { MODEL_LADDER_MIN_LINES: "500" },
+      ),
     ).toBeUndefined();
   });
   test("ignores missing and non-text files", () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# model-ladder installer.
+# agent-config installer (formerly model-ladder).
 #
 # Humans:     curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh | bash
 # Agents:     curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh \
@@ -7,16 +7,18 @@
 # Uninstall:  curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh \
 #               | bash -s -- --uninstall
 #
-# `--uninstall` removes everything model-ladder wrote to your agents (restoring what it
-# replaced), then the checkout, the `model-ladder` command and the saved configuration.
-# Add `--force` to also remove agent files you edited after installing.
+# `--uninstall` removes everything agent-config wrote to your agents (restoring what it
+# replaced), then the checkout, the `agent-config` and `model-ladder` commands and the saved
+# configuration. Add `--force` to also remove agent files you edited after installing.
 #
-# Environment:
-#   MODEL_LADDER_HOME     checkout location   (default: $HOME/.local/share/model-ladder)
-#   MODEL_LADDER_REPO     git URL to clone    (default: https://github.com/elvisgastelum/agent-config.git)
-#   MODEL_LADDER_REF      branch or tag       (default: main)
-#   MODEL_LADDER_BIN_DIR  wrapper location    (default: $HOME/.local/bin)
-#   MODEL_LADDER_NO_RUN   set to 1 to install/update without running model-ladder afterwards
+# Environment (each also read under its pre-rename MODEL_LADDER_* name):
+#   AGENT_CONFIG_HOME     checkout location   (default: $HOME/.local/share/agent-config)
+#   AGENT_CONFIG_REPO     git URL to clone    (default: https://github.com/elvisgastelum/agent-config.git)
+#   AGENT_CONFIG_REF      branch or tag       (default: main)
+#   AGENT_CONFIG_BIN_DIR  wrapper location    (default: $HOME/.local/bin)
+#   AGENT_CONFIG_NO_RUN   set to 1 to install/update without running agent-config afterwards
+#
+# An install from before the rename (~/.local/share/model-ladder) is moved to the new location.
 #
 # All installer output goes to stderr so `--json` output on stdout stays machine-readable.
 
@@ -25,13 +27,22 @@ set -euo pipefail
 # Everything lives in main() so bash has read the whole script before any command runs;
 # this matters under `curl | bash`, where the script itself arrives on stdin.
 main() {
-  local repo="${MODEL_LADDER_REPO:-https://github.com/elvisgastelum/agent-config.git}"
-  local ref="${MODEL_LADDER_REF:-main}"
-  local home_dir="${MODEL_LADDER_HOME:-$HOME/.local/share/model-ladder}"
-  local bin_dir="${MODEL_LADDER_BIN_DIR:-$HOME/.local/bin}"
+  local default_home="$HOME/.local/share/agent-config"
+  local legacy_home="$HOME/.local/share/model-ladder"
+  local repo="${AGENT_CONFIG_REPO:-${MODEL_LADDER_REPO:-https://github.com/elvisgastelum/agent-config.git}}"
+  local ref="${AGENT_CONFIG_REF:-${MODEL_LADDER_REF:-main}}"
+  local home_dir="${AGENT_CONFIG_HOME:-${MODEL_LADDER_HOME:-$default_home}}"
+  local bin_dir="${AGENT_CONFIG_BIN_DIR:-${MODEL_LADDER_BIN_DIR:-$HOME/.local/bin}}"
+  local no_run="${AGENT_CONFIG_NO_RUN:-${MODEL_LADDER_NO_RUN:-0}}"
+  local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/agent-config"
+  local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-config"
+  local legacy_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/model-ladder"
+  local legacy_state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/model-ladder"
+  # An uninstall of a copy that was never moved out of the pre-rename location.
+  if [ ! -e "$home_dir" ] && [ "$home_dir" = "$default_home" ] && [ -d "$legacy_home/.git" ]; then
+    case " $* " in *" --uninstall "*) home_dir="$legacy_home" ;; esac
+  fi
   local entry="$home_dir/dist/cli.mjs"
-  local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/model-ladder"
-  local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/model-ladder"
 
   local c_info="" c_warn="" c_err="" c_off=""
   if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -45,7 +56,7 @@ main() {
     exit 1
   }
 
-  # `--uninstall` may appear anywhere; the remaining arguments go to `model-ladder uninstall`.
+  # `--uninstall` may appear anywhere; the remaining arguments go to `agent-config uninstall`.
   local uninstall=0 arg
   local -a rest=()
   for arg in "$@"; do
@@ -54,26 +65,27 @@ main() {
   if [ "$uninstall" = 1 ]; then
     set -- ${rest[@]+"${rest[@]}"}
     if [ -f "$entry" ] && command -v node >/dev/null 2>&1; then
-      say "Removing model-ladder configuration from your agents"
+      say "Removing agent-config configuration from your agents"
       # stdout stays the command's own (for --json); exit 3 means edited files were kept.
       local rc=0
       node "$entry" uninstall --yes "$@" </dev/null || rc=$?
       [ "$rc" = 0 ] || [ "$rc" = 3 ] ||
         die "uninstall failed; nothing else was removed." "fix the error above, then re-run with --uninstall."
-    elif [ -f "$state_dir/manifest.json" ]; then
-      die "the model-ladder checkout is missing, so its changes cannot be undone automatically." \
+    elif [ -f "$state_dir/manifest.json" ] || [ -f "$legacy_state_dir/manifest.json" ]; then
+      die "the agent-config checkout is missing, so its changes cannot be undone automatically." \
         "re-run the installer without --uninstall, then run it again with --uninstall."
     fi
     # Files you edited after installing are kept and stay recorded. Keep the tool too, so
     # `--uninstall --force` can still remove them.
     if [ -f "$state_dir/manifest.json" ] && ! grep -q '"records": \[\]' "$state_dir/manifest.json"; then
-      warn "kept files you edited after installing (listed above), and model-ladder itself so they can still be removed."
+      warn "kept files you edited after installing (listed above), and agent-config itself so they can still be removed."
       warn "to remove them too: re-run with --uninstall --force (or keep them and delete $home_dir by hand)."
       return 0
     fi
-    rm -f "$bin_dir/model-ladder"
-    rm -rf "$home_dir" "$config_dir" "$state_dir"
-    say "model-ladder uninstalled. Restart running agent sessions."
+    rm -f "$bin_dir/agent-config" "$bin_dir/model-ladder"
+    rm -rf "$home_dir" "$config_dir" "$state_dir" "$legacy_config_dir" "$legacy_state_dir"
+    [ ! -d "$legacy_home/.git" ] || rm -rf "$legacy_home"
+    say "agent-config uninstalled. Restart running agent sessions."
     return 0
   fi
 
@@ -106,6 +118,17 @@ main() {
     }
   }
 
+  # Move a pre-rename install to the new location, keeping its history, before updating it.
+  if [ "$home_dir" = "$default_home" ] && [ ! -e "$home_dir" ] && [ -d "$legacy_home/.git" ]; then
+    say "Moving $legacy_home to $home_dir (model-ladder is now agent-config)"
+    mkdir -p "$(dirname "$home_dir")"
+    mv "$legacy_home" "$home_dir"
+    # Point the official pre-rename remote at the renamed repo; a fork or custom remote is kept.
+    case "$(git -C "$home_dir" remote get-url origin 2>/dev/null || true)" in
+      *elvisgastelum/model-ladder*) git -C "$home_dir" remote set-url origin "$repo" </dev/null >&2 || true ;;
+    esac
+  fi
+
   local prev=""
   if [ -d "$home_dir/.git" ]; then
     prev="$(git -C "$home_dir" rev-parse HEAD)"
@@ -115,7 +138,7 @@ main() {
         "check your network and that $home_dir has no local commits, then re-run."
   else
     [ ! -e "$home_dir" ] ||
-      die "$home_dir exists but is not a git checkout." "move it away or set MODEL_LADDER_HOME, then re-run."
+      die "$home_dir exists but is not a git checkout." "move it away or set AGENT_CONFIG_HOME, then re-run."
     say "Cloning $repo ($ref) into $home_dir"
     mkdir -p "$(dirname "$home_dir")"
     git clone --quiet --depth 1 --branch "$ref" "$repo" "$home_dir" </dev/null >&2 || {
@@ -141,18 +164,22 @@ main() {
 
   mkdir -p "$bin_dir"
   # Single-quote paths so quotes, `$` or backticks in them cannot break the wrapper.
-  # MODEL_LADDER_HOME/BIN_DIR tell `model-ladder self-update` which install to update.
+  # AGENT_CONFIG_HOME/BIN_DIR tell `agent-config self-update` which install to update.
+  # `model-ladder` stays as an alias so agents and scripts using the old name keep working.
   sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-  printf '#!/bin/sh\nexport MODEL_LADDER_HOME=%s\nexport MODEL_LADDER_BIN_DIR=%s\nexec node %s "$@"\n' \
-    "$(sq "$home_dir")" "$(sq "$bin_dir")" "$(sq "$entry")" >"$bin_dir/model-ladder"
-  chmod +x "$bin_dir/model-ladder"
-  say "Installed $bin_dir/model-ladder"
+  local name
+  for name in agent-config model-ladder; do
+    printf '#!/bin/sh\nexport AGENT_CONFIG_HOME=%s\nexport AGENT_CONFIG_BIN_DIR=%s\nexec node %s "$@"\n' \
+      "$(sq "$home_dir")" "$(sq "$bin_dir")" "$(sq "$entry")" >"$bin_dir/$name"
+    chmod +x "$bin_dir/$name"
+  done
+  say "Installed $bin_dir/agent-config (alias: model-ladder)"
   case ":$PATH:" in
     *":$bin_dir:"*) ;;
     *) warn "$bin_dir is not on your PATH; add: export PATH=\"$bin_dir:\$PATH\"" ;;
   esac
 
-  if [ "${MODEL_LADDER_NO_RUN:-0}" = "1" ]; then
+  if [ "$no_run" = "1" ]; then
     return 0
   fi
   # With no arguments, start the TUI. Under `curl | bash` stdin is the pipe, so

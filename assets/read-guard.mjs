@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// model-ladder read guard: a Claude Code PreToolUse hook (Read|Bash).
+// agent-config read guard: a Claude Code PreToolUse hook (Read|Bash).
 //
 // Denies whole-file reads of large text files in the main session and tells Claude to
 // delegate the question to a ladder read agent, or to read only the range it will edit.
 // Subagents (input carries agent_id) and ranged reads (offset/limit) always pass.
 //
-//   MODEL_LADDER_MIN_LINES  line threshold (default 350)
-//   MODEL_LADDER_GUARD=off  disable the guard
+//   AGENT_CONFIG_MIN_LINES  line threshold (default 350)
+//   AGENT_CONFIG_GUARD=off  disable the guard
 //
 // Any unexpected input or error lets the call through: the guard never breaks a session.
 
@@ -137,9 +137,11 @@ export function bashTargets(command, minLines, env = process.env) {
 }
 
 export function decide(input, env = process.env) {
-  if (env.MODEL_LADDER_GUARD === "off") return undefined;
+  // AGENT_CONFIG_* settings, falling back to the pre-rename MODEL_LADDER_* names.
+  const setting = (name) => env[`AGENT_CONFIG_${name}`] || env[`MODEL_LADDER_${name}`];
+  if (setting("GUARD") === "off") return undefined;
   if (input.agent_id || input.agent_type) return undefined;
-  const minLines = Number.parseInt(env.MODEL_LADDER_MIN_LINES ?? "", 10) || DEFAULT_MIN_LINES;
+  const minLines = Number.parseInt(setting("MIN_LINES") ?? "", 10) || DEFAULT_MIN_LINES;
   const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
   const ti = input.tool_input ?? {};
   let files = [];
@@ -155,10 +157,10 @@ export function decide(input, env = process.env) {
     const lines = countLines(path, minLines);
     if (lines >= minLines) {
       return (
-        `model-ladder: ${file} has ${minLines}+ lines; reading it whole fills the main context. ` +
+        `agent-config: ${file} has ${minLines}+ lines; reading it whole fills the main context. ` +
         `To understand it, delegate the question to the ladder-read-fast agent (Agent tool, subagent_type "ladder-read-fast") ` +
         `and keep only its answer. To edit it, find the lines with Grep (-n) and Read just that range with offset/limit. ` +
-        `(Threshold: MODEL_LADDER_MIN_LINES=${minLines}; MODEL_LADDER_GUARD=off disables this guard.)`
+        `(Threshold: AGENT_CONFIG_MIN_LINES=${minLines}; AGENT_CONFIG_GUARD=off disables this guard.)`
       );
     }
   }
