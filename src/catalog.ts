@@ -15,6 +15,7 @@ import {
   commitSkillMarkdown,
 } from "./commit.ts";
 import type { Config } from "./config.ts";
+import { CODEX_POLICY, CONTINUE, continueMarkdown } from "./continue.ts";
 import {
   KANEO_MCP,
   KANEO_SKILL,
@@ -31,7 +32,7 @@ import {
 import { LADDER_ITEM, opKey, type Op } from "./ops.ts";
 import { claudeDir, claudeJsonPath, codexDir, opencodeDir, piDir } from "./paths.ts";
 import { assetSource, opencodeConfigPath, runtimeOps, tomlMultiline } from "./runtimes.ts";
-import type { Effort, Runtime, TierMap } from "./tiers.ts";
+import type { Effort, Runtime, Tier, TierMap } from "./tiers.ts";
 
 export type Scope = "user" | "project";
 
@@ -149,8 +150,13 @@ function at(root: unknown, pointer: string[]): unknown {
   return node;
 }
 
-function modelName(runtime: Runtime, tiers: TierMap, effort: Effort = tiers.fast.effort): string {
-  const { model } = tiers.fast;
+function modelName(
+  runtime: Runtime,
+  tiers: TierMap,
+  effort: Effort = tiers.fast.effort,
+  tier: Tier = "fast",
+): string {
+  const { model } = tiers[tier];
   if (runtime === "codex" || !model) return `${model || "session model"}, ${effort} effort`;
   return model;
 }
@@ -487,7 +493,56 @@ const commit: CatalogItem = {
   },
 };
 
-export const CATALOG: CatalogItem[] = [modelLadder, kaneo, commit];
+// ---------------------------------------------------------------- continue
+
+/**
+ * Where each runtime reads a manual-only action: a Claude skill that the model never invokes, an
+ * OpenCode command, a Codex skill with implicit invocation off, a Pi prompt template.
+ */
+function continueOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
+  const tiers = config.tiers[runtime];
+  const base = { runtime, component: "catalog" as const, label: "continue action" };
+  const content = continueMarkdown(runtime, {
+    fast: modelName(runtime, tiers),
+    balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
+  });
+  const skill = join(layout(runtime, project).skills, CONTINUE);
+  switch (runtime) {
+    case "claude":
+      return [{ ...base, kind: "file", path: join(skill, "SKILL.md"), content }];
+    case "opencode": {
+      const dir = project ? join(project, ".opencode") : opencodeDir();
+      return [{ ...base, kind: "file", path: join(dir, "commands", `${CONTINUE}.md`), content }];
+    }
+    case "codex":
+      return [
+        { ...base, kind: "file", path: join(skill, "SKILL.md"), content },
+        {
+          ...base,
+          kind: "file",
+          path: join(skill, "agents", "openai.yaml"),
+          content: CODEX_POLICY,
+          label: "continue action policy (explicit invocation only)",
+        },
+      ];
+    case "pi": {
+      const dir = project ? join(project, ".pi") : piDir();
+      return [{ ...base, kind: "file", path: join(dir, "prompts", `${CONTINUE}.md`), content }];
+    }
+  }
+}
+
+const continueItem: CatalogItem = {
+  id: CONTINUE,
+  title: "Continue Kaneo tickets",
+  description:
+    "manual /continue action that works the next Kaneo ticket (or several in parallel worktrees) end to end, handing reads, edits, ticket writes and commit titles to cheap agents",
+  settings: [],
+  discover: () => ({}),
+  ops: (entry, runtime, config) => continueOps(runtime, entry.project, config),
+};
+
+export const CATALOG: CatalogItem[] = [modelLadder, kaneo, commit, continueItem];
 
 export function catalogItem(id: string): CatalogItem | undefined {
   return CATALOG.find((i) => i.id === id);

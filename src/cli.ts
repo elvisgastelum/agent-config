@@ -56,7 +56,7 @@ const SHORT_COMMANDS: Record<string, string> = { i: "install", u: "self-update" 
 const HELP = `agent-config ${VERSION}
 Configure Claude Code, OpenCode, Codex and Pi from a catalog of abilities, such as
 the model ladder (route reads and edits to the cheapest capable model: fast → balanced
-→ deep), Kaneo work tracking and title-only commits.
+→ deep), Kaneo work tracking, title-only commits and the /continue ticket action.
 Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.3.0).
 
 Usage:
