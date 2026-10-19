@@ -6052,15 +6052,16 @@ async function main(argv) {
 			const config = loadConfig();
 			forget(config);
 			saveConfig(config);
-			const restoreErrors = restoreShared(config, results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path));
-			for (const e of restoreErrors) process.stderr.write(`error: could not restore ${e.op.label} (${e.op.path}): ${e.error}\n`);
-			if (restoreErrors.length > 0) return 1;
+			const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
+			const restoreErrors = runtimes.length > 0 ? restoreShared(config, removed) : [];
 			out(json, { results: results.map((r) => ({
 				path: r.record.path,
 				label: r.record.label,
 				outcome: r.outcome,
 				note: r.note
 			})) }, results.map((r) => `${r.outcome.padEnd(13)} ${r.record.label}  ${tildify(r.record.path)}${r.note ? `  (${r.note})` : ""}`).join("\n"));
+			for (const e of restoreErrors) process.stderr.write(`error: could not restore ${e.op.label} (${e.op.path}): ${e.error}\n`);
+			if (restoreErrors.length > 0) return 1;
 			return results.some((r) => r.outcome === "kept-modified") ? 3 : 0;
 		}
 		case "doctor": {
