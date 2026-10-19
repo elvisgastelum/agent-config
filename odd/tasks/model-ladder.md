@@ -18,12 +18,12 @@ Objective: one-liner installable tool that configures Claude Code, OpenCode, Cod
 ## Tasks
 
 - T1 [S2] scaffold + Node pin — inline — done
-- T2 [S5,S6] tiers, agent prompts, skill and instructions content — inline
-- T3 [S4,S7,S8] operation engine with manifest/backups, runtime adapters, review models, uninstall — inline
-- T4 [S1,S6] Claude read-guard hook (shunt equivalent) — inline
-- T5 [S4] CLI + clack TUI — inline
-- T6 [S3,S8] install.sh one-liner with `--uninstall` — inline
-- T7 [S1] README with post analysis — inline
+- T2 [S5,S6] tiers, agent prompts, skill and instructions content — inline — done
+- T3 [S4,S7,S8] operation engine with manifest/backups, runtime adapters, review models, uninstall — inline — done
+- T4 [S1,S6] Claude read-guard hook (shunt equivalent) — inline — done
+- T5 [S4] CLI + clack TUI — inline — done
+- T6 [S3,S8] install.sh one-liner with `--uninstall` — inline — done
+- T7 [S1] README with post analysis — inline — done
 
 Route evidence: all inline; units depend on the shared engine (no Writer trigger).
 
@@ -33,3 +33,5 @@ Route evidence: all inline; units depend on the shared engine (no Writer trigger
 - L2 (2026-10-18, user): "Create a new repo for this, i will drop the current claude-curated-config repo later"
 - L3 evidence: Claude subagents `~/.claude/agents/*.md` (`model:`); OpenCode `~/.config/opencode/agents/*.md` (`mode: subagent`, `model: provider/id`); Codex `~/.codex/agents/*.toml` (`name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`); Pi `~/.pi/agent/agents/*.md` (`model`, `thinking`, `tools`). Gentle AI review lenses: `~/.claude/agents/review-*.md` frontmatter, `~/.pi/gentle-ai/models.json`, `~/.pi/agent/subagents.json`, OpenCode `opencode.jsonc` `agent.review-*`. Claude hook input carries `agent_id`/`agent_type` only inside subagents.
 - L4 Engram mirror pending: `mem_current_project` resolved cwd `/Users/dev`, not this repo.
+- L5 (2026-10-18) evidence: `vp check` clean; `vp test` 25/25 (engine roundtrip incl. exact restore of CLAUDE.md, settings.json, review agent frontmatter, Pi/OpenCode review JSON; read guard; CLI --json/--dry-run/refusal/usage). `install.sh` end to end in a temp HOME from the local clone: install (24 ops, 0 errors), wrapper `status` 20 ok, `--uninstall` restored `CLAUDE.md` and `review-risk.md` byte-for-byte and removed checkout, wrapper and config. Fix after that run: uninstall now deletes JSON files and directories it created.
+- L6 commits: initial `feat: add model-ladder cli, tui, ladder agents, read guard and installer`; follow-up for created-dir cleanup. Not pushed: no GitHub remote yet (user decision).

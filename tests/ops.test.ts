@@ -101,7 +101,17 @@ describe("uninstall", () => {
     install(config(["claude"]));
     uninstall(() => true);
     expect(existsSync(join(box.home, ".claude/CLAUDE.md"))).toBe(false);
-    expect(JSON.parse(read(join(box.home, ".claude/settings.json")))).toEqual({});
+    expect(existsSync(join(box.home, ".claude/settings.json"))).toBe(false);
+    expect(existsSync(join(box.home, ".claude"))).toBe(false);
+  });
+
+  test("keeps directories that existed before install", () => {
+    put(join(box.home, ".codex/config.toml"), "");
+    install(config(["codex"]));
+    uninstall(() => true);
+    expect(existsSync(join(box.home, ".codex/config.toml"))).toBe(true);
+    expect(existsSync(join(box.home, ".codex/agents"))).toBe(false);
+    expect(existsSync(join(box.home, ".codex/skills"))).toBe(false);
   });
 
   test("restores a file it replaced from the backup", () => {
