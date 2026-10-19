@@ -5300,7 +5300,7 @@ function saveConfig(config) {
 }
 //#endregion
 //#region src/version.ts
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 //#endregion
 //#region src/selfupdate.ts
 /** The checkout this CLI runs from (dist/cli.mjs and src/selfupdate.ts sit one level below). */
