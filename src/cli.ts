@@ -10,6 +10,7 @@ import { configPath } from "./paths.ts";
 import { applyPlan, COMPONENTS, uninstall, type Component } from "./ops.ts";
 import { EFFORTS, isReviewLens, isRuntime, isTier, type Effort, type Runtime } from "./tiers.ts";
 import { formatPlan, runTui } from "./tui.ts";
+import { checkForUpdate, runUpdate } from "./selfupdate.ts";
 import { VERSION } from "./version.ts";
 
 const HELP = `model-ladder ${VERSION}
@@ -23,6 +24,7 @@ Usage:
   model-ladder uninstall [flags]   remove it and restore what it replaced
   model-ladder doctor              check runtimes and prerequisites
   model-ladder config              print the saved configuration and its path
+  model-ladder self-update         update model-ladder itself (--dry-run only checks)
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -262,6 +264,37 @@ async function main(argv: string[]): Promise<number> {
         checks.map((c) => `${c.ok ? "ok  " : "warn"} ${c.name.padEnd(18)} ${c.detail}`).join("\n"),
       );
       return 0;
+    }
+    case "self-update": {
+      const check = checkForUpdate();
+      const summary = !check.updatable
+        ? `cannot update: ${check.reason}`
+        : check.behind === 0 || !check.latest
+          ? `up to date: v${check.current.version} (${check.current.commit})`
+          : `update available: v${check.current.version} (${check.current.commit}) -> v${check.latest.version} (${check.latest.commit}), ${check.behind} commit(s)`;
+      if (!check.updatable) return (out(json, { check, updated: false }, summary), 1);
+      if (check.behind === 0 || values["dry-run"])
+        return (out(json, { check, updated: false }, summary), 0);
+      if (!values.yes) {
+        if (!process.stdin.isTTY) {
+          process.stderr.write(
+            `${summary}\nerror: refusing to update without --yes outside a terminal.\n`,
+          );
+          return 2;
+        }
+        const ok = await p.confirm({ message: `${summary}. Update now?` });
+        if (p.isCancel(ok) || !ok) return 130;
+      }
+      const result = runUpdate(check);
+      if (!result.ok) process.stderr.write(result.log);
+      out(
+        json,
+        { check, updated: result.ok, commit: result.commit },
+        result.ok
+          ? `Updated to v${check.latest?.version} (${result.commit}). Run \`model-ladder install\` to re-apply your configuration with it.`
+          : "Update failed; the previous version is still installed.",
+      );
+      return result.ok ? 0 : 1;
     }
     case "config": {
       const config = loadConfig();

@@ -1,6 +1,6 @@
 {
   "name": "model-ladder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Route reads and edits to the cheapest capable model (Haiku → Sonnet → Opus) for Claude Code, OpenCode, Codex and Pi, so the main session's context stays small.",
   "homepage": "https://github.com/elvisgastelum/model-ladder#readme",

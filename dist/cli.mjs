@@ -5,7 +5,7 @@ import l__default, * as l from "node:readline";
 import { ReadStream } from "node:tty";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -3971,7 +3971,122 @@ function saveConfig(config) {
 }
 //#endregion
 //#region src/version.ts
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
+//#endregion
+//#region src/selfupdate.ts
+/** The checkout this CLI runs from (dist/cli.mjs and src/selfupdate.ts sit one level below). */
+function checkoutRoot() {
+	return dirname(dirname(fileURLToPath(import.meta.url)));
+}
+function installHome() {
+	return process.env.MODEL_LADDER_HOME || join(home(), ".local", "share", "model-ladder");
+}
+function git(root, ...args) {
+	return execFileSync("git", [
+		"-C",
+		root,
+		...args
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"pipe"
+		],
+		timeout: 6e4
+	}).trim();
+}
+function samePath(a, b) {
+	try {
+		return realpathSync(a) === realpathSync(b);
+	} catch {
+		return false;
+	}
+}
+function checkForUpdate(root = checkoutRoot()) {
+	const base = {
+		ref: "",
+		current: {
+			version: VERSION,
+			commit: ""
+		},
+		behind: 0
+	};
+	if (!existsSync(join(root, ".git"))) return {
+		...base,
+		updatable: false,
+		reason: "not a git checkout; re-run the install one-liner"
+	};
+	if (!samePath(root, installHome())) return {
+		...base,
+		updatable: false,
+		reason: `running from ${root}, not the installed copy (${installHome()}); use git pull here`
+	};
+	const ref = git(root, "rev-parse", "--abbrev-ref", "HEAD");
+	const current = {
+		version: VERSION,
+		commit: git(root, "rev-parse", "--short", "HEAD")
+	};
+	try {
+		git(root, "fetch", "--quiet", "origin", ref);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message.split("\n")[0] : String(error);
+		return {
+			...base,
+			ref,
+			current,
+			updatable: false,
+			reason: `could not reach origin: ${detail}`
+		};
+	}
+	const behind = Number(git(root, "rev-list", "--count", `HEAD..origin/${ref}`)) || 0;
+	let version = current.version;
+	try {
+		version = JSON.parse(git(root, "show", `origin/${ref}:package.json`)).version ?? version;
+	} catch {}
+	return {
+		updatable: true,
+		ref,
+		current,
+		latest: {
+			version,
+			commit: git(root, "rev-parse", "--short", `origin/${ref}`)
+		},
+		behind
+	};
+}
+function runUpdate(check, root = checkoutRoot()) {
+	const res = spawnSync("bash", [join(root, "install.sh")], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"ignore",
+			"pipe"
+		],
+		timeout: 3e5,
+		env: {
+			...process.env,
+			MODEL_LADDER_HOME: installHome(),
+			MODEL_LADDER_REF: check.ref,
+			MODEL_LADDER_NO_RUN: "1",
+			NO_COLOR: "1"
+		}
+	});
+	const ok = res.status === 0;
+	return {
+		ok,
+		log: res.stderr ?? "",
+		...ok ? { commit: git(root, "rev-parse", "--short", "HEAD") } : {}
+	};
+}
+/** Re-applies the saved configuration with the freshly installed CLI (new prompts and agents). */
+function reapplyWithNewVersion(root = checkoutRoot()) {
+	return spawnSync("node", [
+		join(root, "dist", "cli.mjs"),
+		"install",
+		"--yes"
+	], { stdio: "inherit" }).status ?? 1;
+}
 //#endregion
 //#region src/tui.ts
 var Cancelled = class extends Error {};
@@ -4179,6 +4294,38 @@ async function uninstallFlow() {
 	config.runtimes = config.runtimes.filter((r) => !runtimes.includes(r));
 	saveConfig(config);
 }
+/** Returns true when a new version was installed and the TUI should exit. */
+async function selfUpdateFlow() {
+	const spin = spinner();
+	spin.start("Checking for a new version");
+	const check = checkForUpdate();
+	if (!check.updatable) {
+		spin.stop("This copy cannot update itself");
+		log.warn(check.reason ?? "unknown reason");
+		return false;
+	}
+	const { current, latest, behind } = check;
+	if (behind === 0 || !latest) {
+		spin.stop(`Already up to date: v${current.version} (${current.commit})`);
+		return false;
+	}
+	spin.stop(`New version: v${latest.version} (${latest.commit}), ${behind} commit(s) newer than v${current.version} (${current.commit})`);
+	if (!ask(await confirm({ message: "Update model-ladder now?" }))) return false;
+	spin.start("Updating");
+	const result = runUpdate(check);
+	if (!result.ok) {
+		spin.stop(import_picocolors.default.red("Update failed; the previous version is still installed"));
+		if (result.log.trim()) log.error(result.log.trim());
+		return false;
+	}
+	spin.stop(`Updated to v${latest.version} (${result.commit})`);
+	if (status().length > 0 && ask(await confirm({ message: "Re-apply your saved configuration with the new version (agents, skill, instructions)?" }))) {
+		const code = reapplyWithNewVersion();
+		if (code !== 0) log.warn(`Re-applying exited with code ${code}; run \`model-ladder install\` to retry.`);
+	}
+	log.info("Start model-ladder again to use the new version.");
+	return true;
+}
 async function runTui() {
 	intro(`${import_picocolors.default.bgCyan(import_picocolors.default.black(" model-ladder "))} ${import_picocolors.default.dim(`v${VERSION}`)}`);
 	log.message(import_picocolors.default.dim("Route reads and edits to the cheapest capable model: fast → balanced → deep. The main session keeps the reasoning."));
@@ -4209,6 +4356,11 @@ async function runTui() {
 						hint: "remove and restore"
 					},
 					{
+						value: "self-update",
+						label: "Update model-ladder version",
+						hint: `installed v${VERSION}; checks GitHub for a newer one`
+					},
+					{
 						value: "reset",
 						label: "Reset saved choices",
 						hint: "back to the recommended ladder"
@@ -4224,6 +4376,7 @@ async function runTui() {
 			if (choice === "status") statusFlow();
 			if (choice === "doctor") doctorFlow();
 			if (choice === "uninstall") await uninstallFlow();
+			if (choice === "self-update" && await selfUpdateFlow()) break;
 			if (choice === "reset") {
 				saveConfig({
 					...defaultConfig(),
@@ -4255,6 +4408,7 @@ Usage:
   model-ladder uninstall [flags]   remove it and restore what it replaced
   model-ladder doctor              check runtimes and prerequisites
   model-ladder config              print the saved configuration and its path
+  model-ladder self-update         update model-ladder itself (--dry-run only checks)
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -4463,6 +4617,34 @@ async function main(argv) {
 			const checks = doctor();
 			out(json, { checks }, checks.map((c) => `${c.ok ? "ok  " : "warn"} ${c.name.padEnd(18)} ${c.detail}`).join("\n"));
 			return 0;
+		}
+		case "self-update": {
+			const check = checkForUpdate();
+			const summary = !check.updatable ? `cannot update: ${check.reason}` : check.behind === 0 || !check.latest ? `up to date: v${check.current.version} (${check.current.commit})` : `update available: v${check.current.version} (${check.current.commit}) -> v${check.latest.version} (${check.latest.commit}), ${check.behind} commit(s)`;
+			if (!check.updatable) return out(json, {
+				check,
+				updated: false
+			}, summary), 1;
+			if (check.behind === 0 || values["dry-run"]) return out(json, {
+				check,
+				updated: false
+			}, summary), 0;
+			if (!values.yes) {
+				if (!process.stdin.isTTY) {
+					process.stderr.write(`${summary}\nerror: refusing to update without --yes outside a terminal.\n`);
+					return 2;
+				}
+				const ok = await confirm({ message: `${summary}. Update now?` });
+				if (isCancel(ok) || !ok) return 130;
+			}
+			const result = runUpdate(check);
+			if (!result.ok) process.stderr.write(result.log);
+			out(json, {
+				check,
+				updated: result.ok,
+				commit: result.commit
+			}, result.ok ? `Updated to v${check.latest?.version} (${result.commit}). Run \`model-ladder install\` to re-apply your configuration with it.` : "Update failed; the previous version is still installed.");
+			return result.ok ? 0 : 1;
 		}
 		case "config": {
 			const config = loadConfig();

@@ -25,6 +25,7 @@ import {
   type Runtime,
   type Tier,
 } from "./tiers.ts";
+import { checkForUpdate, reapplyWithNewVersion, runUpdate } from "./selfupdate.ts";
 import { VERSION } from "./version.ts";
 
 class Cancelled extends Error {}
@@ -256,6 +257,50 @@ async function uninstallFlow(): Promise<void> {
   saveConfig(config);
 }
 
+/** Returns true when a new version was installed and the TUI should exit. */
+async function selfUpdateFlow(): Promise<boolean> {
+  const spin = p.spinner();
+  spin.start("Checking for a new version");
+  const check = checkForUpdate();
+  if (!check.updatable) {
+    spin.stop("This copy cannot update itself");
+    p.log.warn(check.reason ?? "unknown reason");
+    return false;
+  }
+  const { current, latest, behind } = check;
+  if (behind === 0 || !latest) {
+    spin.stop(`Already up to date: v${current.version} (${current.commit})`);
+    return false;
+  }
+  spin.stop(
+    `New version: v${latest.version} (${latest.commit}), ${behind} commit(s) newer than v${current.version} (${current.commit})`,
+  );
+  if (!ask(await p.confirm({ message: "Update model-ladder now?" }))) return false;
+  spin.start("Updating");
+  const result = runUpdate(check);
+  if (!result.ok) {
+    spin.stop(pc.red("Update failed; the previous version is still installed"));
+    if (result.log.trim()) p.log.error(result.log.trim());
+    return false;
+  }
+  spin.stop(`Updated to v${latest.version} (${result.commit})`);
+  if (
+    status().length > 0 &&
+    ask(
+      await p.confirm({
+        message:
+          "Re-apply your saved configuration with the new version (agents, skill, instructions)?",
+      }),
+    )
+  ) {
+    const code = reapplyWithNewVersion();
+    if (code !== 0)
+      p.log.warn(`Re-applying exited with code ${code}; run \`model-ladder install\` to retry.`);
+  }
+  p.log.info("Start model-ladder again to use the new version.");
+  return true;
+}
+
 export async function runTui(): Promise<number> {
   p.intro(`${pc.bgCyan(pc.black(" model-ladder "))} ${pc.dim(`v${VERSION}`)}`);
   p.log.message(
@@ -279,6 +324,11 @@ export async function runTui(): Promise<number> {
             { value: "doctor", label: "Doctor", hint: "check runtimes and prerequisites" },
             { value: "uninstall", label: "Uninstall", hint: "remove and restore" },
             {
+              value: "self-update",
+              label: "Update model-ladder version",
+              hint: `installed v${VERSION}; checks GitHub for a newer one`,
+            },
+            {
               value: "reset",
               label: "Reset saved choices",
               hint: "back to the recommended ladder",
@@ -292,6 +342,7 @@ export async function runTui(): Promise<number> {
       if (choice === "status") statusFlow();
       if (choice === "doctor") doctorFlow();
       if (choice === "uninstall") await uninstallFlow();
+      if (choice === "self-update" && (await selfUpdateFlow())) break;
       if (choice === "reset") {
         saveConfig({ ...defaultConfig(), runtimes: loadConfig().runtimes });
         p.log.success("Saved choices reset. Run Update to apply them.");

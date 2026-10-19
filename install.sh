@@ -140,10 +140,11 @@ main() {
   fi
 
   mkdir -p "$bin_dir"
-  # Single-quote the path so quotes, `$` or backticks in it cannot break the wrapper.
-  local quoted
-  quoted="'$(printf '%s' "$entry" | sed "s/'/'\\\\''/g")'"
-  printf '#!/bin/sh\nexec node %s "$@"\n' "$quoted" >"$bin_dir/model-ladder"
+  # Single-quote paths so quotes, `$` or backticks in them cannot break the wrapper.
+  # MODEL_LADDER_HOME/BIN_DIR tell `model-ladder self-update` which install to update.
+  sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+  printf '#!/bin/sh\nexport MODEL_LADDER_HOME=%s\nexport MODEL_LADDER_BIN_DIR=%s\nexec node %s "$@"\n' \
+    "$(sq "$home_dir")" "$(sq "$bin_dir")" "$(sq "$entry")" >"$bin_dir/model-ladder"
   chmod +x "$bin_dir/model-ladder"
   say "Installed $bin_dir/model-ladder"
   case ":$PATH:" in
