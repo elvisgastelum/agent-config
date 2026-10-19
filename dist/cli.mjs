@@ -3634,7 +3634,9 @@ function applyOp(planned, existing, notes = []) {
 	try {
 		return writeTarget(planned, existing, notes, [...existing?.replacedLinks ?? [], ...fresh]);
 	} catch (error) {
-		rmSync(`${planned.op.path}.agent-config-tmp`, { force: true });
+		try {
+			rmSync(`${planned.op.path}.agent-config-tmp`, { force: true });
+		} catch {}
 		for (const link of fresh) {
 			for (let d = dirname(planned.op.path); d === link.path || d.startsWith(`${link.path}/`); d = dirname(d)) try {
 				rmdirSync(d);

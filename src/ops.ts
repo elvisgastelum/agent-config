@@ -652,7 +652,11 @@ export function applyOp(
   } catch (error) {
     // Nothing was recorded, so put the links back now or they would be lost: first clear what
     // this write left in their place (a temp file, folders up to the link), deepest first.
-    rmSync(`${planned.op.path}.agent-config-tmp`, { force: true });
+    try {
+      rmSync(`${planned.op.path}.agent-config-tmp`, { force: true });
+    } catch {
+      // Left behind; the links below still come back where they can.
+    }
     for (const link of fresh) {
       for (
         let d = dirname(planned.op.path);
