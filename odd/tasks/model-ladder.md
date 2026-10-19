@@ -26,6 +26,8 @@ Objective: one-liner installable tool that configures Claude Code, OpenCode, Cod
 - T7 [S1] README with post analysis — inline — done
 - T8 [S8, L9] fix every L8 advisory — inline — done (e2c3396, d55b156)
 - T9 [S3, L11-L12] installer needs only git and node — inline — done (4828fe3)
+- T10 [S4] TUI "Update model-ladder version" + `self-update` — inline — done (3b9dff3; native review approved and acknowledged, 9 non-blocking advisories open)
+- T11 [S1, S5, L14] `model-ladder delegate` for agents that cannot spawn subagents — inline — done
 
 Route evidence: all inline; units depend on the shared engine (no Writer trigger).
 
@@ -44,3 +46,5 @@ Route evidence: all inline; units depend on the shared engine (no Writer trigger
 - L11 (2026-10-18, user): "It just should ask for node as dependency, and fail if is not installed, vite-plus is just the repo development stack"
 - L12 (2026-10-18, user): "Git also needed"
 - L13 T9 evidence: dist/cli.mjs is committed and bundles every dependency (tsdown `deps.alwaysBundle`, jsonc-parser aliased to its ESM build); install.sh dropped pnpm/corepack/build and checks only git, node, `engines.node` and that `dist/cli.mjs --version` runs (rollback otherwise). New tests: dist imports only `node:` built-ins and matches a fresh `vp pack` (`vp test` 39/39). E2E with PATH holding only node and git: install applied, 11 ok, update, uninstall clean, no vite-plus or pnpm dirs in HOME; missing node and missing git each stop with an error and fix line.
+- L14 (2026-10-19, user): "If a subagent can't call another subagent to make the write-read actions this cli can be call to bypass it, but it only can be run if is not already a model-ladder called script, for example a work in parallel done with subagents, they probably can't spawn new subagents, but they can call a cli tool that make the reads/write and return the information as needed"
+- L15 T11 evidence: `delegate read|edit` runs the ladder agent headlessly (claude -p --agent, opencode run --agent, codex exec, pi -p), climbs on partial/escalate/failure, sets MODEL_LADDER_DELEGATED=1 on children and refuses (exit 4) when it is set. Tests with fake runtime binaries (`vp test` 51/51); real smoke run: `delegate read --runtime claude` answered via claude-haiku-5-5 in 8.8s.

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { parseArgs, styleText } from "node:util";
 import process$1, { stdin, stdout } from "node:process";
 import l__default, * as l from "node:readline";
 import { ReadStream } from "node:tty";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 //#region \0rolldown/runtime.js
 var __create = Object.create;
@@ -3457,6 +3457,17 @@ Previous attempt: <only when escalating: the lower rung's STATUS and failure exc
 
 Every ladder agent replies with \`STATUS: done | partial | escalate\`. Edit agents never paste the code they wrote; check \`git diff --stat\` and run the verify command yourself.
 
+## When you cannot spawn agents
+
+If you are yourself a subagent or a parallel worker without an agent tool, run the same ladder from the shell:
+
+\`\`\`sh
+model-ladder delegate read --runtime ${runtime} "<the read handoff above>"
+model-ladder delegate edit --runtime ${runtime} --tier balanced "<the edit handoff above>"
+\`\`\`
+
+It runs the ladder agent headlessly, climbs fast → balanced → deep by itself on \`partial\`, \`escalate\` or failure, and prints only the final reply (rung and timing go to stderr; \`--json\` for structured output, \`--no-climb\` to stay on one rung, task on stdin when omitted). Exit codes: 0 done, 3 still partial after the last rung, 1 failed, 4 refused because you are already running inside a delegated agent: then do the work yourself or reply \`STATUS: escalate\`. Ladder agents never call it.
+
 ## Climbing
 
 1. One attempt per rung.
@@ -3476,13 +3487,15 @@ Reads and edits go to the cheapest capable model; this session keeps the reasoni
 
 - Reads start at \`ladder-read-fast\`; edits start at \`ladder-edit-fast\` for pattern work and \`ladder-edit-balanced\` for new logic. Context offload is a named delegation reason.
 - Climb one rung (fast → balanced → deep) only when a reply is \`partial\` or \`escalate\` or fails verification; after deep fails, do it yourself.
-- Before editing, read the exact lines yourself with offset/limit. Keep debugging, design and security, data or concurrency changes in this session, and verify every delegated edit.`;
+- Before editing, read the exact lines yourself with offset/limit. Keep debugging, design and security, data or concurrency changes in this session, and verify every delegated edit.
+- Without an agent tool (for example as a parallel subagent), use \`model-ladder delegate read|edit --runtime ${runtime} "<task>"\` from the shell instead.`;
 }
 const ROLE_BODY = {
 	read: `You are a read-only worker on the model ladder. The parent session delegated a question so that file contents stay out of its context. Answer that question and nothing else.
 
 Rules:
 - Read, search and summarize only. Never edit files, never run commands that change anything.
+- You are already a ladder agent: never delegate further (no subagents, no \`model-ladder delegate\`).
 - Cite evidence as \`path:line\` using the line numbers your read tool shows. Never estimate a line number.
 - Quote at most 5 lines per excerpt, and only when the exact text matters. Never paste whole files.
 - Keep the whole reply under 300 words unless the parent set another budget.
@@ -3501,6 +3514,7 @@ Rules:
 - Write only inside the allowed edit surfaces. If the change needs another file, stop and say so in STATUS.
 - Run the verify command once after the change. If it fails, fix and run it once more. If it still fails, stop.
 - Never commit, push, install dependencies, or run repository-wide formatters or generators.
+- You are already a ladder agent: never delegate further (no subagents, no \`model-ladder delegate\`).
 - Never paste the code you wrote into your reply. The parent reads the diff.
 
 Reply in exactly this shape:
@@ -4396,6 +4410,208 @@ async function runTui() {
 	return 0;
 }
 //#endregion
+//#region src/delegate.ts
+/** Set in every process `delegate` starts; its presence means "already delegated". */
+const DELEGATED_ENV = "MODEL_LADDER_DELEGATED";
+const READ_TOOLS = {
+	claude: [
+		"Read",
+		"Grep",
+		"Glob"
+	],
+	pi: [
+		"read",
+		"grep",
+		"find",
+		"ls"
+	]
+};
+const EDIT_TOOLS = {
+	claude: [
+		"Read",
+		"Edit",
+		"Write",
+		"Grep",
+		"Glob",
+		"Bash"
+	],
+	pi: [
+		"read",
+		"grep",
+		"find",
+		"ls",
+		"edit",
+		"write",
+		"bash"
+	]
+};
+function invocation(runtime, role, tier, tiers, prompt, cwd, scratch) {
+	const { model, effort } = tiers[tier];
+	const name = agentName(role, tier);
+	switch (runtime) {
+		case "claude": {
+			const args = [
+				"-p",
+				"--agent",
+				name,
+				"--output-format",
+				"json",
+				"--allowedTools",
+				...role === "read" ? READ_TOOLS.claude : EDIT_TOOLS.claude
+			];
+			if (role === "edit") args.push("--permission-mode", "acceptEdits");
+			if (model) args.push("--model", model);
+			return {
+				bin: "claude",
+				args: [
+					...args,
+					"--",
+					prompt
+				]
+			};
+		}
+		case "opencode": {
+			const args = [
+				"run",
+				"--agent",
+				name
+			];
+			if (model) args.push("--model", model);
+			return {
+				bin: "opencode",
+				args: [...args, prompt]
+			};
+		}
+		case "codex": {
+			const outFile = join(scratch, "last-message.txt");
+			const args = [
+				"exec",
+				"--skip-git-repo-check",
+				"--ephemeral",
+				"-C",
+				cwd,
+				"-s",
+				role === "read" ? "read-only" : "workspace-write",
+				"-c",
+				`model_reasoning_effort="${effort}"`,
+				"-o",
+				outFile
+			];
+			if (model) args.push("-m", model);
+			return {
+				bin: "codex",
+				args: [...args, "-"],
+				stdin: `${agentBody(role, tier)}\n\n${prompt}`,
+				outFile
+			};
+		}
+		case "pi": {
+			const args = [
+				"-p",
+				"--no-session",
+				"--tools",
+				(role === "read" ? READ_TOOLS.pi : EDIT_TOOLS.pi).join(","),
+				"--thinking",
+				effort
+			];
+			if (model) args.push("--model", model);
+			args.push("--append-system-prompt", agentBody(role, tier));
+			return {
+				bin: "pi",
+				args: [...args, prompt]
+			};
+		}
+	}
+}
+function parseStatus(reply) {
+	const m = /^\s*STATUS:\s*(done|partial|escalate)\b/im.exec(reply);
+	return m ? m[1]?.toLowerCase() : "partial";
+}
+/** Claude's --output-format json wraps the reply; the others print it as is. */
+function extractReply(runtime, stdout) {
+	if (runtime !== "claude") return { reply: stdout.trim() };
+	try {
+		const data = JSON.parse(stdout);
+		if (data.is_error) return {
+			reply: data.result ?? "",
+			error: data.subtype ?? "agent error"
+		};
+		return { reply: (data.result ?? "").trim() };
+	} catch {
+		return { reply: stdout.trim() };
+	}
+}
+function runOnce(req, tier, tiers, prompt) {
+	const scratch = mkdtempSync(join(tmpdir(), "model-ladder-delegate-"));
+	const started = Date.now();
+	const model = tiers[tier].model || "session model";
+	try {
+		const inv = invocation(req.runtime, req.role, tier, tiers, prompt, req.cwd, scratch);
+		const res = spawnSync(inv.bin, inv.args, {
+			cwd: req.cwd,
+			input: inv.stdin ?? "",
+			encoding: "utf8",
+			timeout: req.timeoutMs,
+			maxBuffer: 67108864,
+			env: {
+				...process.env,
+				[DELEGATED_ENV]: "1"
+			}
+		});
+		const durationMs = Date.now() - started;
+		if (res.error || res.status !== 0) return {
+			tier,
+			model,
+			status: "error",
+			durationMs,
+			reply: "",
+			error: res.error ? res.error.code === "ENOENT" ? `${inv.bin} is not installed or not on PATH` : res.error.message : `${inv.bin} exited with ${res.status}: ${(res.stderr || "").trim().split("\n").slice(-3).join(" ")}`
+		};
+		let stdout = res.stdout ?? "";
+		if (inv.outFile) try {
+			stdout = readFileSync(inv.outFile, "utf8");
+		} catch {}
+		const { reply, error } = extractReply(req.runtime, stdout);
+		if (error) return {
+			tier,
+			model,
+			status: "error",
+			durationMs,
+			reply,
+			error
+		};
+		return {
+			tier,
+			model,
+			status: parseStatus(reply),
+			durationMs,
+			reply
+		};
+	} finally {
+		rmSync(scratch, {
+			recursive: true,
+			force: true
+		});
+	}
+}
+function escalationPrompt(original, previous) {
+	const summary = previous.error ?? previous.reply.slice(0, 2e3);
+	return `${original}\n\nPrevious attempt (${previous.tier} rung, STATUS: ${previous.status}):\n${summary}`;
+}
+/** Runs the request, climbing one rung at a time while replies are not `done`. */
+function delegate(req, tiers) {
+	const attempts = [];
+	let prompt = req.prompt;
+	for (const tier of TIERS.slice(TIERS.indexOf(req.tier))) {
+		const attempt = runOnce(req, tier, tiers, prompt);
+		attempts.push(attempt);
+		if (attempt.status === "done" || !req.climb) break;
+		if (attempt.error?.includes("not on PATH")) break;
+		prompt = escalationPrompt(req.prompt, attempt);
+	}
+	return attempts;
+}
+//#endregion
 //#region src/cli.ts
 const HELP = `model-ladder ${VERSION}
 Route reads and edits to the cheapest capable model (fast → balanced → deep)
@@ -4409,6 +4625,9 @@ Usage:
   model-ladder doctor              check runtimes and prerequisites
   model-ladder config              print the saved configuration and its path
   model-ladder self-update         update model-ladder itself (--dry-run only checks)
+  model-ladder delegate <read|edit> [--tier t] [--runtime r] "<task>"
+                                   run a ladder read or edit headlessly and print only its reply;
+                                   for agents that cannot spawn subagents (task from stdin if omitted)
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -4423,8 +4642,15 @@ Flags:
   --json                         print one JSON document to stdout
   -v, --version / -h, --help
 
+Delegate flags:
+  --tier <fast|balanced|deep>    first rung (default: fast)
+  --no-climb                     do not climb to the next rung on partial/escalate/failure
+  --cwd <dir>                    working directory for the agent (default: current)
+  --timeout <seconds>            per-rung limit (default 600)
+
 Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
-3 uninstall kept files you edited (re-run with --force), 130 cancelled.`;
+3 uninstall kept files you edited (re-run with --force) / delegate ended partial or escalate,
+4 delegate refused: already running inside a model-ladder delegated agent, 130 cancelled.`;
 var UsageError = class extends Error {};
 function parseAssign(raw, flag) {
 	const m = /^([a-z-]+)(?::([a-z]+))?=(.*)$/.exec(raw);
@@ -4466,6 +4692,12 @@ function applyFlags(config, values) {
 		config.minLines = n;
 	}
 }
+/** The runtime a delegating agent most likely runs in, else the first configured one. */
+function delegateRuntime(configured) {
+	if (process.env.MODEL_LADDER_RUNTIME) return process.env.MODEL_LADDER_RUNTIME;
+	if (process.env.CLAUDECODE) return "claude";
+	return configured[0] ?? detectedRuntimes()[0];
+}
 function out(json, data, text) {
 	process.stdout.write(json ? `${JSON.stringify(data, null, 2)}\n` : `${text}\n`);
 }
@@ -4495,6 +4727,10 @@ async function main(argv) {
 				multiple: true
 			},
 			"min-lines": { type: "string" },
+			tier: { type: "string" },
+			cwd: { type: "string" },
+			"no-climb": { type: "boolean" },
+			timeout: { type: "string" },
 			yes: {
 				type: "boolean",
 				short: "y"
@@ -4617,6 +4853,44 @@ async function main(argv) {
 			const checks = doctor();
 			out(json, { checks }, checks.map((c) => `${c.ok ? "ok  " : "warn"} ${c.name.padEnd(18)} ${c.detail}`).join("\n"));
 			return 0;
+		}
+		case "delegate": {
+			if (process.env["MODEL_LADDER_DELEGATED"]) {
+				process.stderr.write("error: model-ladder delegate cannot run inside an agent it started (no nested delegation).\n  fix: answer with what you have, or reply STATUS: escalate so the caller climbs a rung.\n");
+				return 4;
+			}
+			const role = positionals[1];
+			if (role !== "read" && role !== "edit") throw new UsageError("delegate expects read or edit");
+			const tier = values.tier ?? "fast";
+			if (!isTier(tier)) throw new UsageError(`unknown tier "${tier}"`);
+			const config = loadConfig();
+			const runtime = values.runtime?.at(-1) ?? delegateRuntime(config.runtimes);
+			if (!runtime || !isRuntime(runtime)) throw new UsageError(runtime ? `unknown runtime "${runtime}"` : "no runtime found; pass --runtime");
+			let prompt = positionals.slice(2).join(" ").trim();
+			if (!prompt || prompt === "-") prompt = process.stdin.isTTY ? "" : readFileSync(0, "utf8").trim();
+			if (!prompt) throw new UsageError("delegate needs a task: pass it as an argument or on stdin");
+			const seconds = values.timeout === void 0 ? 600 : Number(values.timeout);
+			if (!Number.isFinite(seconds) || seconds <= 0) throw new UsageError("--timeout expects seconds");
+			const attempts = delegate({
+				role,
+				tier,
+				runtime,
+				prompt,
+				cwd: values.cwd ?? process.cwd(),
+				climb: values["no-climb"] !== true,
+				timeoutMs: seconds * 1e3
+			}, config.tiers[runtime]);
+			const last = attempts.at(-1);
+			for (const a of attempts) process.stderr.write(`model-ladder: ${role} ${a.tier} (${a.model}) → ${a.status} in ${(a.durationMs / 1e3).toFixed(1)}s${a.error ? `: ${a.error}` : ""}\n`);
+			out(json, {
+				runtime,
+				role,
+				status: last?.status,
+				reply: last?.reply ?? "",
+				attempts: attempts.map(({ reply: _reply, ...a }) => a)
+			}, last?.reply ?? "");
+			if (!last || last.status === "error") return 1;
+			return last.status === "done" ? 0 : 3;
 		}
 		case "self-update": {
 			const check = checkForUpdate();

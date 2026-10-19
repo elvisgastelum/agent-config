@@ -92,6 +92,17 @@ Previous attempt: <only when escalating: the lower rung's STATUS and failure exc
 
 Every ladder agent replies with \`STATUS: done | partial | escalate\`. Edit agents never paste the code they wrote; check \`git diff --stat\` and run the verify command yourself.
 
+## When you cannot spawn agents
+
+If you are yourself a subagent or a parallel worker without an agent tool, run the same ladder from the shell:
+
+\`\`\`sh
+model-ladder delegate read --runtime ${runtime} "<the read handoff above>"
+model-ladder delegate edit --runtime ${runtime} --tier balanced "<the edit handoff above>"
+\`\`\`
+
+It runs the ladder agent headlessly, climbs fast → balanced → deep by itself on \`partial\`, \`escalate\` or failure, and prints only the final reply (rung and timing go to stderr; \`--json\` for structured output, \`--no-climb\` to stay on one rung, task on stdin when omitted). Exit codes: 0 done, 3 still partial after the last rung, 1 failed, 4 refused because you are already running inside a delegated agent: then do the work yourself or reply \`STATUS: escalate\`. Ladder agents never call it.
+
 ## Climbing
 
 1. One attempt per rung.
@@ -112,7 +123,8 @@ Reads and edits go to the cheapest capable model; this session keeps the reasoni
 
 - Reads start at \`ladder-read-fast\`; edits start at \`ladder-edit-fast\` for pattern work and \`ladder-edit-balanced\` for new logic. Context offload is a named delegation reason.
 - Climb one rung (fast → balanced → deep) only when a reply is \`partial\` or \`escalate\` or fails verification; after deep fails, do it yourself.
-- Before editing, read the exact lines yourself with offset/limit. Keep debugging, design and security, data or concurrency changes in this session, and verify every delegated edit.`;
+- Before editing, read the exact lines yourself with offset/limit. Keep debugging, design and security, data or concurrency changes in this session, and verify every delegated edit.
+- Without an agent tool (for example as a parallel subagent), use \`model-ladder delegate read|edit --runtime ${runtime} "<task>"\` from the shell instead.`;
 }
 
 const ROLE_BODY: Record<Role, string> = {
@@ -120,6 +132,7 @@ const ROLE_BODY: Record<Role, string> = {
 
 Rules:
 - Read, search and summarize only. Never edit files, never run commands that change anything.
+- You are already a ladder agent: never delegate further (no subagents, no \`model-ladder delegate\`).
 - Cite evidence as \`path:line\` using the line numbers your read tool shows. Never estimate a line number.
 - Quote at most 5 lines per excerpt, and only when the exact text matters. Never paste whole files.
 - Keep the whole reply under 300 words unless the parent set another budget.
@@ -138,6 +151,7 @@ Rules:
 - Write only inside the allowed edit surfaces. If the change needs another file, stop and say so in STATUS.
 - Run the verify command once after the change. If it fails, fix and run it once more. If it still fails, stop.
 - Never commit, push, install dependencies, or run repository-wide formatters or generators.
+- You are already a ladder agent: never delegate further (no subagents, no \`model-ladder delegate\`).
 - Never paste the code you wrote into your reply. The parent reads the diff.
 
 Reply in exactly this shape:
