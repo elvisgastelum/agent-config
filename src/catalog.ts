@@ -332,3 +332,16 @@ export function upsertEntry(config: Config, entry: CatalogEntry): void {
   const key = entryKey(entry);
   config.catalog = [...config.catalog.filter((e) => entryKey(e) !== key), entry];
 }
+
+/** Drops uninstalled runtimes from catalog entries, and entries left with none. */
+export function forgetCatalog(
+  config: Config,
+  match: (e: CatalogEntry) => boolean,
+  runtimes: string[],
+): void {
+  config.catalog = config.catalog.flatMap((e) => {
+    if (!match(e)) return [e];
+    const left = runtimes.length === 0 ? [] : e.runtimes.filter((r) => !runtimes.includes(r));
+    return left.length > 0 ? [{ ...e, runtimes: left }] : [];
+  });
+}
