@@ -16,7 +16,7 @@ It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the run
 curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh | bash
 ```
 
-Requires only **git** and **Node.js 22.12 or newer** (24 LTS recommended); the installer stops with a clear message if either is missing. The CLI ships prebuilt and self-contained in `dist/cli.mjs`, so nothing is installed or built on your machine: the installer clones to `~/.local/share/model-ladder`, checks Node, adds `model-ladder` to `~/.local/bin` and opens the TUI. Re-run the one-liner to update; a failed update rolls back to the previous version.
+Requires only **git** and **Node.js 22.12 or newer** (24 LTS recommended); the installer stops with a clear message if either is missing. The CLI ships prebuilt and self-contained in `dist/cli.mjs`, so nothing is installed or built on your machine: the installer clones to `~/.local/share/model-ladder`, checks Node, adds `model-ladder` to `~/.local/bin` and opens the TUI. Update from the TUI (**Update model-ladder version**), with `model-ladder self-update`, or by re-running the one-liner; a failed update rolls back to the previous version.
 
 Non-interactive (scripts and agents):
 
@@ -43,18 +43,19 @@ Uninstall restores what model-ladder replaced: backed-up files come back, JSON k
 2. A colored plan per agent: `create`, `update`, `unchanged`, `skip`, with the target path.
 3. Confirm, apply, done. Choices are saved to `~/.config/model-ladder/config.json`.
 
-Also: **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (runtimes, Codex `multi_agent`, Pi subagent support, drift), **Uninstall**, **Reset saved choices**.
+Also: **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (runtimes, Codex `multi_agent`, Pi subagent support, drift), **Uninstall**, **Update model-ladder version** (checks GitHub, shows the installed and new versions, updates with rollback if the new version does not run, then offers to re-apply your saved configuration), **Reset saved choices**.
 
 ## Commands
 
-| Command                  | What it does                                                                    |
-| ------------------------ | ------------------------------------------------------------------------------- |
-| `model-ladder`           | Opens the TUI.                                                                  |
-| `model-ladder install`   | Applies the saved choices (or detected runtimes on first run). Asks to confirm. |
-| `model-ladder status`    | Lists what model-ladder installed and whether it still matches.                 |
-| `model-ladder uninstall` | Undoes it. `--runtime` limits it to some agents.                                |
-| `model-ladder doctor`    | Checks runtimes and prerequisites.                                              |
-| `model-ladder config`    | Prints the saved choices and their path.                                        |
+| Command                    | What it does                                                                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model-ladder`             | Opens the TUI.                                                                                                                                          |
+| `model-ladder install`     | Applies the saved choices (or detected runtimes on first run). Asks to confirm.                                                                         |
+| `model-ladder status`      | Lists what model-ladder installed and whether it still matches.                                                                                         |
+| `model-ladder uninstall`   | Undoes it. `--runtime` limits it to some agents.                                                                                                        |
+| `model-ladder doctor`      | Checks runtimes and prerequisites.                                                                                                                      |
+| `model-ladder config`      | Prints the saved choices and their path.                                                                                                                |
+| `model-ladder self-update` | Updates model-ladder itself from GitHub (`--dry-run` only checks). Then run `model-ladder install` to re-apply your configuration with the new version. |
 
 | Flag                                            | Meaning                                                                        |
 | ----------------------------------------------- | ------------------------------------------------------------------------------ |
