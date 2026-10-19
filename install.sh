@@ -8,8 +8,8 @@
 #               | bash -s -- --uninstall
 #
 # `--uninstall` removes everything agent-config wrote to your agents (restoring what it
-# replaced), then the checkout, the `agent-config` and `model-ladder` commands and the saved
-# configuration. Add `--force` to also remove agent files you edited after installing.
+# replaced), then the checkout, the `agent-config`, `model-ladder` and `agi` commands and the
+# saved configuration. Add `--force` to also remove agent files you edited after installing.
 #
 # Environment (each also read under its pre-rename MODEL_LADDER_* name):
 #   AGENT_CONFIG_HOME     checkout location   (default: $HOME/.local/share/agent-config)
@@ -48,6 +48,8 @@ main() {
   if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
     c_info=$'\033[1;36m' c_warn=$'\033[1;33m' c_err=$'\033[1;31m' c_off=$'\033[0m'
   fi
+  # `agi` is a short alias: a relative symlink to the agent-config wrapper next to it.
+  is_agi_link() { [ -L "$bin_dir/agi" ] && [ "$(readlink "$bin_dir/agi")" = agent-config ]; }
   say() { printf '%s==>%s %s\n' "$c_info" "$c_off" "$*" >&2; }
   warn() { printf '%swarning:%s %s\n' "$c_warn" "$c_off" "$*" >&2; }
   die() {
@@ -87,6 +89,7 @@ main() {
       return 0
     fi
     rm -f "$bin_dir/agent-config" "$bin_dir/model-ladder"
+    ! is_agi_link || rm -f "$bin_dir/agi"
     rm -rf "$home_dir" "$config_dir" "$state_dir" "$legacy_config_dir" "$legacy_state_dir"
     [ ! -d "$legacy_home/.git" ] || rm -rf "$legacy_home"
     say "agent-config uninstalled. Restart running agent sessions."
@@ -189,7 +192,14 @@ main() {
       "$(sq "$home_dir")" "$(sq "$bin_dir")" "$(sq "$entry")" >"$bin_dir/$name"
     chmod +x "$bin_dir/$name"
   done
-  say "Installed $bin_dir/agent-config (alias: model-ladder)"
+  # Never replace an `agi` command that something else installed.
+  if is_agi_link || { [ ! -e "$bin_dir/agi" ] && [ ! -L "$bin_dir/agi" ]; }; then
+    ln -sfn agent-config "$bin_dir/agi"
+    say "Installed $bin_dir/agent-config (aliases: agi, model-ladder)"
+  else
+    say "Installed $bin_dir/agent-config (alias: model-ladder)"
+    warn "$bin_dir/agi already exists and is not agent-config's; not replacing it."
+  fi
   case ":$PATH:" in
     *":$bin_dir:"*) ;;
     *) warn "$bin_dir is not on your PATH; add: export PATH=\"$bin_dir:\$PATH\"" ;;
