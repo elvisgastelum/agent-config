@@ -12,6 +12,8 @@ import {
   opKey,
   planOp,
   planRemoval,
+  LADDER_ITEM,
+  LADDER_KEY,
   recordKey,
   recordState,
   type ManifestRecord,
@@ -78,8 +80,8 @@ export function buildPlan(config: Config, only?: string[]): PlannedOp[] {
         r.item !== undefined &&
         planned.has(r.item) &&
         !wanted.has(recordKey(r)) &&
-        (r.component === "catalog" ||
-          (ladder.includes(r.runtime) && config.components.includes(r.component))),
+        (r.item !== LADDER_KEY ||
+          (ladder.includes(r.runtime) && (config.components as string[]).includes(r.component))),
     )
     .map(planRemoval);
   return [...stale, ...ops.map((op) => planOp(op, records.get(opKey(op))))];
@@ -125,9 +127,14 @@ export function uninstallSelection(
     results.filter((r) => r.outcome === "kept-modified").map((r) => r.record.item),
   );
   const config = loadConfig();
+  // The ladder forgets its runtimes even when it kept edited files, as it did before it became a
+  // catalog item: its kept files stay in the manifest for `--force`, and `restoreShared` must not
+  // put the removed ones back.
   forgetCatalog(
     config,
-    (e) => (key === undefined || entryKey(e) === key) && !kept.has(entryKey(e)),
+    (e) =>
+      (key === undefined || entryKey(e) === key) &&
+      (e.item === LADDER_ITEM || !kept.has(entryKey(e))),
     runtimes,
   );
   saveConfig(config);

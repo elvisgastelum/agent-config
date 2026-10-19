@@ -148,7 +148,7 @@ export function agentFileProblem(runtime: Runtime, role: Role, tier: Tier): stri
         ? join(opencodeDir(), "agents", `${name}.md`)
         : undefined;
   if (!file) return undefined;
-  const fix = `run \`agent-config install --runtime ${runtime}\``;
+  const fix = `run \`agent-config install model-ladder --runtime ${runtime}\``;
   if (!existsSync(file)) return `${name} is not installed for ${runtime}; ${fix}`;
   if (runtime === "opencode" && role === "read") {
     const text = readFileSync(file, "utf8");

@@ -165,6 +165,31 @@ test("install model-ladder installs only the ladder; uninstall model-ladder keep
   expect(saved.map((e: { item: string }) => e.item)).toEqual(["kaneo"]);
 });
 
+test("a bare install plans the ladder first, even when it was added after another item", () => {
+  expect(
+    run("install", "kaneo", "--runtime", "claude", "--url", "https://k.example.com", "--yes").code,
+  ).toBe(0);
+  expect(run("install", "model-ladder", "--runtime", "claude", "--yes").code).toBe(0);
+  const plan = JSON.parse(run("install", "--dry-run", "--json").stdout).plan as { item: string }[];
+  const firstKaneo = plan.findIndex((x) => x.item === "kaneo@user");
+  expect(plan[0]?.item).toBe("model-ladder@user");
+  expect(plan.slice(firstKaneo).every((x) => x.item === "kaneo@user")).toBe(true);
+});
+
+test("a partial runtime uninstall that keeps an edited ladder file does not put the removed ones back", () => {
+  expect(run("install", "--runtime", "claude", "--runtime", "codex", "--yes").code).toBe(0);
+  const edited = join(home, ".codex/agents/ladder-read-fast.toml");
+  writeFileSync(edited, "edited\n");
+  expect(run("uninstall", "--runtime", "codex", "--yes").code).toBe(3);
+  expect(read(edited)).toBe("edited\n");
+  expect(existsSync(join(home, ".codex/agents/ladder-read-balanced.toml"))).toBe(false);
+  expect(existsSync(join(home, ".claude/agents/ladder-read-balanced.md"))).toBe(true);
+  const saved = JSON.parse(read(join(home, ".config/agent-config/config.json"))).catalog;
+  expect(saved).toMatchObject([{ item: "model-ladder", runtimes: ["claude"] }]);
+  expect(run("uninstall", "--runtime", "codex", "--yes", "--force").code).toBe(0);
+  expect(existsSync(edited)).toBe(false);
+});
+
 test("a bare install with nothing saved asks for a catalog item instead of installing the ladder", () => {
   const res = run("install", "--yes");
   expect(res.code).toBe(2);
@@ -172,10 +197,21 @@ test("a bare install with nothing saved asks for a catalog item instead of insta
   expect(existsSync(join(home, ".claude"))).toBe(false);
 });
 
-test("install model-ladder refuses --project", () => {
-  const res = run("install", "model-ladder", "--project", home, "--runtime", "claude");
-  expect(res.code).toBe(2);
-  expect(res.stderr).toContain("user scope only");
+test("install model-ladder refuses --project and --url", () => {
+  const project = run("install", "model-ladder", "--project", home, "--runtime", "claude");
+  expect(project.code).toBe(2);
+  expect(project.stderr).toContain("user scope only");
+  const url = run(
+    "install",
+    "model-ladder",
+    "--url",
+    "https://k.example.com",
+    "--runtime",
+    "claude",
+  );
+  expect(url.code).toBe(2);
+  expect(url.stderr).toContain("--url does not apply to model-ladder");
+  expect(existsSync(join(home, ".config/agent-config/config.json"))).toBe(false);
 });
 
 test("a 0.4.0 ladder install migrates to the model-ladder entry without reinstalling", () => {
