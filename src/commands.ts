@@ -6,7 +6,9 @@ import { join } from "node:path";
 import type { Config } from "./config.ts";
 import {
   loadManifest,
+  opKey,
   planOp,
+  recordKey,
   recordState,
   type ManifestRecord,
   type PlannedOp,
@@ -46,7 +48,8 @@ export function detectedRuntimes(): Runtime[] {
 }
 
 export function buildPlan(config: Config): PlannedOp[] {
-  return allOps(config).map((op) => planOp(op));
+  const records = new Map(loadManifest().records.map((r) => [recordKey(r), r]));
+  return allOps(config).map((op) => planOp(op, records.get(opKey(op))));
 }
 
 export function tildify(path: string): string {

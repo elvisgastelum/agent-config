@@ -55,7 +55,10 @@ main() {
     set -- ${rest[@]+"${rest[@]}"}
     if [ -f "$entry" ] && command -v node >/dev/null 2>&1; then
       say "Removing model-ladder configuration from your agents"
-      node "$entry" uninstall --yes "$@" </dev/null >&2 ||
+      # stdout stays the command's own (for --json); exit 3 means edited files were kept.
+      local rc=0
+      node "$entry" uninstall --yes "$@" </dev/null || rc=$?
+      [ "$rc" = 0 ] || [ "$rc" = 3 ] ||
         die "uninstall failed; nothing else was removed." "fix the error above, then re-run with --uninstall."
     elif [ -f "$state_dir/manifest.json" ]; then
       die "the model-ladder checkout is missing, so its changes cannot be undone automatically." \
@@ -116,7 +119,9 @@ main() {
     say "Installing dependencies"
     (cd "$home_dir" && "${pnpm_cmd[@]}" install --frozen-lockfile </dev/null >&2) || return 1
     say "Building"
-    (cd "$home_dir" && "${pnpm_cmd[@]}" run build </dev/null >&2) || return 1
+    # Keep vite-plus caches inside the checkout so uninstall removes them with it.
+    (cd "$home_dir" && VP_HOME="$home_dir/.vite-plus" XDG_CACHE_HOME="$home_dir/.cache" \
+      "${pnpm_cmd[@]}" run build </dev/null >&2) || return 1
     [ -f "$entry" ] || {
       printf '%serror:%s build did not produce %s\n' "$c_err" "$c_off" "$entry" >&2
       return 1
@@ -157,7 +162,10 @@ main() {
   fi
 
   mkdir -p "$bin_dir"
-  printf '#!/bin/sh\nexec node "%s" "$@"\n' "$entry" >"$bin_dir/model-ladder"
+  # Single-quote the path so quotes, `$` or backticks in it cannot break the wrapper.
+  local quoted
+  quoted="'$(printf '%s' "$entry" | sed "s/'/'\\\\''/g")'"
+  printf '#!/bin/sh\nexec node %s "$@"\n' "$quoted" >"$bin_dir/model-ladder"
   chmod +x "$bin_dir/model-ladder"
   say "Installed $bin_dir/model-ladder"
   case ":$PATH:" in

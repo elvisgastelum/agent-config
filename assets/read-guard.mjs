@@ -71,14 +71,57 @@ export function countLines(path, cap) {
   }
 }
 
+/**
+ * Splits a simple command into words, honouring quotes and backslashes. Returns undefined
+ * for anything with substitutions, pipes, redirects or chains: those already narrow or
+ * post-process the output, so the guard lets them through.
+ */
+export function words(command, env = process.env) {
+  if (/[|;&<>`()]|\$\(/.test(command)) return undefined;
+  const home = env.HOME ?? "";
+  const out = [];
+  let cur = "";
+  let started = false;
+  let quote = "";
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      if (c === quote) quote = "";
+      else if (c === "\\" && quote === '"' && i + 1 < command.length) cur += command[++i];
+      else cur += c;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      started = true;
+    } else if (c === "\\" && i + 1 < command.length) {
+      cur += command[++i];
+      started = true;
+    } else if (/\s/.test(c)) {
+      if (started) out.push(cur);
+      cur = "";
+      started = false;
+    } else {
+      cur += c;
+      started = true;
+    }
+  }
+  if (quote) return undefined;
+  if (started) out.push(cur);
+  return out.map((w) => w.replace(/^~(?=\/|$)/, home).replace(/^\$\{?HOME\}?(?=\/|$)/, home));
+}
+
 /** Files a simple `cat`/`head -n N` style command would print whole, or [] to let it pass. */
-export function bashTargets(command, minLines) {
-  // Pipes, redirects, chains and substitutions already narrow or post-process output.
-  if (/[|;&<>`$()]/.test(command)) return [];
-  const tokens = command.trim().split(/\s+/).filter(Boolean);
+export function bashTargets(command, minLines, env = process.env) {
+  const tokens = words(command, env);
+  if (!tokens) return [];
+  // Skip leading VAR=value assignments.
+  while (tokens.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift();
   const prog = tokens.shift();
-  if (!prog) return [];
-  if (PAGERS.has(prog)) return tokens.filter((t) => !t.startsWith("-"));
+  if (!prog || tokens.some((t) => t.includes("$"))) return [];
+  if (PAGERS.has(prog)) {
+    // bat -r/--line-range prints a range, like a ranged Read.
+    if (prog === "bat" && tokens.some((t) => /^(-r|--line-range)/.test(t))) return [];
+    return tokens.filter((t) => !t.startsWith("-"));
+  }
   if (!SLICERS.has(prog)) return [];
   // head/tail print 10 lines by default; only a large explicit count reads the file whole.
   let count = 10;
@@ -104,7 +147,7 @@ export function decide(input, env = process.env) {
     if (ti.offset != null || ti.limit != null) return undefined;
     if (typeof ti.file_path === "string") files = [ti.file_path];
   } else if (input.tool_name === "Bash" && typeof ti.command === "string") {
-    files = bashTargets(ti.command, minLines);
+    files = bashTargets(ti.command, minLines, env);
   }
   for (const file of files) {
     if (NON_TEXT.has(extname(file).toLowerCase())) continue;

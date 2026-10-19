@@ -36,7 +36,8 @@ Flags:
   --json                         print one JSON document to stdout
   -v, --version / -h, --help
 
-Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal, 130 cancelled.`;
+Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
+3 uninstall kept files you edited (re-run with --force), 130 cancelled.`;
 
 class UsageError extends Error {}
 
@@ -171,13 +172,20 @@ async function main(argv: string[]): Promise<number> {
         {
           plan: planJson,
           applied: true,
+          notes: result.notes,
           errors: result.errors.map((e) => ({
             label: e.op.label,
             path: e.op.path,
             error: e.error,
           })),
         },
-        `${formatPlan(plan)}\n\n${failed || `${pc.green("Applied")} ${changes.length} change(s). Restart running agent sessions to load them.`}`,
+        [
+          formatPlan(plan),
+          "",
+          ...result.notes.map((n) => `${pc.yellow("note")} ${n}`),
+          failed ||
+            `${pc.green("Applied")} ${changes.length} change(s). Restart running agent sessions to load them.`,
+        ].join("\n"),
       );
       return result.errors.length > 0 ? 1 : 0;
     }
@@ -244,7 +252,8 @@ async function main(argv: string[]): Promise<number> {
           )
           .join("\n"),
       );
-      return 0;
+      // 3: finished, but files edited after install were kept (re-run with --force to remove them).
+      return results.some((r) => r.outcome === "kept-modified") ? 3 : 0;
     }
     case "doctor": {
       const checks = doctor();

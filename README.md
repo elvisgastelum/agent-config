@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/ins
                                        # undo it and remove the tool, its command and saved choices
 ```
 
-Uninstall restores what model-ladder replaced: backed-up files come back, JSON keys and frontmatter return to their previous values, the managed instruction block is cut out of `CLAUDE.md`/`AGENTS.md`. Anything you (or `gentle-ai sync`) changed after installing is left alone and reported; `--force` removes edited ladder files anyway.
+Uninstall restores what model-ladder replaced: backed-up files come back, JSON keys and frontmatter return to their previous values, the managed instruction block is cut out of `CLAUDE.md`/`AGENTS.md`. Edits are byte-precise: comments, indentation, symlinks and file permissions in your configs survive install and uninstall. Anything you (or `gentle-ai sync`) changed after installing is left alone and reported; `--force` removes edited ladder files anyway. While such files remain, `install.sh --uninstall` keeps the tool installed so `--uninstall --force` still works. Re-installing over a ladder file you edited saves your copy to `~/.local/state/model-ladder/backups` first.
 
 ## The TUI
 
@@ -66,7 +66,7 @@ Also: **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (
 | `--min-lines <n>`                               | Read-guard threshold (default 350).                                            |
 | `--yes`, `--dry-run`, `--force`, `--json`       | Skip confirmation; preview; remove edited files on uninstall; machine output.  |
 
-Exit codes: `0` ok, `1` a step failed, `2` usage error or refusal (for example `install` without `--yes` outside a terminal), `130` cancelled.
+Exit codes: `0` ok, `1` a step failed, `2` usage error or refusal (for example `install` without `--yes` outside a terminal), `3` uninstall finished but kept files you edited (re-run with `--force`), `130` cancelled.
 
 ## What gets installed
 
@@ -101,7 +101,7 @@ The skill (and the short instruction block that points to it) tells the main ses
 - **Climbing**: every agent replies `STATUS: done | partial | escalate`. One attempt per rung; climb on `partial`/`escalate` or a failed check; after deep fails the main session does it itself.
 - **Never delegated**: line-exact reads before an edit (read the range with offset/limit), debugging, design, and changes to auth, data or concurrency.
 
-The **read guard** (Claude Code) makes the read rule stick: a `PreToolUse` hook denies whole-file `Read`s and plain `cat`/`less`/large `head`/`tail` of files over the threshold in the main session, with a message pointing at `ladder-read-fast` or a ranged read. Subagents, ranged reads, pipes, images and PDFs pass. `MODEL_LADDER_GUARD=off` disables it for a session.
+The **read guard** (Claude Code) makes the read rule stick: a `PreToolUse` hook denies whole-file `Read`s and plain `cat`/`less`/large `head`/`tail` of files over the threshold in the main session, with a message pointing at `ladder-read-fast` or a ranged read. Quoted paths, `~`, `$HOME` and `VAR=value` prefixes are understood; subagents, ranged reads (including `bat -r`), pipes, other substitutions, images and PDFs pass. `MODEL_LADDER_GUARD=off` disables it for a session.
 
 ## Background: the Spotify Portal post
 

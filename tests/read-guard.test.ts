@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vite-plus/test";
 // @ts-expect-error plain .mjs asset without type declarations
-import { bashTargets, decide } from "../assets/read-guard.mjs";
+import { bashTargets, decide, words } from "../assets/read-guard.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "model-ladder-guard-"));
 const big = join(dir, "big.ts");
@@ -59,6 +59,24 @@ describe("Bash", () => {
     expect(bash("head -n 500 big.ts")).toBeDefined();
     expect(bash("tail -n +1 big.ts")).toBeDefined();
     expect(bashTargets("head -400 a b", 350)).toEqual(["a", "b"]);
+  });
+});
+
+describe("Bash parsing", () => {
+  test("sees through quotes, ~, $HOME and leading env assignments", () => {
+    const env = { HOME: dir };
+    expect(bashTargets('cat "big.ts"', 350, env)).toEqual(["big.ts"]);
+    expect(bashTargets("cat ~/big.ts", 350, env)).toEqual([`${dir}/big.ts`]);
+    expect(bashTargets("cat $HOME/big.ts", 350, env)).toEqual([`${dir}/big.ts`]);
+    expect(bashTargets("LC_ALL=C cat big.ts", 350, env)).toEqual(["big.ts"]);
+    expect(words("cat 'a b' c\\ d", env)).toEqual(["cat", "a b", "c d"]);
+  });
+  test("lets ranged bat, other variables and substitutions through", () => {
+    expect(bashTargets("bat -r 1:10 big.ts", 350)).toEqual([]);
+    expect(bashTargets("bat --line-range=1:10 big.ts", 350)).toEqual([]);
+    expect(bashTargets("cat $FILE", 350)).toEqual([]);
+    expect(bashTargets("cat $(ls)", 350)).toEqual([]);
+    expect(bashTargets("cat 'unterminated", 350)).toEqual([]);
   });
 });
 

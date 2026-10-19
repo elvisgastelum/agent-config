@@ -201,6 +201,7 @@ async function installFlow(): Promise<void> {
     return;
   }
   spin.stop("Applied");
+  for (const note of result.notes) p.log.warn(note);
   p.log.info(
     "Restart running agent sessions to pick up the new agents. Run `model-ladder status` any time; `model-ladder uninstall` undoes everything.",
   );
