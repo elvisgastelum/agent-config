@@ -21,6 +21,15 @@ function run(...args: string[]) {
   return { code: res.status, stdout: res.stdout, stderr: res.stderr };
 }
 
+test("i is the same command as install, including install <item>", () => {
+  const plan = run("i", "--runtime", "codex", "--dry-run", "--json");
+  expect(plan.code).toBe(0);
+  expect(plan.stdout).toBe(run("install", "--runtime", "codex", "--dry-run", "--json").stdout);
+  const item = run("i", "kaneo", "--runtime", "claude", "--url", "https://k.example.com", "--yes");
+  expect(item.code).toBe(0);
+  expect(existsSync(join(home, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);
+});
+
 test("install, status and uninstall round-trip with --json", () => {
   const installed = run(
     "install",

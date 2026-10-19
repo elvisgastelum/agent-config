@@ -81,6 +81,12 @@ test("update is the same command as self-update", () => {
   expect(update.stdout).toBe(cli(installedCli, "self-update", "--dry-run", "--json").stdout);
 });
 
+test("u is the same command as self-update", () => {
+  const update = cli(installedCli, "u", "--dry-run", "--json");
+  expect(update.code).toBe(0);
+  expect(update.stdout).toBe(cli(installedCli, "self-update", "--dry-run", "--json").stdout);
+});
+
 // A pre-rename install: the same checkout under ~/.local/share/model-ladder.
 function legacyHome(name: string): { home: string; legacy: string } {
   const h = join(root, name);

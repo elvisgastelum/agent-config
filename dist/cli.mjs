@@ -5839,6 +5839,11 @@ function delegate(req, tiers, hooks = {}) {
 }
 //#endregion
 //#region src/cli.ts
+/** One-letter spellings of the most used commands: `agi i`, `agi u`. */
+const SHORT_COMMANDS = {
+	i: "install",
+	u: "self-update"
+};
 const HELP = `agent-config ${VERSION}
 Configure Claude Code, OpenCode, Codex and Pi. Model ladder: route reads and
 edits to the cheapest capable model (fast → balanced → deep).
@@ -5846,7 +5851,7 @@ Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.
 
 Usage:
   agent-config                     open the TUI (in a terminal)
-  agent-config install [flags]     apply the saved (or flagged) configuration
+  agent-config install [flags]     apply the saved (or flagged) configuration (\`agi i\` for short)
   agent-config install <item>      add a catalog item, e.g. \`agi install kaneo\` (--project <dir>
                                    for one repository instead of your user config)
   agent-config catalog             list catalog items and where they are installed
@@ -5856,7 +5861,7 @@ Usage:
   agent-config doctor              check runtimes and prerequisites
   agent-config config              print the saved configuration and its path
   agent-config self-update         update agent-config itself (--dry-run only checks);
-                                   \`agent-config update\` is the same command
+                                   \`agent-config update\` and \`agi u\` are the same command
   agent-config delegate <read|edit> [--tier t] [--runtime r] "<task>"
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
@@ -6136,7 +6141,7 @@ async function main(argv) {
 	const json = values.json === true;
 	if (values.version) return out(json, { version: VERSION }, VERSION), 0;
 	if (values.help) return out(false, null, HELP), 0;
-	const command = positionals[0] ?? "";
+	const command = SHORT_COMMANDS[positionals[0] ?? ""] ?? positionals[0] ?? "";
 	const migration = migrateLegacyLayout();
 	ensureAgiAlias();
 	for (const dir of migration.moved) process.stderr.write(`agent-config: moved ${dir} to its agent-config location (renamed from model-ladder)\n`);
