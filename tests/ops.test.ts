@@ -3,7 +3,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { buildPlan } from "../src/commands.ts";
 import { defaultConfig, type Config } from "../src/config.ts";
-import { applyPlan, BLOCK_BEGIN, uninstall } from "../src/ops.ts";
+import {
+  applyPlan,
+  BLOCK_BEGIN,
+  loadManifest,
+  planRemoval,
+  uninstall,
+  type ManifestRecord,
+  type PlannedOp,
+} from "../src/ops.ts";
 import type { Runtime } from "../src/tiers.ts";
 import { put, read, sandbox } from "./helpers.ts";
 
@@ -225,6 +233,21 @@ describe("precise edits", () => {
     const backup = note?.split("saved to ")[1] ?? "";
     expect(read(backup)).toBe("my tweaks\n");
   });
+});
+
+test("a removal that fails is reported and the rest of the plan still applies", () => {
+  install(config(["claude"]));
+  const settings = join(box.home, ".claude/settings.json");
+  const hook = loadManifest().records.find((r) => r.kind === "json-hook");
+  expect(hook).toBeDefined();
+  const agent = join(box.home, ".claude/agents/ladder-read-fast.md");
+  put(agent, "replaced\n");
+  const op = buildPlan(config(["claude"])).find((x) => x.op.path === agent);
+  put(settings, "{ not json");
+  const result = applyPlan([planRemoval(hook as ManifestRecord), op as PlannedOp]);
+  expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]?.error).toContain("not valid JSON");
+  expect(read(agent)).toContain("ladder-read-fast");
 });
 
 describe("gentle ai review models", () => {

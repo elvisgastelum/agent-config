@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
@@ -115,4 +115,43 @@ test("uninstall straight from the pre-rename layout strips the old block", () =>
   expect(run("uninstall", "--yes").code).toBe(0);
   expect(read(p(".claude/CLAUDE.md"))).toBe(original.memory);
   expect(JSON.parse(read(p(".claude/settings.json")))).toEqual(JSON.parse(original.settings));
+});
+
+test("merges the old records into a new state folder that already exists", () => {
+  const original = legacyInstall();
+  // A fresh agent-config state next to the old one.
+  put(p(".local/state/agent-config/manifest.json"), `{ "version": 1, "records": [] }\n`);
+  const res = run("status", "--json");
+  expect(res.stderr).toContain("renamed from model-ladder");
+  expect(existsSync(p(".local/state/model-ladder"))).toBe(false);
+  expect(JSON.parse(res.stdout).entries.length).toBeGreaterThan(0);
+  expect(run("uninstall", "--yes").code).toBe(0);
+  expect(read(p(".claude/CLAUDE.md"))).toBe(original.memory);
+  expect(read(p(".claude/skills/model-ladder/SKILL.md"))).toBe(original.skill);
+});
+
+test("a migration that cannot run warns and leaves commands working", () => {
+  legacyInstall();
+  const stateRoot = p(".local/state");
+  chmodSync(stateRoot, 0o500);
+  try {
+    const res = run("status", "--json");
+    expect(res.code).toBe(0);
+    expect(res.stderr).toContain("warning: could not move");
+    expect(existsSync(p(".local/state/model-ladder/manifest.json"))).toBe(true);
+  } finally {
+    chmodSync(stateRoot, 0o755);
+  }
+});
+
+test("an edited old item is left in place once and not offered again", () => {
+  legacyInstall();
+  put(p(".claude/hooks/model-ladder/read-guard.mjs"), "// my tweaks\n");
+  const first = JSON.parse(run("install", "--runtime", "claude", "--yes", "--json").stdout);
+  expect(first.notes.join("\n")).toContain("left as you changed it and is no longer managed");
+  expect(read(p(".claude/hooks/model-ladder/read-guard.mjs"))).toBe("// my tweaks\n");
+  const again = JSON.parse(run("install", "--runtime", "claude", "--dry-run", "--json").stdout);
+  expect(
+    again.plan.filter((x: { action: string }) => x.action !== "unchanged" && x.action !== "skip"),
+  ).toEqual([]);
 });

@@ -2646,6 +2646,99 @@ const RUNTIME_BIN = {
 	pi: "pi"
 };
 //#endregion
+//#region src/migrate.ts
+function key(r) {
+	return [
+		r.kind,
+		r.path,
+		r.pointer?.join("/") ?? r.key ?? r.command ?? ""
+	].join("\0");
+}
+function readRecords(manifest) {
+	if (!existsSync(manifest)) return void 0;
+	const data = JSON.parse(readFileSync(manifest, "utf8"));
+	return Array.isArray(data.records) ? data.records : [];
+}
+function writeRecords(manifest, records) {
+	mkdirSync(dirname(manifest), { recursive: true });
+	writeFileSync(manifest, `${JSON.stringify({
+		version: 1,
+		records
+	}, null, 2)}\n`);
+}
+function removeIfEmpty(dir) {
+	try {
+		if (readdirSync(dir).length === 0) rmdirSync(dir);
+	} catch {}
+}
+/** Old backup paths point into the old state folder; map them to where the backups are now. */
+function resolveBackup(path) {
+	if (existsSync(path)) return path;
+	const legacy = legacyDirs().state;
+	if (!path.startsWith(`${legacy}/`)) return path;
+	return statePaths().dir + path.slice(legacy.length);
+}
+/** Moves the old state folder, or merges it into an existing new one. */
+function migrateState(moved) {
+	const legacy = legacyDirs().state;
+	const state = statePaths();
+	if (!existsSync(legacy)) return;
+	if (!existsSync(state.dir)) {
+		mkdirSync(dirname(state.dir), { recursive: true });
+		renameSync(legacy, state.dir);
+		moved.push(legacy);
+		const records = readRecords(state.manifest);
+		if (records) writeRecords(state.manifest, records.map((r) => ({
+			...r,
+			backup: r.backup && resolveBackup(r.backup)
+		})));
+		return;
+	}
+	const legacyManifest = join(legacy, "manifest.json");
+	const oldRecords = readRecords(legacyManifest) ?? [];
+	const legacyBackups = join(legacy, "backups");
+	if (existsSync(legacyBackups)) for (const stamp of readdirSync(legacyBackups)) {
+		const to = join(state.backups, stamp);
+		if (existsSync(to)) continue;
+		mkdirSync(state.backups, { recursive: true });
+		renameSync(join(legacyBackups, stamp), to);
+	}
+	const current = readRecords(state.manifest) ?? [];
+	const known = new Set(current.map(key));
+	const merged = [...current, ...oldRecords.filter((r) => !known.has(key(r))).map((r) => ({
+		...r,
+		backup: r.backup && resolveBackup(r.backup)
+	}))];
+	writeRecords(state.manifest, merged);
+	rmSync(legacyManifest, { force: true });
+	removeIfEmpty(legacyBackups);
+	removeIfEmpty(legacy);
+	moved.push(legacy);
+}
+function migrateLegacyLayout() {
+	const result = {
+		moved: [],
+		warnings: []
+	};
+	const legacy = legacyDirs();
+	const config = dirname(configPath());
+	try {
+		if (existsSync(legacy.config) && !existsSync(config)) {
+			mkdirSync(dirname(config), { recursive: true });
+			renameSync(legacy.config, config);
+			result.moved.push(legacy.config);
+		}
+	} catch (error) {
+		result.warnings.push(`could not move ${legacy.config}: ${error.message}`);
+	}
+	try {
+		migrateState(result.moved);
+	} catch (error) {
+		result.warnings.push(`could not move ${legacy.state}: ${error.message}`);
+	}
+	return result;
+}
+//#endregion
 //#region src/ops.ts
 const COMPONENTS = [
 	"agents",
@@ -3183,13 +3276,19 @@ function applyPlan(plan) {
 	};
 	for (const planned of plan) {
 		if (planned.action === "remove" && planned.record) {
-			const res = undoRecord(planned.record);
-			if (res.outcome === "kept-modified") result.notes.push(`${planned.record.path} was kept: ${res.note}`);
-			else {
-				byKey.delete(recordKey(planned.record));
-				pruneCreatedDirs([planned.record]);
+			const record = planned.record;
+			try {
+				const res = undoRecord(record);
+				byKey.delete(recordKey(record));
+				if (res.outcome === "kept-modified") result.notes.push(`${record.path} was left as you changed it and is no longer managed`);
+				else pruneCreatedDirs([record]);
+				result.applied.push(planned);
+			} catch (error) {
+				result.errors.push({
+					op: planned.op,
+					error: error instanceof Error ? error.message : String(error)
+				});
 			}
-			result.applied.push(planned);
 			saveManifest({
 				version: 1,
 				records: [...byKey.values()]
@@ -3238,18 +3337,19 @@ function undoRecord(r, force = false) {
 		outcome: "already-gone"
 	};
 	switch (r.kind) {
-		case "file":
+		case "file": {
 			if (sha256(current) !== r.sha && !force) return {
 				record: r,
 				outcome: "kept-modified",
 				note: "changed since install; re-run with --force to remove"
 			};
-			if (r.backup && existsSync(r.backup)) {
-				writeAtomic(r.path, readFileSync(r.backup, "utf8"));
+			const backup = r.backup && resolveBackup(r.backup);
+			if (backup && existsSync(backup)) {
+				writeAtomic(r.path, readFileSync(backup, "utf8"));
 				return {
 					record: r,
 					outcome: "restored",
-					note: `restored from ${r.backup}`
+					note: `restored from ${backup}`
 				};
 			}
 			rmSync(r.path, { force: true });
@@ -3257,6 +3357,7 @@ function undoRecord(r, force = false) {
 				record: r,
 				outcome: "removed"
 			};
+		}
 		case "block": {
 			let next = stripBlock(current);
 			if (next === current) return {
@@ -4232,30 +4333,6 @@ function saveConfig(config) {
 	writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
 }
 //#endregion
-//#region src/migrate.ts
-function move(from, to) {
-	if (!existsSync(from) || existsSync(to)) return false;
-	mkdirSync(dirname(to), { recursive: true });
-	renameSync(from, to);
-	return true;
-}
-/** Returns what was moved, for one line of output; empty when there was nothing to do. */
-function migrateLegacyLayout() {
-	const legacy = legacyDirs();
-	const state = statePaths();
-	const moved = [];
-	if (move(legacy.config, dirname(configPath()))) moved.push(legacy.config);
-	if (move(legacy.state, state.dir)) {
-		moved.push(legacy.state);
-		try {
-			const manifest = JSON.parse(readFileSync(state.manifest, "utf8"));
-			for (const r of manifest.records ?? []) if (r.backup?.startsWith(`${legacy.state}/`)) r.backup = state.dir + r.backup.slice(legacy.state.length);
-			writeFileSync(state.manifest, `${JSON.stringify(manifest, null, 2)}\n`);
-		} catch {}
-	}
-	return moved;
-}
-//#endregion
 //#region src/tui.ts
 var Cancelled = class extends Error {};
 function ask(value) {
@@ -5001,7 +5078,9 @@ async function main(argv) {
 	if (values.version) return out(json, { version: VERSION }, VERSION), 0;
 	if (values.help) return out(false, null, HELP), 0;
 	const command = positionals[0] ?? "";
-	for (const dir of migrateLegacyLayout()) process.stderr.write(`agent-config: moved ${dir} to its agent-config location (renamed from model-ladder)\n`);
+	const migration = migrateLegacyLayout();
+	for (const dir of migration.moved) process.stderr.write(`agent-config: moved ${dir} to its agent-config location (renamed from model-ladder)\n`);
+	for (const warning of migration.warnings) process.stderr.write(`agent-config: warning: ${warning}; continuing with the current layout\n`);
 	const given = Object.keys(values).filter((k) => values[k] !== void 0);
 	const misplaced = command === "delegate" ? given.find((k) => NOT_FOR_DELEGATE.includes(k)) : given.find((k) => DELEGATE_ONLY.includes(k));
 	if (misplaced) throw new UsageError(command === "delegate" ? `--${misplaced} does not apply to delegate` : `--${misplaced} only applies to delegate`);
