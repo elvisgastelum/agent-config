@@ -1,0 +1,137 @@
+# model-ladder
+
+Route reads and edits to the cheapest model that can do them, so your main agent session keeps its context (and your token budget) for reasoning.
+
+```
+reads  ─┐                          ┌─ fast      Haiku 5.5   first try
+        ├─ ladder agents ──climb───┼─ balanced  Sonnet 5.5  after a partial reply or failed check
+edits  ─┘                          └─ deep      Opus 5.5    last resort, then the main session takes over
+```
+
+It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the rungs for **Gentle AI review agents**, and undoes everything with one command.
+
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh | bash
+```
+
+Requires `git` and Node.js 22.12 or newer (the repo pins Node 24.22.0 LTS for development). The installer clones to `~/.local/share/model-ladder`, builds it, adds `model-ladder` to `~/.local/bin` and opens the TUI. Re-run the one-liner to update; a failed update rolls back to the previous version.
+
+Non-interactive (scripts and agents):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh \
+  | bash -s -- install --runtime claude --runtime opencode --yes --json
+```
+
+## Uninstall
+
+```sh
+model-ladder uninstall                 # undo the agent configuration, keep the tool
+curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh | bash -s -- --uninstall
+                                       # undo it and remove the tool, its command and saved choices
+```
+
+Uninstall restores what model-ladder replaced: backed-up files come back, JSON keys and frontmatter return to their previous values, the managed instruction block is cut out of `CLAUDE.md`/`AGENTS.md`. Anything you (or `gentle-ai sync`) changed after installing is left alone and reported; `--force` removes edited ladder files anyway.
+
+## The TUI
+
+`model-ladder` in a terminal:
+
+1. **Install / Update**: pick agents (detected ones are preselected), pick parts, pick models per rung (recommended ladder, keep current, or customize model and effort per rung), pick the rung for each Gentle AI review lens, set the read-guard threshold.
+2. A colored plan per agent: `create`, `update`, `unchanged`, `skip`, with the target path.
+3. Confirm, apply, done. Choices are saved to `~/.config/model-ladder/config.json`.
+
+Also: **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (runtimes, Codex `multi_agent`, Pi subagent support, drift), **Uninstall**, **Reset saved choices**.
+
+## Commands
+
+| Command                  | What it does                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| `model-ladder`           | Opens the TUI.                                                                  |
+| `model-ladder install`   | Applies the saved choices (or detected runtimes on first run). Asks to confirm. |
+| `model-ladder status`    | Lists what model-ladder installed and whether it still matches.                 |
+| `model-ladder uninstall` | Undoes it. `--runtime` limits it to some agents.                                |
+| `model-ladder doctor`    | Checks runtimes and prerequisites.                                              |
+| `model-ladder config`    | Prints the saved choices and their path.                                        |
+
+| Flag                                            | Meaning                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------ |
+| `--runtime <id>`                                | `claude`, `opencode`, `codex`, `pi` (repeatable).                              |
+| `--component <id>`                              | `agents`, `skill`, `instructions`, `read-guard`, `review-models` (repeatable). |
+| `--model <runtime>:<tier>=<id>`                 | e.g. `--model claude:fast=claude-haiku-5-5`. Empty id means "session model".   |
+| `--effort <runtime>:<tier>=<low\|medium\|high>` | Reasoning effort (Codex, Pi).                                                  |
+| `--review <lens>=<tier>`                        | e.g. `--review review-risk=deep`.                                              |
+| `--min-lines <n>`                               | Read-guard threshold (default 350).                                            |
+| `--yes`, `--dry-run`, `--force`, `--json`       | Skip confirmation; preview; remove edited files on uninstall; machine output.  |
+
+Exit codes: `0` ok, `1` a step failed, `2` usage error or refusal (for example `install` without `--yes` outside a terminal), `130` cancelled.
+
+## What gets installed
+
+| Part                                                | Claude Code                                       | OpenCode                                  | Codex                           | Pi                                                                 |
+| --------------------------------------------------- | ------------------------------------------------- | ----------------------------------------- | ------------------------------- | ------------------------------------------------------------------ |
+| `agents`: `ladder-{read,edit}-{fast,balanced,deep}` | `~/.claude/agents/*.md`                           | `~/.config/opencode/agents/*.md`          | `~/.codex/agents/*.toml`        | `~/.pi/agent/agents/*.md`                                          |
+| `skill`: routing rules                              | `~/.claude/skills/model-ladder/`                  | `~/.config/opencode/skills/model-ladder/` | `~/.codex/skills/model-ladder/` | `~/.pi/agent/skills/model-ladder/`                                 |
+| `instructions`: always-on block                     | `~/.claude/CLAUDE.md`                             | `~/.config/opencode/AGENTS.md`            | `~/.codex/AGENTS.md`            | `~/.pi/agent/AGENTS.md`                                            |
+| `read-guard`: hook                                  | `~/.claude/hooks/model-ladder/` + `settings.json` | —                                         | —                               | —                                                                  |
+| `review-models`                                     | `~/.claude/agents/review-*.md`                    | `opencode.jsonc` `agent.review-*.model`   | —                               | agent frontmatter, `~/.pi/gentle-ai/models.json`, `subagents.json` |
+
+Read agents get read-only tools (Claude `Read, Grep, Glob`; OpenCode `edit: deny, bash: deny`; Codex `sandbox_mode = "read-only"`; Pi `read, grep, find, ls`). Edit agents can write and run one verify command, but no agent can spawn further agents.
+
+**Default models**
+
+| Rung     | Claude Code         | OpenCode, Pi                  | Codex                        |
+| -------- | ------------------- | ----------------------------- | ---------------------------- |
+| fast     | `claude-haiku-5-5`  | `anthropic/claude-haiku-5-5`  | session model, low effort    |
+| balanced | `claude-sonnet-5-5` | `anthropic/claude-sonnet-5-5` | session model, medium effort |
+| deep     | `claude-opus-5-5`   | `anthropic/claude-opus-5-5`   | session model, high effort   |
+
+Codex cannot run Claude models, so its ladder climbs by reasoning effort. Set cheaper Codex models per rung in the TUI or with `--model codex:fast=<id>`.
+
+**Gentle AI review lenses** default to: readability on fast; risk, resilience, reliability and the refuter on balanced. Gentle AI owns these files: `gentle-ai sync` may reset the model. `model-ladder status` shows that as `drifted`; `model-ladder install` reapplies it.
+
+## How the routing works
+
+The skill (and the short instruction block that points to it) tells the main session:
+
+- **Reads** of many files, files over ~350 lines it will not edit, logs and test output go to `ladder-read-fast`, which answers in terse `path:line` bullets. Flow tracing across modules starts at balanced.
+- **Edits** that can be specified in a few lines plus a reference file go to `ladder-edit-fast` (tests, boilerplate, config, mechanical changes) or `ladder-edit-balanced` (new logic in one module). The agent runs one verify command and replies with a change list, never the code; the main session reads the diff and verifies.
+- **Climbing**: every agent replies `STATUS: done | partial | escalate`. One attempt per rung; climb on `partial`/`escalate` or a failed check; after deep fails the main session does it itself.
+- **Never delegated**: line-exact reads before an edit (read the range with offset/limit), debugging, design, and changes to auth, data or concurrency.
+
+The **read guard** (Claude Code) makes the read rule stick: a `PreToolUse` hook denies whole-file `Read`s and plain `cat`/`less`/large `head`/`tail` of files over the threshold in the main session, with a message pointing at `ladder-read-fast` or a ranged read. Subagents, ranged reads, pipes, images and PDFs pass. `MODEL_LADDER_GUARD=off` disables it for a session.
+
+## Background: the Spotify Portal post
+
+This project applies the strategy from [Portal by Spotify cut my Claude Code token usage by 90%](https://portal.spotify.com/blog/portal-by-spotify-cut-my-claude-code-token-usage-by-90):
+
+- **The idea**: most agent work is I/O, not reasoning. Send it to a cheap worker model and keep the frontier model for thinking. They measured about 90% fewer tokens in Claude's context for multi-file questions on a Java monorepo.
+- **Their mechanism**: two hosted Portal "modes" (`bulk-reader`, `code-writer`) on Gemini 2.5 Flash, called by scripts; skills telling Claude when to call them; and hooks (the `shunt` plugin) blocking full reads over 350 lines, so the routing holds even when Claude ignores the skill.
+- **Their limits**: summaries lacked reliable line numbers, so edits still need a direct read of the target range; the worker missed a subtle thread-safety bug, so reasoning stays on the frontier model; each delegation is a 10–30 s round trip, so small reads stay inline; generated code needs a reference file to match conventions.
+
+What model-ladder changes:
+
+| Spotify Portal                                            | model-ladder                                                                                     |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| One hosted cheap model (Gemini Flash) behind a Portal API | Native subagents of each runtime, no extra service or credentials                                |
+| One rung                                                  | Three rungs per role with explicit escalation, so hard work fails up instead of failing silently |
+| Reads and boilerplate writes                              | Reads and edits; edit agents verify their own change and report a change list, not code          |
+| Claude Code only                                          | Claude Code, OpenCode, Codex, Pi                                                                 |
+| `shunt` hooks                                             | `read-guard` hook with the same threshold idea, subagent-aware                                   |
+| —                                                         | Gentle AI review lenses on matching rungs                                                        |
+
+Their limits carry over: delegation costs a fresh agent context and some latency, so tiny reads are cheaper inline, and the main session must still read exact ranges before editing.
+
+## Development
+
+```sh
+vp install      # dependencies (Node 24.22.0 is pinned in package.json devEngines and .node-version)
+vp check        # format, lint, type check
+vp test         # tests
+vp pack         # build dist/cli.mjs
+node src/cli.ts --help
+```
+
+Tests run against a temporary `HOME`; nothing touches your real agent configuration.

@@ -1,0 +1,56 @@
+{
+  "name": "model-ladder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Route reads and edits to the cheapest capable model (Haiku → Sonnet → Opus) for Claude Code, OpenCode, Codex and Pi, so the main session's context stays small.",
+  "homepage": "https://github.com/elvisgastelum/model-ladder#readme",
+  "bugs": {
+    "url": "https://github.com/elvisgastelum/model-ladder/issues"
+  },
+  "license": "MIT",
+  "author": "Elvis Gastelum",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/elvisgastelum/model-ladder.git"
+  },
+  "bin": {
+    "model-ladder": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "assets"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "check": "vp check",
+    "model-ladder": "node dist/cli.mjs"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1",
+    "jsonc-parser": "^3.3.1",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2",
+    "vite-plus": "catalog:"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.14.0",
+      "onFail": "download"
+    },
+    "runtime": {
+      "name": "node",
+      "version": "24.22.0",
+      "onFail": "ignore"
+    }
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
