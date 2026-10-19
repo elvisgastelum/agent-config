@@ -1,0 +1,326 @@
+// Turns the config into the concrete file operations for each runtime.
+
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  agentBody,
+  agentDescription,
+  instructionsBlock,
+  skillMarkdown,
+  SKILL_NAME,
+  type ModelNames,
+} from "./content.ts";
+import type { Config } from "./config.ts";
+import type { Component, Op } from "./ops.ts";
+import { claudeDir, codexDir, opencodeDir, piDir } from "./paths.ts";
+import {
+  REVIEW_LENSES,
+  ROLES,
+  TIERS,
+  agentName,
+  type Effort,
+  type Role,
+  type Runtime,
+  type Tier,
+  type TierMap,
+} from "./tiers.ts";
+
+/** Which components mean something for each runtime. */
+export const RUNTIME_COMPONENTS: Record<Runtime, Component[]> = {
+  claude: ["agents", "skill", "instructions", "read-guard", "review-models"],
+  opencode: ["agents", "skill", "instructions", "review-models"],
+  codex: ["agents", "skill", "instructions"],
+  pi: ["agents", "skill", "instructions", "review-models"],
+};
+
+export const READ_GUARD_FILE = "read-guard.mjs";
+
+export function readGuardSource(): string {
+  // dist/cli.mjs and src/runtimes.ts both sit one level below the package root.
+  const here = dirname(fileURLToPath(import.meta.url));
+  return readFileSync(join(here, "..", "assets", READ_GUARD_FILE), "utf8");
+}
+
+function modelNames(runtime: Runtime, tiers: TierMap): ModelNames {
+  const name = (tier: Tier): string => {
+    const t = tiers[tier];
+    if (runtime === "codex" || !t.model) return `${t.model || "session model"}, ${t.effort} effort`;
+    return t.model;
+  };
+  return { fast: name("fast"), balanced: name("balanced"), deep: name("deep") };
+}
+
+function yamlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function tomlMultiline(text: string): string {
+  return `"""\n${text.replace(/\\/g, "\\\\").replace(/"""/g, '""\\"')}"""`;
+}
+
+const PI_THINKING: Record<Effort, string> = { low: "low", medium: "medium", high: "high" };
+
+function agentFile(
+  runtime: Runtime,
+  role: Role,
+  tier: Tier,
+  tiers: TierMap,
+): { path: string; content: string } {
+  const name = agentName(role, tier);
+  const { model, effort } = tiers[tier];
+  const description = agentDescription(role, tier, model);
+  const body = agentBody(role, tier);
+  switch (runtime) {
+    case "claude": {
+      const tools = role === "read" ? "Read, Grep, Glob" : "Read, Edit, Write, Grep, Glob, Bash";
+      const lines = ["---", `name: ${name}`, `description: ${yamlString(description)}`];
+      if (model) lines.push(`model: ${model}`);
+      lines.push(`tools: ${tools}`, "---", "", body);
+      return { path: join(claudeDir(), "agents", `${name}.md`), content: lines.join("\n") };
+    }
+    case "opencode": {
+      const lines = ["---", `description: ${yamlString(description)}`, "mode: subagent"];
+      if (model) lines.push(`model: ${model}`);
+      lines.push("permission:");
+      if (role === "read") lines.push("  edit: deny", "  bash: deny");
+      lines.push("  task: deny", "---", "", body);
+      return { path: join(opencodeDir(), "agents", `${name}.md`), content: lines.join("\n") };
+    }
+    case "codex": {
+      const lines = [
+        `name = ${JSON.stringify(name)}`,
+        `description = ${JSON.stringify(description)}`,
+      ];
+      if (model) lines.push(`model = ${JSON.stringify(model)}`);
+      lines.push(
+        `model_reasoning_effort = ${JSON.stringify(effort)}`,
+        `sandbox_mode = ${JSON.stringify(role === "read" ? "read-only" : "workspace-write")}`,
+        `developer_instructions = ${tomlMultiline(body)}`,
+        "",
+      );
+      return { path: join(codexDir(), "agents", `${name}.toml`), content: lines.join("\n") };
+    }
+    case "pi": {
+      const tools =
+        role === "read"
+          ? ["read", "grep", "find", "ls"]
+          : ["read", "grep", "find", "ls", "edit", "write", "bash"];
+      const lines = ["---", `name: ${name}`, `description: ${yamlString(description)}`];
+      if (model) lines.push(`model: ${model}`);
+      lines.push(
+        `thinking: ${PI_THINKING[effort]}`,
+        "tools:",
+        ...tools.map((t) => `  - ${t}`),
+        "---",
+        "",
+        body,
+      );
+      return { path: join(piDir(), "agents", `${name}.md`), content: lines.join("\n") };
+    }
+  }
+}
+
+function skillPath(runtime: Runtime): string {
+  const root = { claude: claudeDir(), opencode: opencodeDir(), codex: codexDir(), pi: piDir() }[
+    runtime
+  ];
+  return join(root, "skills", SKILL_NAME, "SKILL.md");
+}
+
+function instructionsPath(runtime: Runtime): string {
+  switch (runtime) {
+    case "claude":
+      return join(claudeDir(), "CLAUDE.md");
+    case "opencode":
+      return join(opencodeDir(), "AGENTS.md");
+    case "codex":
+      return join(codexDir(), "AGENTS.md");
+    case "pi":
+      return join(piDir(), "AGENTS.md");
+  }
+}
+
+function opencodeConfigPath(): string {
+  const jsonc = join(opencodeDir(), "opencode.jsonc");
+  return existsSync(jsonc) ? jsonc : join(opencodeDir(), "opencode.json");
+}
+
+function reviewOps(runtime: Runtime, config: Config): Op[] {
+  const tiers = config.tiers[runtime];
+  const ops: Op[] = [];
+  const base = { runtime, component: "review-models" as const };
+  for (const lens of REVIEW_LENSES) {
+    const { model, effort } = tiers[config.reviewTiers[lens]];
+    const label = `${lens} → ${config.reviewTiers[lens]} (${model || "session model"})`;
+    switch (runtime) {
+      case "claude":
+        if (model) {
+          ops.push({
+            ...base,
+            kind: "frontmatter",
+            path: join(claudeDir(), "agents", `${lens}.md`),
+            key: "model",
+            value: model,
+            label,
+          });
+        }
+        break;
+      case "opencode":
+        if (model) {
+          ops.push({
+            ...base,
+            kind: "json-set",
+            path: opencodeConfigPath(),
+            pointer: ["agent", lens, "model"],
+            value: model,
+            requireParent: true,
+            label,
+          });
+        }
+        break;
+      case "pi": {
+        const agentPath = join(piDir(), "agents", `${lens}.md`);
+        const modelsPath = join(dirname(piDir()), "gentle-ai", "models.json");
+        const profilesPath = join(piDir(), "subagents.json");
+        if (model) {
+          ops.push(
+            { ...base, kind: "frontmatter", path: agentPath, key: "model", value: model, label },
+            {
+              ...base,
+              kind: "json-set",
+              path: modelsPath,
+              pointer: [lens, "model"],
+              value: model,
+              requireParent: true,
+              label: `${label} [models.json]`,
+            },
+            {
+              ...base,
+              kind: "json-set",
+              path: profilesPath,
+              pointer: ["model_profiles", lens, "model"],
+              value: model,
+              requireParent: true,
+              label: `${label} [subagents.json]`,
+            },
+          );
+        }
+        ops.push(
+          {
+            ...base,
+            kind: "frontmatter",
+            path: agentPath,
+            key: "thinking",
+            value: PI_THINKING[effort],
+            label: `${lens} thinking → ${effort}`,
+          },
+          {
+            ...base,
+            kind: "json-set",
+            path: modelsPath,
+            pointer: [lens, "thinking"],
+            value: PI_THINKING[effort],
+            requireParent: true,
+            label: `${lens} thinking → ${effort} [models.json]`,
+          },
+          {
+            ...base,
+            kind: "json-set",
+            path: profilesPath,
+            pointer: ["model_profiles", lens, "effort"],
+            value: effort,
+            requireParent: true,
+            label: `${lens} effort → ${effort} [subagents.json]`,
+          },
+        );
+        break;
+      }
+      case "codex":
+        break;
+    }
+  }
+  return ops;
+}
+
+/** All operations for one runtime and the selected components, in apply order. */
+export function runtimeOps(runtime: Runtime, config: Config): Op[] {
+  const wanted = config.components.filter((c) => RUNTIME_COMPONENTS[runtime].includes(c));
+  const tiers = config.tiers[runtime];
+  const ops: Op[] = [];
+  if (wanted.includes("agents")) {
+    for (const role of ROLES) {
+      for (const tier of TIERS) {
+        const { path, content } = agentFile(runtime, role, tier, tiers);
+        ops.push({
+          runtime,
+          component: "agents",
+          kind: "file",
+          path,
+          content,
+          label: `${agentName(role, tier)} (${tiers[tier].model || `session model, ${tiers[tier].effort}`})`,
+        });
+      }
+    }
+  }
+  if (wanted.includes("skill")) {
+    ops.push({
+      runtime,
+      component: "skill",
+      kind: "file",
+      path: skillPath(runtime),
+      content: skillMarkdown(runtime, modelNames(runtime, tiers), config.minLines),
+      label: `skill ${SKILL_NAME}`,
+    });
+  }
+  if (wanted.includes("instructions")) {
+    ops.push({
+      runtime,
+      component: "instructions",
+      kind: "block",
+      path: instructionsPath(runtime),
+      content: instructionsBlock(runtime, config.minLines),
+      label: "instructions block",
+    });
+  }
+  if (wanted.includes("read-guard") && runtime === "claude") {
+    const script = join(claudeDir(), "hooks", "model-ladder", READ_GUARD_FILE);
+    const settings = join(claudeDir(), "settings.json");
+    ops.push(
+      {
+        runtime,
+        component: "read-guard",
+        kind: "file",
+        path: script,
+        content: readGuardSource(),
+        executable: true,
+        label: "read-guard hook script",
+      },
+      {
+        runtime,
+        component: "read-guard",
+        kind: "json-hook",
+        path: settings,
+        event: "PreToolUse",
+        matcher: "Read|Bash",
+        command: `node "${script}"`,
+        label: "PreToolUse hook (Read|Bash)",
+      },
+      {
+        runtime,
+        component: "read-guard",
+        kind: "json-set",
+        path: settings,
+        pointer: ["env", "MODEL_LADDER_MIN_LINES"],
+        value: String(config.minLines),
+        label: `env MODEL_LADDER_MIN_LINES=${config.minLines}`,
+      },
+    );
+  }
+  if (wanted.includes("review-models")) ops.push(...reviewOps(runtime, config));
+  return ops;
+}
+
+export function allOps(config: Config): Op[] {
+  return config.runtimes.flatMap((r) => runtimeOps(r, config));
+}
