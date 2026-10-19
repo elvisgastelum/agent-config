@@ -12,7 +12,7 @@ edits  ─┘                          └─ deep      Opus 5.5    last resort,
 
 It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the rungs for **Gentle AI review agents**, and undoes everything with one command.
 
-Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking. See [Catalog](#catalog).
+Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model. See [Catalog](#catalog).
 
 ## Install
 
@@ -53,19 +53,19 @@ Also: **Re-apply installed items** (writes every saved item again), **Status** (
 
 ## Commands
 
-| Command                                       | What it does                                                                                                                                                                                           |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `agent-config`                                | Opens the TUI.                                                                                                                                                                                         |
-| `agent-config install`                        | Re-applies every saved catalog item; with nothing saved it asks you to add one. Asks to confirm. `agi i` is short for it.                                                                              |
-| `agent-config install <item>`                 | Adds a catalog item, e.g. `agi install model-ladder` or `agi install kaneo`. `--project <dir>` installs kaneo into one repository instead of your user config. See [Catalog](#catalog).                |
-| `agent-config catalog`                        | Lists catalog items and where each one is installed.                                                                                                                                                   |
-| `agent-config status`                         | Lists what agent-config installed and whether it still matches.                                                                                                                                        |
-| `agent-config uninstall`                      | Undoes it. `--runtime` limits it to some agents.                                                                                                                                                       |
-| `agent-config uninstall <item>`               | Removes only that catalog item (`--project <dir>` for its project copy).                                                                                                                               |
-| `agent-config doctor`                         | Checks runtimes and prerequisites.                                                                                                                                                                     |
-| `agent-config config`                         | Prints the saved choices and their path.                                                                                                                                                               |
-| `agent-config self-update`                    | Updates agent-config itself from GitHub (`--dry-run` only checks). Then run `agent-config install` to re-apply your configuration with the new version. `agent-config update` and `agi u` do the same. |
-| `agent-config delegate <read\|edit> "<task>"` | Runs a ladder agent headlessly and prints only its reply. For agents that cannot spawn subagents. See below.                                                                                           |
+| Command                                       | What it does                                                                                                                                                                                                 |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent-config`                                | Opens the TUI.                                                                                                                                                                                               |
+| `agent-config install`                        | Re-applies every saved catalog item; with nothing saved it asks you to add one. Asks to confirm. `agi i` is short for it.                                                                                    |
+| `agent-config install <item>`                 | Adds a catalog item, e.g. `agi install model-ladder` or `agi install kaneo`. `--project <dir>` installs an item (not model-ladder) into one repository instead of your user config. See [Catalog](#catalog). |
+| `agent-config catalog`                        | Lists catalog items and where each one is installed.                                                                                                                                                         |
+| `agent-config status`                         | Lists what agent-config installed and whether it still matches.                                                                                                                                              |
+| `agent-config uninstall`                      | Undoes it. `--runtime` limits it to some agents.                                                                                                                                                             |
+| `agent-config uninstall <item>`               | Removes only that catalog item (`--project <dir>` for its project copy).                                                                                                                                     |
+| `agent-config doctor`                         | Checks runtimes and prerequisites.                                                                                                                                                                           |
+| `agent-config config`                         | Prints the saved choices and their path.                                                                                                                                                                     |
+| `agent-config self-update`                    | Updates agent-config itself from GitHub (`--dry-run` only checks). Then run `agent-config install` to re-apply your configuration with the new version. `agent-config update` and `agi u` do the same.       |
+| `agent-config delegate <read\|edit> "<task>"` | Runs a ladder agent headlessly and prints only its reply. For agents that cannot spawn subagents. See below.                                                                                                 |
 
 | Flag                                            | Meaning                                                                        |
 | ----------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -116,6 +116,7 @@ agi catalog                                     # items and where they are insta
 agi install model-ladder                        # the ladder, for the detected agents
 agi install kaneo --url https://kaneo.example.com   # user scope: every project
 agi install kaneo --project .                   # one repository, committed with it
+agi install commit                              # title-only commits, drafted by a cheap model
 agi uninstall kaneo [--project .]               # remove that copy only
 ```
 
@@ -143,6 +144,24 @@ The ladder agents, routing skill, instructions block, read guard and review mode
 The Claude scribe may call only Kaneo MCP tools, the OpenCode one cannot edit or run shell commands, the Codex one runs read-only, and the Pi one has only `tool_search`, which loads undeclared MCP tools such as Kaneo's (not `codemode`, whose scripts can run `bash`).
 
 A block left by the old standalone installer (`BEGIN kaneo-work-tracking-skill`) is replaced in place. When `config.toml` already defines `[mcp_servers.kaneo]` itself, agent-config leaves it alone.
+
+### commit
+
+Title-only commits, moved here from [claude-commit-skill](https://github.com/elvisgastelum/claude-commit-skill):
+
+- `commit` skill: every commit message is one title line (the repository's convention, else Conventional Commits) with no body, no trailers and no `Co-Authored-By` or `Generated with Claude Code` lines.
+- Cheap models: the skill hands the staged diff to **`commit-writer`**, an agent on your fast rung at low thinking effort, which replies with one `TITLE:` line; the main session commits it. The diff never fills the main session. The writer runs only read-only git commands: the Claude one has Bash, Read, Grep and Glob, the OpenCode one cannot edit, the Codex one runs read-only.
+- An always-on instructions block: no AI attribution in commits, PR titles, PR bodies or PR comments.
+- Claude Code only: a `commit-guard` PreToolUse hook (Node, no dependencies) that denies `git commit` with trailers, heredocs, `-F`, a second `-m` or a multi-line message, and `attribution.commit`, `attribution.pr` set to `""` plus `includeCoAuthoredBy: false` in `settings.json`.
+
+| Part            | User scope (Claude / OpenCode / Codex / Pi)                                | Project scope (`--project <dir>`)                                           |
+| --------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| skill           | `<runtime dir>/skills/commit/`                                             | `.claude/skills/`, `.opencode/skills/`, `.agents/skills/`, `.pi/skills/`    |
+| `commit-writer` | `<runtime dir>/agents/`                                                    | `.claude/agents/`, `.opencode/agents/`, `.codex/agents/`, `.pi/agents/`     |
+| instructions    | `~/.claude/CLAUDE.md`, `AGENTS.md` of each runtime                         | `CLAUDE.md`, `AGENTS.md` (one shared block naming each agent that reads it) |
+| guard, settings | `~/.claude/hooks/agent-config/commit-guard.mjs`, `~/.claude/settings.json` | `.claude/hooks/agent-config/commit-guard.mjs`, `.claude/settings.json`      |
+
+A block left by the old standalone installer (`BEGIN claude-commit-skill`) is replaced in place. Its `~/.claude/hooks/commit-guard.sh` hook entry is left alone; remove it from `settings.json` once the agent-config guard is installed.
 
 ## How the routing works
 

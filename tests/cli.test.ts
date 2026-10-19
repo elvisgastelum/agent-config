@@ -127,6 +127,90 @@ test("install kaneo adds only the catalog item; catalog lists it; uninstall kane
   expect(after.find((i: { id: string }) => i.id === "kaneo").entries).toEqual([]);
 });
 
+test("install commit adds the skill, a cheap commit-writer and the Claude guard; uninstall restores", () => {
+  const memory = join(home, ".claude/CLAUDE.md");
+  const legacy = [
+    "# Mine",
+    "",
+    "<!-- BEGIN claude-commit-skill: managed by install.sh, edits inside this block are overwritten -->",
+    "old rules",
+    "<!-- END claude-commit-skill -->",
+    "",
+  ].join("\n");
+  run("install", "kaneo", "--runtime", "claude", "--url", "https://k.example.com", "--yes");
+  writeFileSync(memory, `${read(memory)}\n${legacy}`);
+  const before = read(memory);
+
+  const rt = ["claude", "opencode", "codex", "pi"].flatMap((r) => ["--runtime", r]);
+  const installed = run("install", "commit", ...rt, "--yes", "--json");
+  expect(installed.code).toBe(0);
+  const plan = JSON.parse(installed.stdout).plan as { item: string }[];
+  expect(plan.every((x) => x.item === "commit@user")).toBe(true);
+
+  const skill = read(join(home, ".claude/skills/commit/SKILL.md"));
+  expect(skill).toContain("name: commit");
+  expect(skill).toContain('`subagent_type: "commit-writer"`');
+  expect(read(join(home, ".claude/agents/commit-writer.md"))).toContain("model: claude-haiku-5-5");
+  expect(read(join(home, ".codex/agents/commit-writer.toml"))).toContain(
+    'model_reasoning_effort = "low"',
+  );
+  const opencode = read(join(home, ".config/opencode/agents/commit-writer.md"));
+  expect(opencode).toContain("model: anthropic/claude-haiku-5-5");
+  expect(opencode).toContain("edit: deny");
+  expect(read(join(home, ".pi/agent/agents/commit-writer.md"))).toContain("thinking: low");
+  expect(read(join(home, ".pi/agent/skills/commit/SKILL.md"))).toContain("commit-writer");
+
+  // The old standalone block is replaced in place; kaneo's block stays.
+  const claudeMd = read(memory);
+  expect(claudeMd).toContain("<!-- BEGIN agent-config:commit:");
+  expect(claudeMd).not.toContain("claude-commit-skill");
+  expect(claudeMd).toContain("## No AI attribution in commits or pull requests");
+  expect(claudeMd).toContain("<!-- BEGIN agent-config:kaneo:");
+  expect(read(join(home, ".codex/AGENTS.md"))).toContain("No AI attribution");
+
+  const guard = join(home, ".claude/hooks/agent-config/commit-guard.mjs");
+  expect(existsSync(guard)).toBe(true);
+  const settings = JSON.parse(read(join(home, ".claude/settings.json")));
+  expect(settings.hooks.PreToolUse).toEqual([
+    { matcher: "Bash", hooks: [{ type: "command", command: `node "${guard}"` }] },
+  ]);
+  expect(settings.attribution).toEqual({ commit: "", pr: "" });
+  expect(settings.includeCoAuthoredBy).toBe(false);
+
+  expect(JSON.parse(run("install", "commit", "--yes", "--json").stdout).applied).toBe(false);
+
+  expect(run("uninstall", "commit", "--yes").code).toBe(0);
+  expect(existsSync(join(home, ".claude/skills/commit/SKILL.md"))).toBe(false);
+  expect(existsSync(join(home, ".codex/agents/commit-writer.toml"))).toBe(false);
+  expect(existsSync(guard)).toBe(false);
+  expect(existsSync(join(home, ".claude/settings.json"))).toBe(false);
+  // Like kaneo's, a migrated legacy block is not put back; the rest of the file is.
+  expect(read(memory)).toBe(
+    before.replace(/<!-- BEGIN claude-commit-skill[^]*$/, "").trimEnd() + "\n",
+  );
+});
+
+test("install commit --project writes the guard into the repository's Claude settings", () => {
+  const repo = mkdtempSync(join(tmpdir(), "agent-config-repo-"));
+  try {
+    const res = run("install", "commit", "--project", repo, "--runtime", "claude", "--yes");
+    expect(res.code).toBe(0);
+    expect(existsSync(join(repo, ".claude/skills/commit/SKILL.md"))).toBe(true);
+    expect(existsSync(join(repo, ".claude/agents/commit-writer.md"))).toBe(true);
+    expect(read(join(repo, "CLAUDE.md"))).toContain("No AI attribution");
+    const settings = JSON.parse(read(join(repo, ".claude/settings.json")));
+    expect(settings.hooks.PreToolUse[0].hooks[0].command).toBe(
+      'node "$CLAUDE_PROJECT_DIR/.claude/hooks/agent-config/commit-guard.mjs"',
+    );
+    expect(existsSync(join(repo, ".claude/hooks/agent-config/commit-guard.mjs"))).toBe(true);
+    expect(existsSync(join(home, ".claude"))).toBe(false);
+    expect(run("uninstall", "commit", "--project", repo, "--yes").code).toBe(0);
+    expect(existsSync(join(repo, ".claude/settings.json"))).toBe(false);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("install model-ladder installs only the ladder; uninstall model-ladder keeps kaneo", () => {
   const kaneo = ["install", "kaneo", "--runtime", "claude", "--url", "https://k.example.com"];
   expect(run(...kaneo, "--yes").code).toBe(0);
@@ -149,7 +233,11 @@ test("install model-ladder installs only the ladder; uninstall model-ladder keep
   );
 
   const listed = JSON.parse(run("catalog", "--json").stdout);
-  expect(listed.items.map((i: { id: string }) => i.id)).toEqual(["model-ladder", "kaneo"]);
+  expect(listed.items.map((i: { id: string }) => i.id)).toEqual([
+    "model-ladder",
+    "kaneo",
+    "commit",
+  ]);
   expect(listed.items[0].entries).toMatchObject([{ scope: "user", runtimes: ["claude"] }]);
   expect(run("catalog").stdout).toContain("install: agent-config install model-ladder\n");
 

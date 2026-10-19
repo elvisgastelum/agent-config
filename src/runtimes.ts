@@ -36,10 +36,15 @@ export const RUNTIME_COMPONENTS: Record<Runtime, Component[]> = {
 
 export const READ_GUARD_FILE = "read-guard.mjs";
 
-export function readGuardSource(): string {
+/** A file shipped in assets/, such as a hook script. */
+export function assetSource(file: string): string {
   // dist/cli.mjs and src/runtimes.ts both sit one level below the package root.
   const here = dirname(fileURLToPath(import.meta.url));
-  return readFileSync(join(here, "..", "assets", READ_GUARD_FILE), "utf8");
+  return readFileSync(join(here, "..", "assets", file), "utf8");
+}
+
+export function readGuardSource(): string {
+  return assetSource(READ_GUARD_FILE);
 }
 
 function modelNames(runtime: Runtime, tiers: TierMap): ModelNames {

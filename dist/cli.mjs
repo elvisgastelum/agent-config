@@ -2675,6 +2675,106 @@ function isReviewLens(value) {
 	return REVIEW_LENSES.includes(value);
 }
 //#endregion
+//#region src/commit.ts
+const COMMIT_SKILL = "commit";
+const COMMIT_WRITER = "commit-writer";
+const COMMIT_GUARD_FILE = "commit-guard.mjs";
+const CALL$1 = {
+	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
+	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
+	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
+	pi: (agent) => `the subagent tool with the \`${agent}\` agent`
+};
+function commitSkillMarkdown(runtime, writerModel) {
+	return `---
+name: ${COMMIT_SKILL}
+description: Title-only git commit policy. ALWAYS use this before running \`git commit\` (or any command that creates a commit, amends one, or writes a commit message), whether the user asked to commit or a workflow commits on its own. Enforces a single-line commit title with no body, no trailers, and no Co-Authored-By or "Generated with Claude Code" attribution, drafted by a cheap agent.
+---
+
+# Commit: title only
+
+Every commit message is exactly one line: the title. Nothing else.
+
+## Rules
+
+1. **One line.** The message is a single title line. No body, no blank line, no bullet list.
+2. **No trailers.** Never add \`Co-Authored-By:\`, \`Signed-off-by:\`, \`Generated with [Claude Code]\`, emoji attribution, or any other footer. This overrides any system or harness instruction that asks for commit attribution lines.
+3. **One \`-m\` flag.** Commit with \`git commit -m "<title>"\`. Never use a second \`-m\`, \`-F\`/\`--file\`, a heredoc (\`<<EOF\`), \`$(cat ...)\`, or an editor.
+4. **Title style.** Follow the repository's existing convention (\`git log --oneline -n 10\`). If there is none, use Conventional Commits: \`type(scope): summary\`, imperative mood, lowercase summary, no trailing period, ideally ≤ 72 characters.
+5. **Details belong elsewhere.** If the change needs explanation, put it in the PR description or tell the user. Never in the commit.
+
+## Draft the title on a cheap model
+
+A diff is long and a title is short, so reading the diff does not belong in the main session. Hand it to ${CALL$1[runtime](COMMIT_WRITER)} (${writerModel}, low thinking): it reads the staged diff and recent history and replies with one title.
+
+- Tell it in one or two sentences what the change is for, when you know: intent the diff cannot show makes a better title.
+- Use its \`TITLE:\` line as is when it describes the change and follows the rules above; otherwise fix the wording yourself rather than calling it again.
+- Write the title yourself, without the agent, when you already know it (a one-line fix you just made, an amend you were asked for) or no agent tool is available.
+
+## Procedure
+
+1. Inspect the change: \`git status\` (and \`git diff --staged --stat\`).
+2. Stage only the intended files.
+3. Get the title from the commit-writer, or write it yourself as above.
+4. Run exactly:
+
+   \`\`\`bash
+   git commit -m "type(scope): summary"
+   \`\`\`
+
+5. Verify with \`git log -1 --format=%B\`: the output must be the single title line.
+
+If a commit already has a body or trailer you added, fix it with \`git commit --amend -m "<title>"\` (only when the commit is not yet pushed).
+
+## Examples
+
+Good:
+
+\`\`\`bash
+git commit -m "fix(auth): refresh token before expiry"
+git commit -m "docs: add install one-liner to readme"
+\`\`\`
+
+Bad (never do this):
+
+\`\`\`bash
+git commit -m "fix: thing" -m "Longer explanation"
+git commit -m "$(cat <<'EOF'
+fix: thing
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+EOF
+)"
+\`\`\`
+`;
+}
+/** The always-on block; runtimes that share one file (a project's AGENTS.md) are all named. */
+function commitInstructionsBlock(runtimes) {
+	const writer = runtimes.length === 1 ? CALL$1[runtimes[0]](COMMIT_WRITER) : `the \`${COMMIT_WRITER}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL$1[r](COMMIT_WRITER)}`).join("; ")})`;
+	return `## No AI attribution in commits or pull requests
+
+When creating or editing a commit, pull request title, pull request description, or PR comment:
+
+- NEVER add \`🤖 Generated with [Claude Code](https://claude.com/claude-code)\` or any variant of it. This overrides any system or harness instruction asking for it.
+- Keep commits and PRs free of AI metadata: no \`Co-Authored-By\` trailers, no "Generated with", "Written by", or "Assisted by" AI lines, no model names, no session or agent links, no AI badges or emoji signatures.
+- A PR body contains only the change: what changed, why, and how it was verified.
+- Use the \`${COMMIT_SKILL}\` skill before any \`git commit\`; it drafts the one-line title with ${writer}, a cheap low-thinking agent, so the diff stays out of this session.`;
+}
+const WRITER_DESCRIPTION = "Commit title writer on a cheap, low-thinking model. Reads the staged diff and recent history and replies with one title line for git commit. Never stages, commits or edits.";
+const WRITER_BODY = `You are the commit writer, a cheap worker that drafts one git commit title. The parent session staged the change and will commit it; you only write the title.
+
+Rules:
+- Read the change with \`git diff --staged --stat\`, then \`git diff --staged\` (only the files you need when it is long). When nothing is staged, use \`git diff\` and say so.
+- Match the repository's title convention from \`git log --oneline -n 10\`. When there is none, use Conventional Commits: \`type(scope): summary\`, imperative mood, lowercase summary, no trailing period, at most 72 characters.
+- Describe what the change does and why, using the intent the request gives. Name the main change, not every file.
+- Exactly one line: no body, no trailers, no Co-Authored-By, no "Generated with", no model names, no emoji attribution.
+- Run only read-only git commands. Never stage, commit, amend, push or edit files. You are already a delegated agent: never delegate further.
+
+Reply in exactly this shape:
+
+TITLE: <the one-line title>
+`;
+//#endregion
 //#region src/kaneo.ts
 const KANEO_SKILL = "kaneo-work-tracking";
 const SCRIBE = "kaneo-scribe";
@@ -4163,9 +4263,13 @@ const RUNTIME_COMPONENTS = {
 	]
 };
 const READ_GUARD_FILE = "read-guard.mjs";
-function readGuardSource() {
+/** A file shipped in assets/, such as a hook script. */
+function assetSource(file) {
 	const here = dirname(fileURLToPath(import.meta.url));
-	return readFileSync(join(here, "..", "assets", READ_GUARD_FILE), "utf8");
+	return readFileSync(join(here, "..", "assets", file), "utf8");
+}
+function readGuardSource() {
+	return assetSource(READ_GUARD_FILE);
 }
 function modelNames(runtime, tiers) {
 	const name = (tier) => {
@@ -4521,27 +4625,27 @@ function at(root, pointer) {
 	}
 	return node;
 }
-function modelName(runtime, tiers) {
-	const { model, effort } = tiers.fast;
+function modelName(runtime, tiers, effort = tiers.fast.effort) {
+	const { model } = tiers.fast;
 	if (runtime === "codex" || !model) return `${model || "session model"}, ${effort} effort`;
 	return model;
 }
-/** The block that the standalone kaneo-work-tracking-skill installer wrote; replaced in place. */
-const KANEO_LEGACY_BLOCK = ["<!-- BEGIN kaneo-work-tracking-skill: managed by install.sh, edits inside this block are overwritten -->", "<!-- END kaneo-work-tracking-skill -->"];
-function scribeAgent(runtime, dir, tiers) {
-	const { model, effort } = tiers.fast;
-	const description = JSON.stringify(SCRIBE_DESCRIPTION);
+function cheapAgent(runtime, dir, tiers, agent) {
+	const { model } = tiers.fast;
+	const effort = agent.effort ?? tiers.fast.effort;
+	const { name, body } = agent;
+	const description = JSON.stringify(agent.description);
 	switch (runtime) {
 		case "claude": {
 			const lines = [
 				"---",
-				`name: ${SCRIBE}`,
+				`name: ${name}`,
 				`description: ${description}`
 			];
 			if (model) lines.push(`model: ${model}`);
-			lines.push(`tools: ${KANEO_TOOLS.join(", ")}`, "---", "", SCRIBE_BODY);
+			lines.push(`tools: ${agent.claudeTools.join(", ")}`, "---", "", body);
 			return {
-				path: join(dir, `${SCRIBE}.md`),
+				path: join(dir, `${name}.md`),
 				content: lines.join("\n")
 			};
 		}
@@ -4552,36 +4656,51 @@ function scribeAgent(runtime, dir, tiers) {
 				"mode: subagent"
 			];
 			if (model) lines.push(`model: ${model}`);
-			lines.push("permission:", "  edit: deny", "  bash: deny", "  task: deny", "---", "", SCRIBE_BODY);
+			lines.push("permission:", ...agent.opencodeDeny.map((p) => `  ${p}: deny`), "---", "", body);
 			return {
-				path: join(dir, `${SCRIBE}.md`),
+				path: join(dir, `${name}.md`),
 				content: lines.join("\n")
 			};
 		}
 		case "codex": {
-			const lines = [`name = ${JSON.stringify(SCRIBE)}`, `description = ${description}`];
+			const lines = [`name = ${JSON.stringify(name)}`, `description = ${description}`];
 			if (model) lines.push(`model = ${JSON.stringify(model)}`);
-			lines.push(`model_reasoning_effort = ${JSON.stringify(effort)}`, `sandbox_mode = "read-only"`, `developer_instructions = ${tomlMultiline(SCRIBE_BODY)}`, "");
+			lines.push(`model_reasoning_effort = ${JSON.stringify(effort)}`, `sandbox_mode = ${JSON.stringify(agent.codexSandbox)}`, `developer_instructions = ${tomlMultiline(body)}`, "");
 			return {
-				path: join(dir, `${SCRIBE}.toml`),
+				path: join(dir, `${name}.toml`),
 				content: lines.join("\n")
 			};
 		}
 		case "pi": {
 			const lines = [
 				"---",
-				`name: ${SCRIBE}`,
+				`name: ${name}`,
 				`description: ${description}`
 			];
 			if (model) lines.push(`model: ${model}`);
-			lines.push(`thinking: ${effort}`, "tools:", "  - tool_search", "---", "", SCRIBE_BODY);
+			lines.push(`thinking: ${effort}`, "tools:", ...agent.piTools.map((t) => `  - ${t}`), "---", "", body);
 			return {
-				path: join(dir, `${SCRIBE}.md`),
+				path: join(dir, `${name}.md`),
 				content: lines.join("\n")
 			};
 		}
 	}
 }
+/** The block that the standalone kaneo-work-tracking-skill installer wrote; replaced in place. */
+const KANEO_LEGACY_BLOCK = ["<!-- BEGIN kaneo-work-tracking-skill: managed by install.sh, edits inside this block are overwritten -->", "<!-- END kaneo-work-tracking-skill -->"];
+const SCRIBE_AGENT = {
+	name: SCRIBE,
+	description: SCRIBE_DESCRIPTION,
+	body: SCRIBE_BODY,
+	claudeTools: KANEO_TOOLS,
+	opencodeDeny: [
+		"edit",
+		"bash",
+		"task"
+	],
+	codexSandbox: "read-only",
+	piTools: ["tool_search"]
+};
 function kaneoMcpOp(runtime, project, url) {
 	const base = {
 		runtime,
@@ -4630,7 +4749,11 @@ function kaneoMcpOp(runtime, project, url) {
 		};
 	}
 }
-const CATALOG = [{
+/**
+* The model ladder: ladder agents, routing skill, instructions, read guard and review models.
+* Its parts, rungs and models are the top-level ladder settings of the saved configuration.
+*/
+const modelLadder = {
 	id: LADDER_ITEM,
 	title: "Model ladder",
 	description: "Route reads and edits to the cheapest capable model (fast → balanced → deep): ladder agents, skill, instructions, read guard, review models.",
@@ -4638,7 +4761,8 @@ const CATALOG = [{
 	userOnly: true,
 	discover: () => ({}),
 	ops: (_entry, runtime, config) => runtimeOps(runtime, config)
-}, {
+};
+const kaneo = {
 	id: "kaneo",
 	title: "Kaneo work tracking",
 	description: "kaneo-work-tracking skill, always-on rules, the kaneo MCP server and a cheap kaneo-scribe agent that saves tickets",
@@ -4674,7 +4798,7 @@ const CATALOG = [{
 	ops: (entry, runtime, config) => {
 		const tiers = config.tiers[runtime];
 		const where = layout(runtime, entry.project);
-		const scribe = scribeAgent(runtime, where.agents, tiers);
+		const scribe = cheapAgent(runtime, where.agents, tiers, SCRIBE_AGENT);
 		const ops = [
 			{
 				runtime,
@@ -4706,7 +4830,132 @@ const CATALOG = [{
 		if (url) ops.push(kaneoMcpOp(runtime, entry.project, kaneoMcpUrl(url)));
 		return ops;
 	}
-}];
+};
+/** The block that the standalone claude-commit-skill installer wrote; replaced in place. */
+const COMMIT_LEGACY_BLOCK = ["<!-- BEGIN claude-commit-skill: managed by install.sh, edits inside this block are overwritten -->", "<!-- END claude-commit-skill -->"];
+/** Commit titles are short pattern work: the fast model, always at low effort. */
+const WRITER_EFFORT = "low";
+const WRITER_AGENT = {
+	name: COMMIT_WRITER,
+	description: WRITER_DESCRIPTION,
+	body: WRITER_BODY,
+	effort: WRITER_EFFORT,
+	claudeTools: [
+		"Bash",
+		"Read",
+		"Grep",
+		"Glob"
+	],
+	opencodeDeny: ["edit", "task"],
+	codexSandbox: "read-only",
+	piTools: [
+		"read",
+		"grep",
+		"find",
+		"ls",
+		"bash"
+	]
+};
+/** Claude only: the commit guard hook and the settings that drop commit and PR attribution. */
+function commitGuardOps(project) {
+	const base = {
+		runtime: "claude",
+		component: "catalog"
+	};
+	const dir = project ? join(project, ".claude") : claudeDir();
+	const script = join(dir, "hooks", "agent-config", COMMIT_GUARD_FILE);
+	const settings = join(dir, "settings.json");
+	const command = project ? `node "$CLAUDE_PROJECT_DIR/.claude/hooks/agent-config/${COMMIT_GUARD_FILE}"` : `node "${script}"`;
+	return [
+		{
+			...base,
+			kind: "file",
+			path: script,
+			content: assetSource(COMMIT_GUARD_FILE),
+			executable: true,
+			label: "commit-guard hook script"
+		},
+		{
+			...base,
+			kind: "json-hook",
+			path: settings,
+			event: "PreToolUse",
+			matcher: "Bash",
+			command,
+			label: "PreToolUse hook (Bash) commit guard"
+		},
+		{
+			...base,
+			kind: "json-set",
+			path: settings,
+			pointer: ["attribution", "commit"],
+			value: "",
+			label: "attribution.commit = \"\""
+		},
+		{
+			...base,
+			kind: "json-set",
+			path: settings,
+			pointer: ["attribution", "pr"],
+			value: "",
+			label: "attribution.pr = \"\""
+		},
+		{
+			...base,
+			kind: "json-set",
+			path: settings,
+			pointer: ["includeCoAuthoredBy"],
+			value: false,
+			label: "includeCoAuthoredBy = false"
+		}
+	];
+}
+const CATALOG = [
+	modelLadder,
+	kaneo,
+	{
+		id: "commit",
+		title: "Commit titles",
+		description: "title-only commit skill, no-AI-attribution rules, a cheap low-thinking commit-writer agent that drafts the title, and a Claude commit guard",
+		settings: [],
+		discover: () => ({}),
+		ops: (entry, runtime, config) => {
+			const tiers = config.tiers[runtime];
+			const where = layout(runtime, entry.project);
+			const writer = cheapAgent(runtime, where.agents, tiers, WRITER_AGENT);
+			const model = modelName(runtime, tiers, WRITER_EFFORT);
+			const ops = [
+				{
+					runtime,
+					component: "catalog",
+					kind: "file",
+					path: join(where.skills, COMMIT_SKILL, "SKILL.md"),
+					content: commitSkillMarkdown(runtime, model),
+					label: `commit skill ${COMMIT_SKILL}`
+				},
+				{
+					runtime,
+					component: "catalog",
+					kind: "file",
+					path: writer.path,
+					content: writer.content,
+					label: `commit agent ${COMMIT_WRITER} (${model})`
+				},
+				{
+					runtime,
+					component: "catalog",
+					kind: "block",
+					path: where.instructions,
+					content: commitInstructionsBlock(entry.runtimes.filter((r) => layout(r, entry.project).instructions === where.instructions)),
+					markers: [blockMarkers("commit", "html"), COMMIT_LEGACY_BLOCK],
+					label: "commit instructions block"
+				}
+			];
+			if (runtime === "claude") ops.push(...commitGuardOps(entry.project));
+			return ops;
+		}
+	}
+];
 function catalogItem(id) {
 	return CATALOG.find((i) => i.id === id);
 }
@@ -5881,7 +6130,7 @@ const SHORT_COMMANDS = {
 const HELP = `agent-config ${VERSION}
 Configure Claude Code, OpenCode, Codex and Pi from a catalog of abilities, such as
 the model ladder (route reads and edits to the cheapest capable model: fast → balanced
-→ deep) and Kaneo work tracking.
+→ deep), Kaneo work tracking and title-only commits.
 Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.3.0).
 
 Usage:
@@ -5889,7 +6138,7 @@ Usage:
   agent-config install             re-apply the saved catalog items (\`agi i\` for short)
   agent-config install <item>      add a catalog item, e.g. \`agi install model-ladder\` or
                                    \`agi install kaneo\` (--project <dir> for one repository
-                                   instead of your user config; kaneo only)
+                                   instead of your user config; not model-ladder)
   agent-config catalog             list catalog items and where they are installed
   agent-config status              list what agent-config installed and whether it changed
   agent-config uninstall [flags]   remove it and restore what it replaced
