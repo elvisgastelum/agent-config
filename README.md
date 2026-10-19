@@ -13,7 +13,7 @@ It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the run
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh | bash
 ```
 
 Requires only **git** and **Node.js 22.12 or newer** (24 LTS recommended); the installer stops with a clear message if either is missing. The CLI ships prebuilt and self-contained in `dist/cli.mjs`, so nothing is installed or built on your machine: the installer clones to `~/.local/share/model-ladder`, checks Node, adds `model-ladder` to `~/.local/bin` and opens the TUI. Update from the TUI (**Update model-ladder version**), with `model-ladder self-update`, or by re-running the one-liner; a failed update rolls back to the previous version.
@@ -21,7 +21,7 @@ Requires only **git** and **Node.js 22.12 or newer** (24 LTS recommended); the i
 Non-interactive (scripts and agents):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh \
   | bash -s -- install --runtime claude --runtime opencode --yes --json
 ```
 
@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/ins
 
 ```sh
 model-ladder uninstall                 # undo the agent configuration, keep the tool
-curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh | bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh | bash -s -- --uninstall
                                        # undo it and remove the tool, its command and saved choices
 ```
 

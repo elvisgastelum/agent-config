@@ -3,15 +3,15 @@
   "version": "0.2.0",
   "private": true,
   "description": "Route reads and edits to the cheapest capable model (Haiku → Sonnet → Opus) for Claude Code, OpenCode, Codex and Pi, so the main session's context stays small.",
-  "homepage": "https://github.com/elvisgastelum/model-ladder#readme",
+  "homepage": "https://github.com/elvisgastelum/agent-config#readme",
   "bugs": {
-    "url": "https://github.com/elvisgastelum/model-ladder/issues"
+    "url": "https://github.com/elvisgastelum/agent-config/issues"
   },
   "license": "MIT",
   "author": "Elvis Gastelum",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/elvisgastelum/model-ladder.git"
+    "url": "git+https://github.com/elvisgastelum/agent-config.git"
   },
   "bin": {
     "model-ladder": "./dist/cli.mjs"
