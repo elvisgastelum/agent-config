@@ -166,10 +166,14 @@ async function main(argv: string[]): Promise<number> {
   if (values.help) return (out(false, null, HELP), 0);
 
   const command = positionals[0] ?? "";
-  for (const dir of migrateLegacyLayout()) {
+  const migration = migrateLegacyLayout();
+  for (const dir of migration.moved) {
     process.stderr.write(
       `agent-config: moved ${dir} to its agent-config location (renamed from model-ladder)\n`,
     );
+  }
+  for (const warning of migration.warnings) {
+    process.stderr.write(`agent-config: warning: ${warning}; continuing with the current layout\n`);
   }
   // Flags that belong to one command are refused elsewhere instead of being silently ignored.
   const given = Object.keys(values).filter((k) => values[k as keyof typeof values] !== undefined);

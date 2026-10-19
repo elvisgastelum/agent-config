@@ -28,6 +28,7 @@ import {
   parseTree,
   type ParseError,
 } from "jsonc-parser";
+import { resolveBackup } from "./migrate.ts";
 import { statePaths } from "./paths.ts";
 import type { Runtime } from "./tiers.ts";
 
@@ -638,14 +639,24 @@ export function applyPlan(plan: PlannedOp[]): ApplyResult {
   const result: ApplyResult = { applied: [], notes: [], errors: [] };
   for (const planned of plan) {
     if (planned.action === "remove" && planned.record) {
-      const res = undoRecord(planned.record);
-      if (res.outcome === "kept-modified") {
-        result.notes.push(`${planned.record.path} was kept: ${res.note}`);
-      } else {
-        byKey.delete(recordKey(planned.record));
-        pruneCreatedDirs([planned.record]);
+      const record = planned.record;
+      try {
+        const res = undoRecord(record);
+        // Either way the configuration no longer produces it, so stop managing it; an item
+        // the user changed is left as they have it instead of being offered again each run.
+        byKey.delete(recordKey(record));
+        if (res.outcome === "kept-modified") {
+          result.notes.push(`${record.path} was left as you changed it and is no longer managed`);
+        } else {
+          pruneCreatedDirs([record]);
+        }
+        result.applied.push(planned);
+      } catch (error) {
+        result.errors.push({
+          op: planned.op,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
-      result.applied.push(planned);
       saveManifest({ version: 1, records: [...byKey.values()] });
       continue;
     }
@@ -717,9 +728,10 @@ export function undoRecord(r: ManifestRecord, force = false): UndoResult {
           note: "changed since install; re-run with --force to remove",
         };
       }
-      if (r.backup && existsSync(r.backup)) {
-        writeAtomic(r.path, readFileSync(r.backup, "utf8"));
-        return { record: r, outcome: "restored", note: `restored from ${r.backup}` };
+      const backup = r.backup && resolveBackup(r.backup);
+      if (backup && existsSync(backup)) {
+        writeAtomic(r.path, readFileSync(backup, "utf8"));
+        return { record: r, outcome: "restored", note: `restored from ${backup}` };
       }
       rmSync(r.path, { force: true });
       return { record: r, outcome: "removed" };
