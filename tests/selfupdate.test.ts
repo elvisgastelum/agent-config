@@ -31,8 +31,12 @@ function commitToOrigin(message: string, change: () => void): void {
 }
 
 function cli(entry: string, ...args: string[]) {
-  const res = spawnSync("node", [entry, ...args], {
-    env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" },
+  return cliIn({}, entry, ...args);
+}
+
+function cliIn(extra: Record<string, string>, entry: string, ...args: string[]) {
+  const res = spawnSync(process.execPath, [entry, ...args], {
+    env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1", ...extra },
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -40,6 +44,7 @@ function cli(entry: string, ...args: string[]) {
 }
 
 const installedCli = join(installed, "dist", "cli.mjs");
+let firstCommit = "";
 
 beforeAll(() => {
   mkdirSync(origin, { recursive: true });
@@ -48,6 +53,7 @@ beforeAll(() => {
   }
   git(origin, "init", "-q", "-b", "main");
   commitToOrigin("v1", () => {});
+  firstCommit = git(origin, "rev-parse", "HEAD");
   mkdirSync(join(home, ".local", "share"), { recursive: true });
   git(root, "clone", "-q", origin, installed);
 });
@@ -70,6 +76,10 @@ test("pulls a newer version and rewrites the command", () => {
   const check = JSON.parse(cli(installedCli, "self-update", "--dry-run", "--json").stdout).check;
   expect(check).toMatchObject({ behind: 1, latest: { version: "9.9.9" } });
 
+  const refused = cli(installedCli, "self-update");
+  expect(refused.code).toBe(2);
+  expect(refused.stderr).toContain("refusing to update without --yes outside a terminal");
+
   const res = cli(installedCli, "self-update", "--yes", "--json");
   expect(res.code).toBe(0);
   expect(JSON.parse(res.stdout).updated).toBe(true);
@@ -89,8 +99,47 @@ test("rolls back when the new version does not run", () => {
   expect(git(installed, "rev-parse", "HEAD")).toBe(before);
 });
 
-test("refuses to update a development checkout", () => {
-  const res = cli(join(repo, "src", "cli.ts"), "self-update", "--dry-run", "--json");
+function cloneTo(name: string): string {
+  const target = join(root, name);
+  git(root, "clone", "-q", origin, target);
+  // Later tests commit a broken dist to the origin; start from the first, working version.
+  git(target, "reset", "-q", "--hard", firstCommit);
+  return target;
+}
+
+test("refuses to update a checkout that is not the installed copy", () => {
+  // A git checkout too, just not the one MODEL_LADDER_HOME points at.
+  const res = cli(join(cloneTo("dev"), "dist", "cli.mjs"), "self-update", "--dry-run", "--json");
   expect(res.code).toBe(1);
   expect(JSON.parse(res.stdout).check.reason).toContain("not the installed copy");
+});
+
+test("reports an unreachable origin with git's own reason", () => {
+  const copy = cloneTo("offline");
+  git(copy, "remote", "set-url", "origin", join(root, "does-not-exist"));
+  const res = cliIn(
+    { MODEL_LADDER_HOME: copy },
+    join(copy, "dist", "cli.mjs"),
+    "self-update",
+    "--dry-run",
+    "--json",
+  );
+  expect(res.code).toBe(1);
+  const reason = JSON.parse(res.stdout).check.reason as string;
+  expect(reason).toContain("could not fetch origin/main");
+  expect(reason).not.toContain("Command failed");
+});
+
+test("explains a copy pinned to a fixed commit instead of fetching a branch called HEAD", () => {
+  const copy = cloneTo("pinned");
+  git(copy, "checkout", "-q", "--detach");
+  const res = cliIn(
+    { MODEL_LADDER_HOME: copy },
+    join(copy, "dist", "cli.mjs"),
+    "self-update",
+    "--dry-run",
+    "--json",
+  );
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).check.reason).toContain("detached HEAD");
 });

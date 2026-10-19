@@ -44,53 +44,88 @@ export interface UpdateCheck {
   behind: number;
 }
 
+function gitError(error: unknown): string {
+  const stderr = (error as { stderr?: string | Buffer } | undefined)?.stderr?.toString().trim();
+  if (stderr) return stderr.split("\n").slice(-2).join(" ");
+  return error instanceof Error ? (error.message.split("\n")[0] ?? error.message) : String(error);
+}
+
 export function checkForUpdate(root = checkoutRoot()): UpdateCheck {
   const base = { ref: "", current: { version: VERSION, commit: "" }, behind: 0 };
-  if (!existsSync(join(root, ".git"))) {
-    return {
-      ...base,
-      updatable: false,
-      reason: "not a git checkout; re-run the install one-liner",
-    };
-  }
+  const refuse = (reason: string, extra: Partial<UpdateCheck> = {}): UpdateCheck => ({
+    ...base,
+    ...extra,
+    updatable: false,
+    reason,
+  });
+  if (!existsSync(join(root, ".git")))
+    return refuse("not a git checkout; re-run the install one-liner");
   if (!samePath(root, installHome())) {
-    return {
-      ...base,
-      updatable: false,
-      reason: `running from ${root}, not the installed copy (${installHome()}); use git pull here`,
-    };
+    return refuse(
+      `running from ${root}, not the installed copy (${installHome()}); use git pull here`,
+    );
   }
-  const ref = git(root, "rev-parse", "--abbrev-ref", "HEAD");
-  const current = { version: VERSION, commit: git(root, "rev-parse", "--short", "HEAD") };
+  let ref: string;
+  let current: UpdateCheck["current"];
+  try {
+    ref = git(root, "rev-parse", "--abbrev-ref", "HEAD");
+    current = { version: VERSION, commit: git(root, "rev-parse", "--short", "HEAD") };
+  } catch (error) {
+    return refuse(`cannot read the installed checkout: ${gitError(error)}`);
+  }
+  if (ref === "HEAD") {
+    return refuse(
+      "the installed copy is pinned to a fixed commit or tag (detached HEAD); re-run the installer with MODEL_LADDER_REF=<branch> to follow a branch",
+      { current },
+    );
+  }
   try {
     git(root, "fetch", "--quiet", "origin", ref);
   } catch (error) {
-    const detail = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    return { ...base, ref, current, updatable: false, reason: `could not reach origin: ${detail}` };
+    return refuse(`could not fetch origin/${ref}: ${gitError(error)}`, { ref, current });
   }
-  const behind = Number(git(root, "rev-list", "--count", `HEAD..origin/${ref}`)) || 0;
-  let version = current.version;
   try {
-    version = JSON.parse(git(root, "show", `origin/${ref}:package.json`)).version ?? version;
-  } catch {
-    // Keep the current version label when the remote package.json cannot be read.
+    const behind = Number(git(root, "rev-list", "--count", `HEAD..origin/${ref}`)) || 0;
+    let version = current.version;
+    try {
+      version = JSON.parse(git(root, "show", `origin/${ref}:package.json`)).version ?? version;
+    } catch {
+      // Keep the current version label when the remote package.json cannot be read.
+    }
+    const latest = { version, commit: git(root, "rev-parse", "--short", `origin/${ref}`) };
+    return { updatable: true, ref, current, latest, behind };
+  } catch (error) {
+    return refuse(`cannot compare with origin/${ref}: ${gitError(error)}`, { ref, current });
   }
-  const latest = { version, commit: git(root, "rev-parse", "--short", `origin/${ref}`) };
-  return { updatable: true, ref, current, latest, behind };
 }
 
 export interface UpdateResult {
   ok: boolean;
+  /** What happened, in one sentence for the user. */
+  message: string;
   /** The installer's messages (its stderr), for showing on failure. */
   log: string;
   commit?: string;
 }
 
+const ENTRY = join("dist", "cli.mjs");
+
+function runs(root: string): boolean {
+  return (
+    spawnSync(process.execPath, [join(root, ENTRY), "--version"], {
+      stdio: "ignore",
+      timeout: 30_000,
+    }).status === 0
+  );
+}
+
 export function runUpdate(check: UpdateCheck, root = checkoutRoot()): UpdateResult {
+  const before = check.current.commit;
   const res = spawnSync("bash", [join(root, "install.sh")], {
     encoding: "utf8",
     stdio: ["ignore", "ignore", "pipe"],
-    timeout: 300_000,
+    // Generous: git and the installer bound their own work. A kill is reported truthfully below.
+    timeout: 900_000,
     env: {
       ...process.env,
       // The path as configured (checkForUpdate verified it is this checkout), not its realpath.
@@ -100,17 +135,40 @@ export function runUpdate(check: UpdateCheck, root = checkoutRoot()): UpdateResu
       NO_COLOR: "1",
     },
   });
-  const ok = res.status === 0;
+  const log = res.stderr ?? "";
+  let after = "";
+  try {
+    after = git(root, "rev-parse", "--short", "HEAD");
+  } catch {
+    // Reported below as an inconsistent install.
+  }
+  if (res.status === 0) {
+    return {
+      ok: true,
+      message: `Updated to v${check.latest?.version} (${after})`,
+      log,
+      commit: after,
+    };
+  }
+  const killed = res.error || res.signal ? " (the installer was interrupted)" : "";
+  // Only claim the previous version is installed when that is what is on disk and it runs.
+  if (after === before && runs(root)) {
+    return {
+      ok: false,
+      message: `Update failed${killed}; the previous version is still installed.`,
+      log,
+    };
+  }
   return {
-    ok,
-    log: res.stderr ?? "",
-    ...(ok ? { commit: git(root, "rev-parse", "--short", "HEAD") } : {}),
+    ok: false,
+    message: `Update failed${killed} and the installed copy may be inconsistent (at ${after || "an unknown commit"}); re-run the install one-liner to repair it.`,
+    log,
   };
 }
 
 /** Re-applies the saved configuration with the freshly installed CLI (new prompts and agents). */
 export function reapplyWithNewVersion(root = checkoutRoot()): number {
-  const res = spawnSync("node", [join(root, "dist", "cli.mjs"), "install", "--yes"], {
+  const res = spawnSync(process.execPath, [join(root, ENTRY), "install", "--yes"], {
     stdio: "inherit",
   });
   return res.status ?? 1;

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { parseArgs, styleText } from "node:util";
 import process$1, { stdin, stdout } from "node:process";
 import l__default, * as l from "node:readline";
 import { ReadStream } from "node:tty";
-import { dirname, join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
@@ -3463,10 +3463,11 @@ If you are yourself a subagent or a parallel worker without an agent tool, run t
 
 \`\`\`sh
 model-ladder delegate read --runtime ${runtime} "<the read handoff above>"
-model-ladder delegate edit --runtime ${runtime} --tier balanced "<the edit handoff above>"
+model-ladder delegate edit --runtime ${runtime} --tier balanced --verify "<verify command>" "<the edit handoff above>"
+printf '%s' "<long handoff>" | model-ladder delegate read --runtime ${runtime} -
 \`\`\`
 
-It runs the ladder agent headlessly, climbs fast → balanced → deep by itself on \`partial\`, \`escalate\` or failure, and prints only the final reply (rung and timing go to stderr; \`--json\` for structured output, \`--no-climb\` to stay on one rung, task on stdin when omitted). Exit codes: 0 done, 3 still partial after the last rung, 1 failed, 4 refused because you are already running inside a delegated agent: then do the work yourself or reply \`STATUS: escalate\`. Ladder agents never call it.
+It runs the ladder agent headlessly, climbs fast → balanced → deep by itself on \`partial\`, \`escalate\` or failure, and prints only the final reply (rung and timing go to stderr; \`--json\` for structured output, \`--no-climb\` to stay on one rung, \`-\` to read the task from stdin). Edits may run only the \`--verify\` command; without it the edit agent gets no shell. Exit codes: 0 done, 3 still partial after the last rung, 1 failed, 4 refused because you are already running inside a delegated agent: then do the work yourself or reply \`STATUS: escalate\`. Ladder agents never call it.
 
 ## Climbing
 
@@ -4017,6 +4018,11 @@ function samePath(a, b) {
 		return false;
 	}
 }
+function gitError(error) {
+	const stderr = error?.stderr?.toString().trim();
+	if (stderr) return stderr.split("\n").slice(-2).join(" ");
+	return error instanceof Error ? error.message.split("\n")[0] ?? error.message : String(error);
+}
 function checkForUpdate(root = checkoutRoot()) {
 	const base = {
 		ref: "",
@@ -4026,50 +4032,67 @@ function checkForUpdate(root = checkoutRoot()) {
 		},
 		behind: 0
 	};
-	if (!existsSync(join(root, ".git"))) return {
+	const refuse = (reason, extra = {}) => ({
 		...base,
+		...extra,
 		updatable: false,
-		reason: "not a git checkout; re-run the install one-liner"
-	};
-	if (!samePath(root, installHome())) return {
-		...base,
-		updatable: false,
-		reason: `running from ${root}, not the installed copy (${installHome()}); use git pull here`
-	};
-	const ref = git(root, "rev-parse", "--abbrev-ref", "HEAD");
-	const current = {
-		version: VERSION,
-		commit: git(root, "rev-parse", "--short", "HEAD")
-	};
+		reason
+	});
+	if (!existsSync(join(root, ".git"))) return refuse("not a git checkout; re-run the install one-liner");
+	if (!samePath(root, installHome())) return refuse(`running from ${root}, not the installed copy (${installHome()}); use git pull here`);
+	let ref;
+	let current;
+	try {
+		ref = git(root, "rev-parse", "--abbrev-ref", "HEAD");
+		current = {
+			version: VERSION,
+			commit: git(root, "rev-parse", "--short", "HEAD")
+		};
+	} catch (error) {
+		return refuse(`cannot read the installed checkout: ${gitError(error)}`);
+	}
+	if (ref === "HEAD") return refuse("the installed copy is pinned to a fixed commit or tag (detached HEAD); re-run the installer with MODEL_LADDER_REF=<branch> to follow a branch", { current });
 	try {
 		git(root, "fetch", "--quiet", "origin", ref);
 	} catch (error) {
-		const detail = error instanceof Error ? error.message.split("\n")[0] : String(error);
-		return {
-			...base,
+		return refuse(`could not fetch origin/${ref}: ${gitError(error)}`, {
 			ref,
-			current,
-			updatable: false,
-			reason: `could not reach origin: ${detail}`
-		};
+			current
+		});
 	}
-	const behind = Number(git(root, "rev-list", "--count", `HEAD..origin/${ref}`)) || 0;
-	let version = current.version;
 	try {
-		version = JSON.parse(git(root, "show", `origin/${ref}:package.json`)).version ?? version;
-	} catch {}
-	return {
-		updatable: true,
-		ref,
-		current,
-		latest: {
+		const behind = Number(git(root, "rev-list", "--count", `HEAD..origin/${ref}`)) || 0;
+		let version = current.version;
+		try {
+			version = JSON.parse(git(root, "show", `origin/${ref}:package.json`)).version ?? version;
+		} catch {}
+		const latest = {
 			version,
 			commit: git(root, "rev-parse", "--short", `origin/${ref}`)
-		},
-		behind
-	};
+		};
+		return {
+			updatable: true,
+			ref,
+			current,
+			latest,
+			behind
+		};
+	} catch (error) {
+		return refuse(`cannot compare with origin/${ref}: ${gitError(error)}`, {
+			ref,
+			current
+		});
+	}
+}
+const ENTRY = join("dist", "cli.mjs");
+function runs(root) {
+	return spawnSync(process.execPath, [join(root, ENTRY), "--version"], {
+		stdio: "ignore",
+		timeout: 3e4
+	}).status === 0;
 }
 function runUpdate(check, root = checkoutRoot()) {
+	const before = check.current.commit;
 	const res = spawnSync("bash", [join(root, "install.sh")], {
 		encoding: "utf8",
 		stdio: [
@@ -4077,7 +4100,7 @@ function runUpdate(check, root = checkoutRoot()) {
 			"ignore",
 			"pipe"
 		],
-		timeout: 3e5,
+		timeout: 9e5,
 		env: {
 			...process.env,
 			MODEL_LADDER_HOME: installHome(),
@@ -4086,17 +4109,33 @@ function runUpdate(check, root = checkoutRoot()) {
 			NO_COLOR: "1"
 		}
 	});
-	const ok = res.status === 0;
+	const log = res.stderr ?? "";
+	let after = "";
+	try {
+		after = git(root, "rev-parse", "--short", "HEAD");
+	} catch {}
+	if (res.status === 0) return {
+		ok: true,
+		message: `Updated to v${check.latest?.version} (${after})`,
+		log,
+		commit: after
+	};
+	const killed = res.error || res.signal ? " (the installer was interrupted)" : "";
+	if (after === before && runs(root)) return {
+		ok: false,
+		message: `Update failed${killed}; the previous version is still installed.`,
+		log
+	};
 	return {
-		ok,
-		log: res.stderr ?? "",
-		...ok ? { commit: git(root, "rev-parse", "--short", "HEAD") } : {}
+		ok: false,
+		message: `Update failed${killed} and the installed copy may be inconsistent (at ${after || "an unknown commit"}); re-run the install one-liner to repair it.`,
+		log
 	};
 }
 /** Re-applies the saved configuration with the freshly installed CLI (new prompts and agents). */
 function reapplyWithNewVersion(root = checkoutRoot()) {
-	return spawnSync("node", [
-		join(root, "dist", "cli.mjs"),
+	return spawnSync(process.execPath, [
+		join(root, ENTRY),
 		"install",
 		"--yes"
 	], { stdio: "inherit" }).status ?? 1;
@@ -4328,11 +4367,11 @@ async function selfUpdateFlow() {
 	spin.start("Updating");
 	const result = runUpdate(check);
 	if (!result.ok) {
-		spin.stop(import_picocolors.default.red("Update failed; the previous version is still installed"));
+		spin.stop(import_picocolors.default.red(result.message));
 		if (result.log.trim()) log.error(result.log.trim());
 		return false;
 	}
-	spin.stop(`Updated to v${latest.version} (${result.commit})`);
+	spin.stop(result.message);
 	if (status().length > 0 && ask(await confirm({ message: "Re-apply your saved configuration with the new version (agents, skill, instructions)?" }))) {
 		const code = reapplyWithNewVersion();
 		if (code !== 0) log.warn(`Re-applying exited with code ${code}; run \`model-ladder install\` to retry.`);
@@ -4413,41 +4452,21 @@ async function runTui() {
 //#region src/delegate.ts
 /** Set in every process `delegate` starts; its presence means "already delegated". */
 const DELEGATED_ENV = "MODEL_LADDER_DELEGATED";
-const READ_TOOLS = {
-	claude: [
-		"Read",
-		"Grep",
-		"Glob"
-	],
-	pi: [
-		"read",
-		"grep",
-		"find",
-		"ls"
-	]
-};
-const EDIT_TOOLS = {
-	claude: [
-		"Read",
-		"Edit",
-		"Write",
-		"Grep",
-		"Glob",
-		"Bash"
-	],
-	pi: [
-		"read",
-		"grep",
-		"find",
-		"ls",
-		"edit",
-		"write",
-		"bash"
-	]
-};
-function invocation(runtime, role, tier, tiers, prompt, cwd, scratch) {
+/**
+* A task that starts with "-" would be parsed as an option by runtimes that take the prompt
+* as a bare positional argument, so give it a leading word.
+*/
+function safePrompt(prompt) {
+	return prompt.trimStart().startsWith("-") ? `Task:\n${prompt}` : prompt;
+}
+function withVerify(prompt, verify) {
+	return verify ? `${prompt}\n\nVerify command (the only shell command you may run): ${verify}` : prompt;
+}
+function invocation(req, tier, tiers, prompt, scratch) {
+	const { runtime, role, cwd, verify } = req;
 	const { model, effort } = tiers[tier];
 	const name = agentName(role, tier);
+	const task = safePrompt(withVerify(prompt, role === "edit" ? verify : void 0));
 	switch (runtime) {
 		case "claude": {
 			const args = [
@@ -4457,7 +4476,18 @@ function invocation(runtime, role, tier, tiers, prompt, cwd, scratch) {
 				"--output-format",
 				"json",
 				"--allowedTools",
-				...role === "read" ? READ_TOOLS.claude : EDIT_TOOLS.claude
+				...role === "read" ? [
+					"Read",
+					"Grep",
+					"Glob"
+				] : [
+					"Read",
+					"Edit",
+					"Write",
+					"Grep",
+					"Glob",
+					...verify ? [`Bash(${verify})`] : []
+				]
 			];
 			if (role === "edit") args.push("--permission-mode", "acceptEdits");
 			if (model) args.push("--model", model);
@@ -4466,7 +4496,7 @@ function invocation(runtime, role, tier, tiers, prompt, cwd, scratch) {
 				args: [
 					...args,
 					"--",
-					prompt
+					task
 				]
 			};
 		}
@@ -4479,7 +4509,7 @@ function invocation(runtime, role, tier, tiers, prompt, cwd, scratch) {
 			if (model) args.push("--model", model);
 			return {
 				bin: "opencode",
-				args: [...args, prompt]
+				args: [...args, task]
 			};
 		}
 		case "codex": {
@@ -4501,7 +4531,7 @@ function invocation(runtime, role, tier, tiers, prompt, cwd, scratch) {
 			return {
 				bin: "codex",
 				args: [...args, "-"],
-				stdin: `${agentBody(role, tier)}\n\n${prompt}`,
+				stdin: `${agentBody(role, tier)}\n\n${task}`,
 				outFile
 			};
 		}
@@ -4510,7 +4540,20 @@ function invocation(runtime, role, tier, tiers, prompt, cwd, scratch) {
 				"-p",
 				"--no-session",
 				"--tools",
-				(role === "read" ? READ_TOOLS.pi : EDIT_TOOLS.pi).join(","),
+				(role === "read" ? [
+					"read",
+					"grep",
+					"find",
+					"ls"
+				] : [
+					"read",
+					"grep",
+					"find",
+					"ls",
+					"edit",
+					"write",
+					...verify ? ["bash"] : []
+				]).join(","),
 				"--thinking",
 				effort
 			];
@@ -4518,9 +4561,24 @@ function invocation(runtime, role, tier, tiers, prompt, cwd, scratch) {
 			args.push("--append-system-prompt", agentBody(role, tier));
 			return {
 				bin: "pi",
-				args: [...args, prompt]
+				args: [...args, task]
 			};
 		}
+	}
+}
+/**
+* Runtimes that select the agent by name depend on its installed definition for tool limits.
+* Returns why that definition cannot be trusted, or undefined when it is fine.
+*/
+function agentFileProblem(runtime, role, tier) {
+	const name = agentName(role, tier);
+	const file = runtime === "claude" ? join(claudeDir(), "agents", `${name}.md`) : runtime === "opencode" ? join(opencodeDir(), "agents", `${name}.md`) : void 0;
+	if (!file) return void 0;
+	const fix = `run \`model-ladder install --runtime ${runtime}\``;
+	if (!existsSync(file)) return `${name} is not installed for ${runtime}; ${fix}`;
+	if (runtime === "opencode" && role === "read") {
+		const text = readFileSync(file, "utf8");
+		if (!/^\s+edit:\s*deny\s*$/m.test(text) || !/^\s+bash:\s*deny\s*$/m.test(text)) return `${name} no longer denies edit and bash (changed since install); ${fix}`;
 	}
 }
 function parseStatus(reply) {
@@ -4541,17 +4599,35 @@ function extractReply(runtime, stdout) {
 		return { reply: stdout.trim() };
 	}
 }
-function runOnce(req, tier, tiers, prompt) {
-	const scratch = mkdtempSync(join(tmpdir(), "model-ladder-delegate-"));
+function failure(bin, res, timeoutMs) {
+	const code = res.error?.code;
+	if (code === "ENOENT") return `${bin} is not installed or not on PATH`;
+	if (code === "ETIMEDOUT") return `timed out after ${Math.round(timeoutMs / 1e3)}s`;
+	if (res.error) return res.error.message;
+	if (res.signal) return `${bin} was killed by ${res.signal}`;
+	const tail = String(res.stderr ?? "").trim().split("\n").slice(-3).join(" ");
+	return `${bin} exited with ${res.status}${tail ? `: ${tail}` : ""}`;
+}
+function runOnce(req, tier, tiers, prompt, timeoutMs) {
 	const started = Date.now();
 	const model = tiers[tier].model || "session model";
+	const problem = agentFileProblem(req.runtime, req.role, tier);
+	if (problem) return {
+		tier,
+		model,
+		status: "error",
+		durationMs: 0,
+		reply: "",
+		error: problem
+	};
+	const scratch = mkdtempSync(join(tmpdir(), "model-ladder-delegate-"));
 	try {
-		const inv = invocation(req.runtime, req.role, tier, tiers, prompt, req.cwd, scratch);
+		const inv = invocation(req, tier, tiers, prompt, scratch);
 		const res = spawnSync(inv.bin, inv.args, {
 			cwd: req.cwd,
 			input: inv.stdin ?? "",
 			encoding: "utf8",
-			timeout: req.timeoutMs,
+			timeout: timeoutMs,
 			maxBuffer: 67108864,
 			env: {
 				...process.env,
@@ -4565,7 +4641,7 @@ function runOnce(req, tier, tiers, prompt) {
 			status: "error",
 			durationMs,
 			reply: "",
-			error: res.error ? res.error.code === "ENOENT" ? `${inv.bin} is not installed or not on PATH` : res.error.message : `${inv.bin} exited with ${res.status}: ${(res.stderr || "").trim().split("\n").slice(-3).join(" ")}`
+			error: failure(inv.bin, res, timeoutMs)
 		};
 		let stdout = res.stdout ?? "";
 		if (inv.outFile) try {
@@ -4594,20 +4670,51 @@ function runOnce(req, tier, tiers, prompt) {
 		});
 	}
 }
-function escalationPrompt(original, previous) {
+/** What an edit rung left in the working tree, so the next rung continues from it. */
+function workingTreeChanges(cwd) {
+	try {
+		return execFileSync("git", [
+			"-C",
+			cwd,
+			"diff",
+			"--stat"
+		], {
+			encoding: "utf8",
+			stdio: [
+				"ignore",
+				"pipe",
+				"ignore"
+			],
+			timeout: 1e4
+		}).trim().slice(0, 1500);
+	} catch {
+		return "";
+	}
+}
+function escalationPrompt(req, previous) {
 	const summary = previous.error ?? previous.reply.slice(0, 2e3);
-	return `${original}\n\nPrevious attempt (${previous.tier} rung, STATUS: ${previous.status}):\n${summary}`;
+	let text = `${req.prompt}\n\nPrevious attempt (${previous.tier} rung, STATUS: ${previous.status}):\n${summary}`;
+	if (req.role === "edit") {
+		const changes = workingTreeChanges(req.cwd);
+		text += changes ? `\n\nThe previous attempt already changed these files; inspect them (git diff) and continue from their current state instead of starting over:\n${changes}` : "\n\nThe previous attempt may have changed files; check the working tree before editing.";
+	}
+	return text;
 }
 /** Runs the request, climbing one rung at a time while replies are not `done`. */
-function delegate(req, tiers) {
+function delegate(req, tiers, hooks = {}) {
+	const now = hooks.now ?? Date.now;
+	const deadline = now() + req.maxTimeMs;
 	const attempts = [];
 	let prompt = req.prompt;
 	for (const tier of TIERS.slice(TIERS.indexOf(req.tier))) {
-		const attempt = runOnce(req, tier, tiers, prompt);
+		const remaining = deadline - now();
+		if (remaining <= 0) break;
+		hooks.onStart?.(tier, tiers[tier].model || "session model");
+		const attempt = runOnce(req, tier, tiers, prompt, Math.min(req.timeoutMs, remaining));
 		attempts.push(attempt);
 		if (attempt.status === "done" || !req.climb) break;
-		if (attempt.error?.includes("not on PATH")) break;
-		prompt = escalationPrompt(req.prompt, attempt);
+		if (attempt.error && /not on PATH|not installed for|changed since install/.test(attempt.error)) break;
+		prompt = escalationPrompt(req, attempt);
 	}
 	return attempts;
 }
@@ -4627,7 +4734,8 @@ Usage:
   model-ladder self-update         update model-ladder itself (--dry-run only checks)
   model-ladder delegate <read|edit> [--tier t] [--runtime r] "<task>"
                                    run a ladder read or edit headlessly and print only its reply;
-                                   for agents that cannot spawn subagents (task from stdin if omitted)
+                                   for agents that cannot spawn subagents ("-" reads the task from
+                                   stdin; put a task that starts with - after --)
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -4646,12 +4754,33 @@ Delegate flags:
   --tier <fast|balanced|deep>    first rung (default: fast)
   --no-climb                     do not climb to the next rung on partial/escalate/failure
   --cwd <dir>                    working directory for the agent (default: current)
-  --timeout <seconds>            per-rung limit (default 600)
+  --timeout <seconds>            limit for one rung (default 600)
+  --max-time <seconds>           limit for all rungs together (default 1200)
+  --verify "<command>"           edit only: the one shell command the agent may run to check
+                                 its change (without it, Claude and Pi edit agents get no shell)
 
 Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
 3 uninstall kept files you edited (re-run with --force) / delegate ended partial or escalate,
 4 delegate refused: already running inside a model-ladder delegated agent, 130 cancelled.`;
 var UsageError = class extends Error {};
+const DELEGATE_ONLY = [
+	"tier",
+	"cwd",
+	"no-climb",
+	"timeout",
+	"max-time",
+	"verify"
+];
+const NOT_FOR_DELEGATE = [
+	"component",
+	"model",
+	"effort",
+	"review",
+	"min-lines",
+	"yes",
+	"dry-run",
+	"force"
+];
 function parseAssign(raw, flag) {
 	const m = /^([a-z-]+)(?::([a-z]+))?=(.*)$/.exec(raw);
 	if (!m) throw new UsageError(`${flag} expects <name>[:<tier>]=<value>, got "${raw}"`);
@@ -4731,6 +4860,8 @@ async function main(argv) {
 			cwd: { type: "string" },
 			"no-climb": { type: "boolean" },
 			timeout: { type: "string" },
+			"max-time": { type: "string" },
+			verify: { type: "string" },
 			yes: {
 				type: "boolean",
 				short: "y"
@@ -4752,6 +4883,9 @@ async function main(argv) {
 	if (values.version) return out(json, { version: VERSION }, VERSION), 0;
 	if (values.help) return out(false, null, HELP), 0;
 	const command = positionals[0] ?? "";
+	const given = Object.keys(values).filter((k) => values[k] !== void 0);
+	const misplaced = command === "delegate" ? given.find((k) => NOT_FOR_DELEGATE.includes(k)) : given.find((k) => DELEGATE_ONLY.includes(k));
+	if (misplaced) throw new UsageError(command === "delegate" ? `--${misplaced} does not apply to delegate` : `--${misplaced} only applies to delegate`);
 	switch (command) {
 		case "":
 			if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -4863,23 +4997,36 @@ async function main(argv) {
 			if (role !== "read" && role !== "edit") throw new UsageError("delegate expects read or edit");
 			const tier = values.tier ?? "fast";
 			if (!isTier(tier)) throw new UsageError(`unknown tier "${tier}"`);
+			const verify = values.verify?.trim();
+			if (verify !== void 0 && role !== "edit") throw new UsageError("--verify only applies to delegate edit");
+			if (verify !== void 0 && (!verify || /[\r\n]/.test(verify))) throw new UsageError("--verify expects one single-line command");
 			const config = loadConfig();
 			const runtime = values.runtime?.at(-1) ?? delegateRuntime(config.runtimes);
 			if (!runtime || !isRuntime(runtime)) throw new UsageError(runtime ? `unknown runtime "${runtime}"` : "no runtime found; pass --runtime");
+			const cwd = resolve(values.cwd ?? process.cwd());
+			if (!existsSync(cwd) || !statSync(cwd).isDirectory()) throw new UsageError(`--cwd ${cwd} is not a directory`);
 			let prompt = positionals.slice(2).join(" ").trim();
-			if (!prompt || prompt === "-") prompt = process.stdin.isTTY ? "" : readFileSync(0, "utf8").trim();
-			if (!prompt) throw new UsageError("delegate needs a task: pass it as an argument or on stdin");
-			const seconds = values.timeout === void 0 ? 600 : Number(values.timeout);
-			if (!Number.isFinite(seconds) || seconds <= 0) throw new UsageError("--timeout expects seconds");
+			if (prompt === "-") prompt = readFileSync(0, "utf8").trim();
+			if (!prompt) throw new UsageError("delegate needs a task: pass it as an argument, or \"-\" to read stdin");
+			const seconds = (flag, fallback) => {
+				const raw = values[flag];
+				const n = raw === void 0 ? fallback : Number(raw);
+				if (!Number.isFinite(n) || n <= 0) throw new UsageError(`--${flag} expects seconds`);
+				return n;
+			};
+			const timeout = seconds("timeout", 600);
+			const maxTime = seconds("max-time", 1200);
 			const attempts = delegate({
 				role,
 				tier,
 				runtime,
 				prompt,
-				cwd: values.cwd ?? process.cwd(),
+				cwd,
 				climb: values["no-climb"] !== true,
-				timeoutMs: seconds * 1e3
-			}, config.tiers[runtime]);
+				timeoutMs: timeout * 1e3,
+				maxTimeMs: maxTime * 1e3,
+				...verify ? { verify } : {}
+			}, config.tiers[runtime], { onStart: (t, model) => process.stderr.write(`model-ladder: ${role} ${t} (${model}) running…\n`) });
 			const last = attempts.at(-1);
 			for (const a of attempts) process.stderr.write(`model-ladder: ${role} ${a.tier} (${a.model}) → ${a.status} in ${(a.durationMs / 1e3).toFixed(1)}s${a.error ? `: ${a.error}` : ""}\n`);
 			out(json, {
@@ -4916,8 +5063,9 @@ async function main(argv) {
 			out(json, {
 				check,
 				updated: result.ok,
-				commit: result.commit
-			}, result.ok ? `Updated to v${check.latest?.version} (${result.commit}). Run \`model-ladder install\` to re-apply your configuration with it.` : "Update failed; the previous version is still installed.");
+				commit: result.commit,
+				message: result.message
+			}, result.ok ? `${result.message}. Run \`model-ladder install\` to re-apply your configuration with it.` : result.message);
 			return result.ok ? 0 : 1;
 		}
 		case "config": {
@@ -4933,7 +5081,8 @@ async function main(argv) {
 }
 main(process.argv.slice(2)).then((code) => process.exit(code), (error) => {
 	if (error instanceof UsageError || error?.code?.startsWith("ERR_PARSE_ARGS")) {
-		process.stderr.write(`error: ${error.message}\nRun model-ladder --help for usage.\n`);
+		const hint = error?.code?.startsWith("ERR_PARSE_ARGS") ? "A task that starts with - goes after --, e.g. model-ladder delegate read -- \"- item\".\n" : "";
+		process.stderr.write(`error: ${error.message}\n${hint}Run model-ladder --help for usage.\n`);
 		process.exit(2);
 	}
 	process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);

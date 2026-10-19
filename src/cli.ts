@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // model-ladder: the TUI for humans, plain commands (and --json) for scripts and agents.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
@@ -29,7 +30,8 @@ Usage:
   model-ladder self-update         update model-ladder itself (--dry-run only checks)
   model-ladder delegate <read|edit> [--tier t] [--runtime r] "<task>"
                                    run a ladder read or edit headlessly and print only its reply;
-                                   for agents that cannot spawn subagents (task from stdin if omitted)
+                                   for agents that cannot spawn subagents ("-" reads the task from
+                                   stdin; put a task that starts with - after --)
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -48,13 +50,28 @@ Delegate flags:
   --tier <fast|balanced|deep>    first rung (default: fast)
   --no-climb                     do not climb to the next rung on partial/escalate/failure
   --cwd <dir>                    working directory for the agent (default: current)
-  --timeout <seconds>            per-rung limit (default 600)
+  --timeout <seconds>            limit for one rung (default 600)
+  --max-time <seconds>           limit for all rungs together (default 1200)
+  --verify "<command>"           edit only: the one shell command the agent may run to check
+                                 its change (without it, Claude and Pi edit agents get no shell)
 
 Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
 3 uninstall kept files you edited (re-run with --force) / delegate ended partial or escalate,
 4 delegate refused: already running inside a model-ladder delegated agent, 130 cancelled.`;
 
 class UsageError extends Error {}
+
+const DELEGATE_ONLY = ["tier", "cwd", "no-climb", "timeout", "max-time", "verify"];
+const NOT_FOR_DELEGATE = [
+  "component",
+  "model",
+  "effort",
+  "review",
+  "min-lines",
+  "yes",
+  "dry-run",
+  "force",
+];
 
 function parseAssign(raw: string, flag: string): { left: string; tier: string; value: string } {
   const m = /^([a-z-]+)(?::([a-z]+))?=(.*)$/.exec(raw);
@@ -131,6 +148,8 @@ async function main(argv: string[]): Promise<number> {
       cwd: { type: "string" },
       "no-climb": { type: "boolean" },
       timeout: { type: "string" },
+      "max-time": { type: "string" },
+      verify: { type: "string" },
       yes: { type: "boolean", short: "y" },
       "dry-run": { type: "boolean" },
       force: { type: "boolean" },
@@ -144,6 +163,19 @@ async function main(argv: string[]): Promise<number> {
   if (values.help) return (out(false, null, HELP), 0);
 
   const command = positionals[0] ?? "";
+  // Flags that belong to one command are refused elsewhere instead of being silently ignored.
+  const given = Object.keys(values).filter((k) => values[k as keyof typeof values] !== undefined);
+  const misplaced =
+    command === "delegate"
+      ? given.find((k) => NOT_FOR_DELEGATE.includes(k))
+      : given.find((k) => DELEGATE_ONLY.includes(k));
+  if (misplaced) {
+    throw new UsageError(
+      command === "delegate"
+        ? `--${misplaced} does not apply to delegate`
+        : `--${misplaced} only applies to delegate`,
+    );
+  }
   switch (command) {
     case "": {
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -300,6 +332,12 @@ async function main(argv: string[]): Promise<number> {
       if (role !== "read" && role !== "edit") throw new UsageError("delegate expects read or edit");
       const tier = (values.tier as string | undefined) ?? "fast";
       if (!isTier(tier)) throw new UsageError(`unknown tier "${tier}"`);
+      const verify = (values.verify as string | undefined)?.trim();
+      if (verify !== undefined && role !== "edit")
+        throw new UsageError("--verify only applies to delegate edit");
+      if (verify !== undefined && (!verify || /[\r\n]/.test(verify))) {
+        throw new UsageError("--verify expects one single-line command");
+      }
       const config = loadConfig();
       const flagged = (values.runtime as string[] | undefined)?.at(-1);
       const runtime = flagged ?? delegateRuntime(config.runtimes);
@@ -308,25 +346,41 @@ async function main(argv: string[]): Promise<number> {
           runtime ? `unknown runtime "${runtime}"` : "no runtime found; pass --runtime",
         );
       }
+      const cwd = resolve((values.cwd as string | undefined) ?? process.cwd());
+      if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+        throw new UsageError(`--cwd ${cwd} is not a directory`);
+      }
+      // The task comes from the arguments, or from stdin only when asked for with "-": an agent's
+      // shell may hand over a stdin that never closes, so reading it implicitly could hang.
       let prompt = positionals.slice(2).join(" ").trim();
-      if (!prompt || prompt === "-")
-        prompt = process.stdin.isTTY ? "" : readFileSync(0, "utf8").trim();
+      if (prompt === "-") prompt = readFileSync(0, "utf8").trim();
       if (!prompt)
-        throw new UsageError("delegate needs a task: pass it as an argument or on stdin");
-      const seconds = values.timeout === undefined ? 600 : Number(values.timeout);
-      if (!Number.isFinite(seconds) || seconds <= 0)
-        throw new UsageError("--timeout expects seconds");
+        throw new UsageError('delegate needs a task: pass it as an argument, or "-" to read stdin');
+      const seconds = (flag: "timeout" | "max-time", fallback: number): number => {
+        const raw = values[flag];
+        const n = raw === undefined ? fallback : Number(raw);
+        if (!Number.isFinite(n) || n <= 0) throw new UsageError(`--${flag} expects seconds`);
+        return n;
+      };
+      const timeout = seconds("timeout", 600);
+      const maxTime = seconds("max-time", 1200);
       const attempts = delegate(
         {
           role,
           tier,
           runtime,
           prompt,
-          cwd: (values.cwd as string | undefined) ?? process.cwd(),
+          cwd,
           climb: values["no-climb"] !== true,
-          timeoutMs: seconds * 1000,
+          timeoutMs: timeout * 1000,
+          maxTimeMs: maxTime * 1000,
+          ...(verify ? { verify } : {}),
         },
         config.tiers[runtime],
+        {
+          onStart: (t, model) =>
+            process.stderr.write(`model-ladder: ${role} ${t} (${model}) running…\n`),
+        },
       );
       const last = attempts.at(-1);
       for (const a of attempts) {
@@ -372,10 +426,10 @@ async function main(argv: string[]): Promise<number> {
       if (!result.ok) process.stderr.write(result.log);
       out(
         json,
-        { check, updated: result.ok, commit: result.commit },
+        { check, updated: result.ok, commit: result.commit, message: result.message },
         result.ok
-          ? `Updated to v${check.latest?.version} (${result.commit}). Run \`model-ladder install\` to re-apply your configuration with it.`
-          : "Update failed; the previous version is still installed.",
+          ? `${result.message}. Run \`model-ladder install\` to re-apply your configuration with it.`
+          : result.message,
       );
       return result.ok ? 0 : 1;
     }
@@ -400,8 +454,11 @@ main(process.argv.slice(2)).then(
       error instanceof UsageError ||
       (error as { code?: string })?.code?.startsWith("ERR_PARSE_ARGS")
     ) {
+      const hint = (error as { code?: string })?.code?.startsWith("ERR_PARSE_ARGS")
+        ? 'A task that starts with - goes after --, e.g. model-ladder delegate read -- "- item".\n'
+        : "";
       process.stderr.write(
-        `error: ${(error as Error).message}\nRun model-ladder --help for usage.\n`,
+        `error: ${(error as Error).message}\n${hint}Run model-ladder --help for usage.\n`,
       );
       process.exit(2);
     }

@@ -98,10 +98,11 @@ If you are yourself a subagent or a parallel worker without an agent tool, run t
 
 \`\`\`sh
 model-ladder delegate read --runtime ${runtime} "<the read handoff above>"
-model-ladder delegate edit --runtime ${runtime} --tier balanced "<the edit handoff above>"
+model-ladder delegate edit --runtime ${runtime} --tier balanced --verify "<verify command>" "<the edit handoff above>"
+printf '%s' "<long handoff>" | model-ladder delegate read --runtime ${runtime} -
 \`\`\`
 
-It runs the ladder agent headlessly, climbs fast → balanced → deep by itself on \`partial\`, \`escalate\` or failure, and prints only the final reply (rung and timing go to stderr; \`--json\` for structured output, \`--no-climb\` to stay on one rung, task on stdin when omitted). Exit codes: 0 done, 3 still partial after the last rung, 1 failed, 4 refused because you are already running inside a delegated agent: then do the work yourself or reply \`STATUS: escalate\`. Ladder agents never call it.
+It runs the ladder agent headlessly, climbs fast → balanced → deep by itself on \`partial\`, \`escalate\` or failure, and prints only the final reply (rung and timing go to stderr; \`--json\` for structured output, \`--no-climb\` to stay on one rung, \`-\` to read the task from stdin). Edits may run only the \`--verify\` command; without it the edit agent gets no shell. Exit codes: 0 done, 3 still partial after the last rung, 1 failed, 4 refused because you are already running inside a delegated agent: then do the work yourself or reply \`STATUS: escalate\`. Ladder agents never call it.
 
 ## Climbing
 
