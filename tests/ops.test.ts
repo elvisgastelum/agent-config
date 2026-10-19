@@ -346,3 +346,65 @@ describe("gentle ai review models", () => {
     expect(read(jsonc)).not.toContain("model");
   });
 });
+
+describe("broken symlinks on the target path", () => {
+  const fileOp = (path: string): PlannedOp => ({
+    op: {
+      kind: "file",
+      runtime: "codex",
+      component: "skill",
+      path,
+      content: "new\n",
+      label: "skill",
+    },
+    action: "create",
+  });
+
+  test("a dangling symlink in place of a directory is replaced, and uninstall puts it back", () => {
+    const skills = join(box.home, ".codex/skills");
+    const link = join(skills, "kaneo-work-tracking");
+    const gone = join(box.home, "removed-checkout/kaneo-work-tracking");
+    put(join(skills, "keep.txt"), "x");
+    symlinkSync(gone, link);
+    const file = join(link, "SKILL.md");
+
+    const result = applyPlan([fileOp(file)]);
+    expect(result.errors).toEqual([]);
+    expect(lstatSync(link).isDirectory()).toBe(true);
+    expect(read(file)).toBe("new\n");
+    expect(existsSync(gone)).toBe(false);
+
+    uninstall(() => true);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(link)).toBe(false);
+    expect(read(join(skills, "keep.txt"))).toBe("x");
+    expect(loadManifest().records).toEqual([]);
+  });
+
+  test("a dangling symlink in place of the file is replaced, and uninstall puts it back", () => {
+    const file = join(box.home, ".codex/skills/kaneo-work-tracking/SKILL.md");
+    put(join(box.home, ".codex/skills/kaneo-work-tracking/other.md"), "x");
+    symlinkSync(join(box.home, "nowhere.md"), file);
+
+    expect(applyPlan([fileOp(file)]).errors).toEqual([]);
+    expect(lstatSync(file).isFile()).toBe(true);
+    expect(read(file)).toBe("new\n");
+
+    uninstall(() => true);
+    expect(lstatSync(file).isSymbolicLink()).toBe(true);
+  });
+
+  test("the plan says it replaces the broken symlink", () => {
+    const link = join(box.home, ".codex/skills/kaneo-work-tracking");
+    put(join(box.home, ".codex/skills/keep.txt"), "x");
+    symlinkSync(join(box.home, "gone"), link);
+    const c: Config = {
+      ...defaultConfig(),
+      catalog: [{ item: "kaneo", runtimes: ["codex"], settings: {} }],
+    };
+    const plan = buildPlan(c, ["kaneo@user"]);
+    const skill = plan.find((p) => p.op.path === join(link, "SKILL.md"));
+    expect(skill?.action).toBe("create");
+    expect(skill?.reason).toContain("broken symlink");
+  });
+});
