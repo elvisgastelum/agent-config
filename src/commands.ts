@@ -94,7 +94,11 @@ export function buildPlan(config: Config, only?: string[]): PlannedOp[] {
 export function restoreShared(config: Config, removed: string[]): ApplyResult["errors"] {
   const paths = new Set(removed);
   const plan = buildPlan(config, config.catalog.map(entryKey));
-  return applyPlan(plan.filter((x) => x.action === "create" && paths.has(x.op.path))).errors;
+  // A block stripped from a file that stays (a project's own AGENTS.md) plans as an update.
+  const back = plan.filter(
+    (x) => (x.action === "create" || x.action === "update") && paths.has(x.op.path),
+  );
+  return applyPlan(back).errors;
 }
 
 export interface UninstallOutcome {

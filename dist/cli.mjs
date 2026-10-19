@@ -4957,7 +4957,7 @@ function buildPlan(config, only) {
 */
 function restoreShared(config, removed) {
 	const paths = new Set(removed);
-	return applyPlan(buildPlan(config, config.catalog.map(entryKey)).filter((x) => x.action === "create" && paths.has(x.op.path))).errors;
+	return applyPlan(buildPlan(config, config.catalog.map(entryKey)).filter((x) => (x.action === "create" || x.action === "update") && paths.has(x.op.path))).errors;
 }
 /**
 * Undoes what agent-config installed, limited to one catalog entry (`key`) and/or some runtimes,
