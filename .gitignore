@@ -7,3 +7,6 @@ node_modules
 .env.*
 !.env.example
 .atl/
+
+# ODD feature documents (local agent logbooks)
+odd/
