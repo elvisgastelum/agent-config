@@ -82,14 +82,14 @@ Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
 
 Model ladder flags (\`install model-ladder\`; on a bare \`install\` they install the ladder too):
-  --component <id>             ${COMPONENTS.join(" | ")} (repeatable; default: saved, else all)
+  --component <id>               ${COMPONENTS.join(" | ")} (repeatable; default: saved, else all)
   --model <runtime>:<tier>=<id>  model for a rung, e.g. claude:fast=claude-haiku-5-5 (repeatable)
   --effort <runtime>:<tier>=<l>  low | medium | high, e.g. codex:deep=high (repeatable)
   --review <lens>=<tier>         rung for a Gentle AI review agent, e.g. review-risk=deep (repeatable)
   --min-lines <n>                read guard threshold (default 350)
 
 Other flags:
-  --yes                        apply or uninstall without asking
+  --yes                          apply or uninstall without asking
   --dry-run                      show the plan, write nothing
   --project <dir>                catalog item: install into this repository instead of user scope
   --url <base-url>               kaneo: Kaneo base URL, e.g. https://kaneo.example.com (default:
@@ -209,6 +209,23 @@ function catalogTarget(
     status().some((e) => e.record.item === key);
   if (forUninstall && known) return { item, project };
   throw new UsageError(`--project ${project} is not a directory`);
+}
+
+/** Resolves the entry `install <id>` names, applies the ladder flags to it, and saves it in `config`. */
+async function saveEntryFor(
+  id: string,
+  config: Config,
+  values: Record<string, unknown>,
+): Promise<CatalogEntry> {
+  const { item, project } = catalogTarget(id, values);
+  for (const flag of CATALOG_ONLY.filter((f) => f !== "project" && values[f] !== undefined)) {
+    if (!item.settings.some((s) => s.flag === flag))
+      throw new UsageError(`--${flag} does not apply to ${item.id}`);
+  }
+  const entry = await catalogEntryFor(item, project, config, values);
+  if (item.id === LADDER_ITEM) applyLadderFlags(config, values);
+  upsertEntry(config, entry);
+  return entry;
 }
 
 /** The catalog entry to install: flags first, then what was saved, detected, or asked. */
@@ -404,17 +421,15 @@ async function main(argv: string[]): Promise<number> {
     case "install":
     case "apply": {
       const config = loadConfig();
-      // Ladder flags on a bare install keep configuring the ladder, as before 0.5.0.
-      const ladderFlags = ladderFlag !== undefined || values.runtime !== undefined;
-      const id = itemId ?? (ladderFlags ? LADDER_ITEM : undefined);
-      if (id) {
-        const { item, project } = catalogTarget(id, values);
-        const entry = await catalogEntryFor(item, project, config, values);
-        if (item.id === LADDER_ITEM) applyLadderFlags(config, values);
-        upsertEntry(config, entry);
-        if (itemId)
-          return applyAndReport(buildPlan(config, [entryKey(entry)]), config, values, json);
+      // `install <item>` plans only that item.
+      if (itemId) {
+        const entry = await saveEntryFor(itemId, config, values);
+        return applyAndReport(buildPlan(config, [entryKey(entry)]), config, values, json);
       }
+      // A bare install with ladder flags still configures the ladder, as before 0.5.0, and then
+      // re-applies everything saved, like any bare install.
+      if (ladderFlag !== undefined || values.runtime !== undefined)
+        await saveEntryFor(LADDER_ITEM, config, values);
       if (config.catalog.length === 0) {
         throw new UsageError(
           `nothing to install yet; add a catalog item, e.g. \`agent-config install ${LADDER_ITEM}\` (see \`agent-config catalog\`)`,

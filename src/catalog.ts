@@ -353,12 +353,17 @@ export function missingProjects(config: Config): CatalogEntry[] {
 
 /**
  * Ops for the saved catalog entries (only those whose key is in `keys`, when given). At project
- * scope several runtimes share AGENTS.md; that block is planned once, for the first runtime.
+ * scope several runtimes share AGENTS.md; that block is planned once, for the first runtime. The
+ * ladder is planned first, as it was before it became a catalog item.
  */
 export function catalogOps(config: Config, keys?: string[]): Op[] {
   const ops = new Map<string, Op>();
   const missing = new Set(missingProjects(config).map(entryKey));
-  for (const entry of config.catalog) {
+  const entries = [
+    ...config.catalog.filter((e) => e.item === LADDER_ITEM),
+    ...config.catalog.filter((e) => e.item !== LADDER_ITEM),
+  ];
+  for (const entry of entries) {
     const key = entryKey(entry);
     const item = catalogItem(entry.item);
     if (!item || (keys && !keys.includes(key)) || missing.has(key)) continue;

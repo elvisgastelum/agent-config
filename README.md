@@ -79,7 +79,7 @@ Also: **Re-apply installed items** (writes every saved item again), **Status** (
 | `--url <base-url>`                              | `kaneo`: Kaneo base URL, e.g. `https://kaneo.example.com`.                     |
 | `--yes`, `--dry-run`, `--force`, `--json`       | Skip confirmation; preview; remove edited files on uninstall; machine output.  |
 
-`--component`, `--model`, `--effort`, `--review` and `--min-lines` configure the model ladder: use them with `install model-ladder`. On a bare `install` they (and `--runtime`) install the ladder too, so scripts written before 0.5.0 keep working.
+`--component`, `--model`, `--effort`, `--review` and `--min-lines` configure the model ladder: use them with `install model-ladder`. On a bare `install` they (and `--runtime`) install the ladder too, so scripts written before 0.5.0 that pass one of them keep working. A bare `install` with no flags and nothing saved no longer installs the ladder: it exits `2` and asks for an item.
 
 Exit codes: `0` ok, `1` a step failed, `2` usage error or refusal (for example `install` without `--yes` outside a terminal), `3` uninstall finished but kept files you edited (re-run with `--force`), `130` cancelled.
 

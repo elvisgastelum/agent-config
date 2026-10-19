@@ -4724,12 +4724,14 @@ function missingProjects(config) {
 }
 /**
 * Ops for the saved catalog entries (only those whose key is in `keys`, when given). At project
-* scope several runtimes share AGENTS.md; that block is planned once, for the first runtime.
+* scope several runtimes share AGENTS.md; that block is planned once, for the first runtime. The
+* ladder is planned first, as it was before it became a catalog item.
 */
 function catalogOps(config, keys) {
 	const ops = /* @__PURE__ */ new Map();
 	const missing = new Set(missingProjects(config).map(entryKey));
-	for (const entry of config.catalog) {
+	const entries = [...config.catalog.filter((e) => e.item === LADDER_ITEM), ...config.catalog.filter((e) => e.item !== LADDER_ITEM)];
+	for (const entry of entries) {
 		const key = entryKey(entry);
 		const item = catalogItem(entry.item);
 		if (!item || keys && !keys.includes(key) || missing.has(key)) continue;
@@ -5079,7 +5081,7 @@ function buildPlan(config, only) {
 	const missing = new Set(missingProjects(config).map(entryKey));
 	const planned = new Set((only ?? config.catalog.map(entryKey)).filter((k) => !missing.has(k)));
 	const ladder = ladderRuntimes(config);
-	return [...manifest.filter((r) => r.item !== void 0 && planned.has(r.item) && !wanted.has(recordKey(r)) && (r.component === "catalog" || ladder.includes(r.runtime) && config.components.includes(r.component))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
+	return [...manifest.filter((r) => r.item !== void 0 && planned.has(r.item) && !wanted.has(recordKey(r)) && (r.item !== "model-ladder@user" || ladder.includes(r.runtime) && config.components.includes(r.component))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
 }
 /**
 * After uninstalling some runtimes, puts back catalog files the remaining runtimes still use: a
@@ -5099,7 +5101,7 @@ function uninstallSelection(selection, force = false) {
 	const results = uninstall((r) => (key === void 0 || r.item === key) && (runtimes.length === 0 || runtimes.includes(r.runtime)), force);
 	const kept = new Set(results.filter((r) => r.outcome === "kept-modified").map((r) => r.record.item));
 	const config = loadConfig();
-	forgetCatalog(config, (e) => (key === void 0 || entryKey(e) === key) && !kept.has(entryKey(e)), runtimes);
+	forgetCatalog(config, (e) => (key === void 0 || entryKey(e) === key) && (e.item === "model-ladder" || !kept.has(entryKey(e))), runtimes);
 	saveConfig(config);
 	const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
 	return {
@@ -5725,7 +5727,7 @@ function agentFileProblem(runtime, role, tier) {
 	const name = agentName(role, tier);
 	const file = runtime === "claude" ? join(claudeDir(), "agents", `${name}.md`) : runtime === "opencode" ? join(opencodeDir(), "agents", `${name}.md`) : void 0;
 	if (!file) return void 0;
-	const fix = `run \`agent-config install --runtime ${runtime}\``;
+	const fix = `run \`agent-config install model-ladder --runtime ${runtime}\``;
 	if (!existsSync(file)) return `${name} is not installed for ${runtime}; ${fix}`;
 	if (runtime === "opencode" && role === "read") {
 		const text = readFileSync(file, "utf8");
@@ -5905,14 +5907,14 @@ Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
 
 Model ladder flags (\`install model-ladder\`; on a bare \`install\` they install the ladder too):
-  --component <id>             ${COMPONENTS.join(" | ")} (repeatable; default: saved, else all)
+  --component <id>               ${COMPONENTS.join(" | ")} (repeatable; default: saved, else all)
   --model <runtime>:<tier>=<id>  model for a rung, e.g. claude:fast=claude-haiku-5-5 (repeatable)
   --effort <runtime>:<tier>=<l>  low | medium | high, e.g. codex:deep=high (repeatable)
   --review <lens>=<tier>         rung for a Gentle AI review agent, e.g. review-risk=deep (repeatable)
   --min-lines <n>                read guard threshold (default 350)
 
 Other flags:
-  --yes                        apply or uninstall without asking
+  --yes                          apply or uninstall without asking
   --dry-run                      show the plan, write nothing
   --project <dir>                catalog item: install into this repository instead of user scope
   --url <base-url>               kaneo: Kaneo base URL, e.g. https://kaneo.example.com (default:
@@ -6033,6 +6035,15 @@ function catalogTarget(id, values, forUninstall = false) {
 		project
 	};
 	throw new UsageError(`--project ${project} is not a directory`);
+}
+/** Resolves the entry `install <id>` names, applies the ladder flags to it, and saves it in `config`. */
+async function saveEntryFor(id, config, values) {
+	const { item, project } = catalogTarget(id, values);
+	for (const flag of CATALOG_ONLY.filter((f) => f !== "project" && values[f] !== void 0)) if (!item.settings.some((s) => s.flag === flag)) throw new UsageError(`--${flag} does not apply to ${item.id}`);
+	const entry = await catalogEntryFor(item, project, config, values);
+	if (item.id === "model-ladder") applyLadderFlags(config, values);
+	upsertEntry(config, entry);
+	return entry;
 }
 /** The catalog entry to install: flags first, then what was saved, detected, or asked. */
 async function catalogEntryFor(item, project, config, values) {
@@ -6204,15 +6215,8 @@ async function main(argv) {
 		case "install":
 		case "apply": {
 			const config = loadConfig();
-			const ladderFlags = ladderFlag !== void 0 || values.runtime !== void 0;
-			const id = itemId ?? (ladderFlags ? "model-ladder" : void 0);
-			if (id) {
-				const { item, project } = catalogTarget(id, values);
-				const entry = await catalogEntryFor(item, project, config, values);
-				if (item.id === "model-ladder") applyLadderFlags(config, values);
-				upsertEntry(config, entry);
-				if (itemId) return applyAndReport(buildPlan(config, [entryKey(entry)]), config, values, json);
-			}
+			if (itemId) return applyAndReport(buildPlan(config, [entryKey(await saveEntryFor(itemId, config, values))]), config, values, json);
+			if (ladderFlag !== void 0 || values.runtime !== void 0) await saveEntryFor(LADDER_ITEM, config, values);
 			if (config.catalog.length === 0) throw new UsageError(`nothing to install yet; add a catalog item, e.g. \`agent-config install ${LADDER_ITEM}\` (see \`agent-config catalog\`)`);
 			for (const w of missingProjectWarnings(config)) process.stderr.write(`agent-config: warning: ${w}\n`);
 			return applyAndReport(buildPlan(config), config, values, json);
