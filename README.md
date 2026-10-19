@@ -12,6 +12,8 @@ edits  ─┘                          └─ deep      Opus 5.5    last resort,
 
 It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the rungs for **Gentle AI review agents**, and undoes everything with one command.
 
+A **catalog** adds optional abilities on demand, for your user config or one repository: `agi install kaneo` adds Kaneo work tracking. See [Catalog](#catalog).
+
 ## Install
 
 ```sh
@@ -45,6 +47,8 @@ Uninstall restores what agent-config replaced: backed-up files come back, JSON k
 2. A colored plan per agent: `create`, `update`, `unchanged`, `skip`, with the target path.
 3. Confirm, apply, done. Choices are saved to `~/.config/agent-config/config.json`.
 
+**Catalog**: pick an item, install it for your user or for one project directory, pick agents and settings (such as the Kaneo URL), review the plan and apply; or uninstall one copy.
+
 Also: **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (runtimes, Codex `multi_agent`, Pi subagent support, drift), **Uninstall**, **Update agent-config version** (checks GitHub, shows the installed and new versions, updates with rollback if the new version does not run, then offers to re-apply your saved configuration), **Reset saved choices**.
 
 ## Commands
@@ -53,8 +57,11 @@ Also: **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent-config`                                | Opens the TUI.                                                                                                                                          |
 | `agent-config install`                        | Applies the saved choices (or detected runtimes on first run). Asks to confirm.                                                                         |
+| `agent-config install <item>`                 | Adds a catalog item, e.g. `agi install kaneo`. `--project <dir>` installs it into one repository instead of your user config. See [Catalog](#catalog).  |
+| `agent-config catalog`                        | Lists catalog items and where each one is installed.                                                                                                    |
 | `agent-config status`                         | Lists what agent-config installed and whether it still matches.                                                                                         |
 | `agent-config uninstall`                      | Undoes it. `--runtime` limits it to some agents.                                                                                                        |
+| `agent-config uninstall <item>`               | Removes only that catalog item (`--project <dir>` for its project copy).                                                                                |
 | `agent-config doctor`                         | Checks runtimes and prerequisites.                                                                                                                      |
 | `agent-config config`                         | Prints the saved choices and their path.                                                                                                                |
 | `agent-config self-update`                    | Updates agent-config itself from GitHub (`--dry-run` only checks). Then run `agent-config install` to re-apply your configuration with the new version. |
@@ -68,6 +75,8 @@ Also: **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (
 | `--effort <runtime>:<tier>=<low\|medium\|high>` | Reasoning effort (Codex, Pi).                                                  |
 | `--review <lens>=<tier>`                        | e.g. `--review review-risk=deep`.                                              |
 | `--min-lines <n>`                               | Read-guard threshold (default 350).                                            |
+| `--project <dir>`                               | Catalog item: install into or remove from this repository.                     |
+| `--url <base-url>`                              | `kaneo`: Kaneo base URL, e.g. `https://kaneo.example.com`.                     |
 | `--yes`, `--dry-run`, `--force`, `--json`       | Skip confirmation; preview; remove edited files on uninstall; machine output.  |
 
 Exit codes: `0` ok, `1` a step failed, `2` usage error or refusal (for example `install` without `--yes` outside a terminal), `3` uninstall finished but kept files you edited (re-run with `--force`), `130` cancelled.
@@ -95,6 +104,36 @@ Read agents get read-only tools (Claude `Read, Grep, Glob`; OpenCode `edit: deny
 Codex cannot run Claude models, so its ladder climbs by reasoning effort. Set cheaper Codex models per rung in the TUI or with `--model codex:fast=<id>`.
 
 **Gentle AI review lenses** default to: readability on fast; risk, resilience, reliability and the refuter on balanced. Gentle AI owns these files: `gentle-ai sync` may reset the model. `agent-config status` shows that as `drifted`; `agent-config install` reapplies it.
+
+## Catalog
+
+Optional abilities, installed per item and scope through the same manifest as the ladder, so `status` tracks them and uninstall restores what they replaced.
+
+```sh
+agi catalog                                     # items and where they are installed
+agi install kaneo --url https://kaneo.example.com   # user scope: every project
+agi install kaneo --project .                   # one repository, committed with it
+agi uninstall kaneo [--project .]               # remove that copy only
+```
+
+`--runtime` picks agents (default: the item's saved agents, else your configured ones, else detected). Settings come from the flag, else the saved entry, else what is already configured on the machine, else a prompt; outside a terminal a missing setting is a usage error. `agent-config install` without an item re-applies the ladder and every saved catalog entry.
+
+### kaneo
+
+[Kaneo](https://kaneo.app) work tracking, moved here from [kaneo-work-tracking-skill](https://github.com/elvisgastelum/kaneo-work-tracking-skill):
+
+- `kaneo-work-tracking` skill: stories, Fibonacci point labels, splitting with `blocks` relations, ticket identifiers such as `FEX-2`, branch names `FEX-2/short-description`, and PR bodies that link the ticket.
+- Cheap models: the skill gathers ticket context with `ladder-read-fast` and hands ticket writes and board summaries to **`kaneo-scribe`**, an agent on your fast rung that only has the Kaneo MCP tools, so Kaneo JSON never fills the main session.
+- An always-on instructions block, and the `kaneo` MCP server at `<base-url>/api/mcp`. The URL is reused from an existing `kaneo` entry in `~/.claude.json`, OpenCode or Pi when you omit `--url`.
+
+| Part           | User scope (Claude / OpenCode / Codex / Pi)                                                                                 | Project scope (`--project <dir>`)                                        |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| skill          | `<runtime dir>/skills/kaneo-work-tracking/`                                                                                 | `.claude/skills/`, `.opencode/skills/`, `.agents/skills/`, `.pi/skills/` |
+| `kaneo-scribe` | `<runtime dir>/agents/`                                                                                                     | `.claude/agents/`, `.opencode/agents/`, `.codex/agents/`, `.pi/agents/`  |
+| instructions   | `~/.claude/CLAUDE.md`, `AGENTS.md` of each runtime                                                                          | `CLAUDE.md`, `AGENTS.md` (one shared block)                              |
+| MCP server     | `~/.claude.json` `mcpServers`, `opencode.jsonc` `mcp`, `~/.codex/config.toml` `[mcp_servers.kaneo]`, `~/.pi/agent/mcp.json` | `.mcp.json`, `opencode.json`, `.codex/config.toml`; Pi: user scope only  |
+
+A block left by the old standalone installer (`BEGIN kaneo-work-tracking-skill`) is replaced in place. When `config.toml` already defines `[mcp_servers.kaneo]` itself, agent-config leaves it alone.
 
 ## How the routing works
 
