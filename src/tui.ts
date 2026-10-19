@@ -279,11 +279,11 @@ async function selfUpdateFlow(): Promise<boolean> {
   spin.start("Updating");
   const result = runUpdate(check);
   if (!result.ok) {
-    spin.stop(pc.red("Update failed; the previous version is still installed"));
+    spin.stop(pc.red(result.message));
     if (result.log.trim()) p.log.error(result.log.trim());
     return false;
   }
-  spin.stop(`Updated to v${latest.version} (${result.commit})`);
+  spin.stop(result.message);
   if (
     status().length > 0 &&
     ask(
