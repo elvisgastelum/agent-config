@@ -128,6 +128,8 @@ test("install kaneo --project writes into the repository and reuses the user's K
   try {
     const res = run("install", "kaneo", "--project", repo, "--runtime", "claude", "--yes");
     expect(res.code).toBe(0);
+    expect(res.stderr).toContain("from your user config");
+    expect(res.stderr).toContain(repo);
     expect(JSON.parse(read(join(repo, ".mcp.json"))).mcpServers.kaneo.url).toBe(
       "https://k.example.com/api/mcp",
     );
@@ -190,6 +192,42 @@ test("a partial runtime uninstall at project scope keeps the shared AGENTS.md bl
     expect(existsSync(join(repo, ".opencode/skills/kaneo-work-tracking/SKILL.md"))).toBe(false);
     expect(existsSync(join(repo, ".agents/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);
     expect(existsSync(join(repo, ".codex/agents/kaneo-scribe.toml"))).toBe(false);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("install kaneo warns about a plain http URL", () => {
+  const res = run(
+    "install",
+    "kaneo",
+    "--runtime",
+    "claude",
+    "--url",
+    "http://k.example.com",
+    "--yes",
+  );
+  expect(res.code).toBe(0);
+  expect(res.stderr).toContain("not https");
+});
+
+test("a project whose directory is gone is skipped by install and forgotten by uninstall", () => {
+  const repo = mkdtempSync(join(tmpdir(), "model-ladder-repo-"));
+  try {
+    const args = ["--project", repo, "--runtime", "claude", "--url", "https://k.example.com"];
+    expect(run("install", "kaneo", ...args, "--yes").code).toBe(0);
+    rmSync(repo, { recursive: true, force: true });
+
+    const whole = run("install", "--runtime", "claude", "--yes");
+    expect(whole.code).toBe(0);
+    expect(whole.stderr).toContain("is gone");
+    expect(existsSync(repo)).toBe(false);
+
+    expect(run("uninstall", "kaneo", "--project", repo, "--yes").code).toBe(0);
+    const listed = JSON.parse(run("catalog", "--json").stdout);
+    expect(listed.items.find((i: { id: string }) => i.id === "kaneo").entries).toEqual([]);
+    expect(run("install", "--runtime", "claude", "--yes").code).toBe(0);
+    expect(existsSync(repo)).toBe(false);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

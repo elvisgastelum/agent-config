@@ -116,7 +116,7 @@ agi install kaneo --project .                   # one repository, committed with
 agi uninstall kaneo [--project .]               # remove that copy only
 ```
 
-`--runtime` picks agents (default: the item's saved agents, else your configured ones, else detected). Settings come from the flag, else the saved entry, else what is already configured on the machine, else a prompt; outside a terminal a missing setting is a usage error. `agent-config install` without an item re-applies the ladder and every saved catalog entry.
+`--runtime` picks agents (default: the item's saved agents, else your configured ones, else detected). Settings come from the flag, else the saved entry, else what is already configured on the machine, else a prompt; outside a terminal a missing setting is a usage error. `agent-config install` without an item re-applies the ladder and every saved catalog entry. A project entry whose directory is gone is skipped with a warning; `agi uninstall <item> --project <dir>` still forgets it.
 
 ### kaneo
 
@@ -124,16 +124,16 @@ agi uninstall kaneo [--project .]               # remove that copy only
 
 - `kaneo-work-tracking` skill: stories, Fibonacci point labels, splitting with `blocks` relations, ticket identifiers such as `FEX-2`, branch names `FEX-2/short-description`, and PR bodies that link the ticket.
 - Cheap models: the skill gathers ticket context with `ladder-read-fast` and hands ticket writes and board summaries to **`kaneo-scribe`**, an agent on your fast rung that only has the Kaneo MCP tools, so Kaneo JSON never fills the main session.
-- An always-on instructions block, and the `kaneo` MCP server at `<base-url>/api/mcp`. The URL is reused from an existing `kaneo` entry in `~/.claude.json`, OpenCode or Pi when you omit `--url`.
+- An always-on instructions block, and the `kaneo` MCP server at `<base-url>/api/mcp`. A pasted dashboard or MCP link is cut back to the base URL, and a non-local `http://` URL gets a warning. When you omit `--url`, the URL is reused from an existing `kaneo` entry in `~/.claude.json`, OpenCode or Pi; for `--project` installs agent-config says so, because the URL lands in files you commit.
 
-| Part           | User scope (Claude / OpenCode / Codex / Pi)                                                                                 | Project scope (`--project <dir>`)                                        |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| skill          | `<runtime dir>/skills/kaneo-work-tracking/`                                                                                 | `.claude/skills/`, `.opencode/skills/`, `.agents/skills/`, `.pi/skills/` |
-| `kaneo-scribe` | `<runtime dir>/agents/`                                                                                                     | `.claude/agents/`, `.opencode/agents/`, `.codex/agents/`, `.pi/agents/`  |
-| instructions   | `~/.claude/CLAUDE.md`, `AGENTS.md` of each runtime                                                                          | `CLAUDE.md`, `AGENTS.md` (one shared block)                              |
-| MCP server     | `~/.claude.json` `mcpServers`, `opencode.jsonc` `mcp`, `~/.codex/config.toml` `[mcp_servers.kaneo]`, `~/.pi/agent/mcp.json` | `.mcp.json`, `opencode.json`, `.codex/config.toml`; Pi: user scope only  |
+| Part           | User scope (Claude / OpenCode / Codex / Pi)                                                                                 | Project scope (`--project <dir>`)                                           |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| skill          | `<runtime dir>/skills/kaneo-work-tracking/`                                                                                 | `.claude/skills/`, `.opencode/skills/`, `.agents/skills/`, `.pi/skills/`    |
+| `kaneo-scribe` | `<runtime dir>/agents/`                                                                                                     | `.claude/agents/`, `.opencode/agents/`, `.codex/agents/`, `.pi/agents/`     |
+| instructions   | `~/.claude/CLAUDE.md`, `AGENTS.md` of each runtime                                                                          | `CLAUDE.md`, `AGENTS.md` (one shared block naming each agent that reads it) |
+| MCP server     | `~/.claude.json` `mcpServers`, `opencode.jsonc` `mcp`, `~/.codex/config.toml` `[mcp_servers.kaneo]`, `~/.pi/agent/mcp.json` | `.mcp.json`, `opencode.json`, `.codex/config.toml`, `.pi/mcp.json`          |
 
-The Claude scribe may call only Kaneo MCP tools, the OpenCode one cannot edit or run shell commands, and the Codex one runs read-only. Pi has no such restriction (it reaches MCP servers through its adapter's tool), so on Pi only the prompt keeps the scribe away from files and the shell.
+The Claude scribe may call only Kaneo MCP tools, the OpenCode one cannot edit or run shell commands, the Codex one runs read-only, and the Pi one has only `tool_search`, which loads undeclared MCP tools such as Kaneo's (not `codemode`, whose scripts can run `bash`).
 
 A block left by the old standalone installer (`BEGIN kaneo-work-tracking-skill`) is replaced in place. When `config.toml` already defines `[mcp_servers.kaneo]` itself, agent-config leaves it alone.
 
