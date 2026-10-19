@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
@@ -69,4 +69,15 @@ test("usage errors exit 2", () => {
   expect(run("install", "--model", "claude:huge=x").code).toBe(2);
   expect(run("frobnicate").code).toBe(2);
   expect(run().code).toBe(2);
+});
+
+test("uninstall exits 3 when it keeps a file you edited", () => {
+  expect(run("install", "--runtime", "claude", "--yes").code).toBe(0);
+  const agent = join(home, ".claude/agents/ladder-read-fast.md");
+  writeFileSync(agent, "edited\n");
+  const res = run("uninstall", "--yes");
+  expect(res.code).toBe(3);
+  expect(read(agent)).toBe("edited\n");
+  expect(run("uninstall", "--yes", "--force").code).toBe(0);
+  expect(existsSync(agent)).toBe(false);
 });

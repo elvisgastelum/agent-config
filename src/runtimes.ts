@@ -55,8 +55,18 @@ function yamlString(value: string): string {
   return JSON.stringify(value);
 }
 
-function tomlMultiline(text: string): string {
-  return `"""\n${text.replace(/\\/g, "\\\\").replace(/"""/g, '""\\"')}"""`;
+/** A TOML multi-line basic string: escapes backslashes, quote runs and control characters. */
+export function tomlMultiline(text: string): string {
+  const escaped = text
+    .replace(/\\/g, "\\\\")
+    .replace(/"""/g, '""\\"')
+    .replace(/\r/g, "\\r")
+    .replace(
+      // oxlint-disable-next-line no-control-regex -- matching control characters is the point
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,
+      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+  return `"""\n${escaped}"""`;
 }
 
 const PI_THINKING: Record<Effort, string> = { low: "low", medium: "medium", high: "high" };

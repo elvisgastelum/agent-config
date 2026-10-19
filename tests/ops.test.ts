@@ -179,6 +179,54 @@ describe("existing files", () => {
   });
 });
 
+describe("precise edits", () => {
+  test("adds and removes the hook without touching comments, formatting or empty containers", () => {
+    const settings = join(box.home, ".claude/settings.json");
+    const original = `{\n\t// my hooks\n\t"hooks": {\n\t\t"PreToolUse": [\n\t\t\t// guard rm\n\t\t\t{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "rm-guard" }] }\n\t\t],\n\t\t"Stop": []\n\t}\n}\n`;
+    put(settings, original);
+    install({ ...config(["claude"]), components: ["read-guard"] });
+    const applied = read(settings);
+    expect(applied).toContain("// guard rm");
+    expect(applied).toContain(
+      '{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "rm-guard" }] }',
+    );
+    expect(applied).toContain("read-guard.mjs");
+    uninstall(() => true);
+    expect(read(settings)).toBe(original);
+  });
+
+  test("keeps an empty PreToolUse list the user already had", () => {
+    const settings = join(box.home, ".claude/settings.json");
+    const original = `{\n  "hooks": {\n    "PreToolUse": []\n  }\n}\n`;
+    put(settings, original);
+    install({ ...config(["claude"]), components: ["read-guard"] });
+    uninstall(() => true);
+    expect(JSON.parse(read(settings))).toEqual({ hooks: { PreToolUse: [] } });
+  });
+
+  test("restores a CLAUDE.md that had no final newline", () => {
+    const memory = join(box.home, ".claude/CLAUDE.md");
+    put(memory, "# mine");
+    install({ ...config(["claude"]), components: ["instructions"] });
+    uninstall(() => true);
+    expect(read(memory)).toBe("# mine");
+  });
+
+  test("backs up a ladder file the user edited before overwriting it on re-install", () => {
+    const c = config(["claude"]);
+    install(c);
+    const agent = join(box.home, ".claude/agents/ladder-read-fast.md");
+    put(agent, "my tweaks\n");
+    const planned = buildPlan(c).find((x) => x.op.path === agent);
+    expect(planned?.reason).toContain("edited since install");
+    const result = install(c);
+    const note = result.notes.find((n) => n.includes(agent));
+    expect(note).toBeDefined();
+    const backup = note?.split("saved to ")[1] ?? "";
+    expect(read(backup)).toBe("my tweaks\n");
+  });
+});
+
 describe("gentle ai review models", () => {
   const lens = (model: string) =>
     `---\nname: review-risk\ndescription: R1 Risk reviewer\nmodel: ${model}\ntools: []\n---\n\n# R1\n`;

@@ -20,7 +20,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { applyEdits, modify, parse, type ParseError } from "jsonc-parser";
+import {
+  applyEdits,
+  findNodeAtLocation,
+  modify,
+  parse,
+  parseTree,
+  type ParseError,
+} from "jsonc-parser";
 import { statePaths } from "./paths.ts";
 import type { Runtime } from "./tiers.ts";
 
@@ -88,6 +95,9 @@ export interface ManifestRecord {
   /** json-hook */
   event?: string;
   command?: string;
+  hookCreated?: HookCreated;
+  /** block: whether the file ended with a newline before the block was added. */
+  trailingNewline?: boolean;
 }
 
 export interface Manifest {
@@ -99,7 +109,12 @@ export const BLOCK_BEGIN =
   "<!-- BEGIN model-ladder: managed by model-ladder, edits inside this block are overwritten -->";
 export const BLOCK_END = "<!-- END model-ladder -->";
 
-const FORMAT = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" } };
+/** Matches the file's own indentation so edits do not reformat what they did not touch. */
+function formatFor(text: string) {
+  const indent = /^([ \t]+)\S/m.exec(text)?.[1] ?? "  ";
+  const tabs = indent.startsWith("\t");
+  return { insertSpaces: !tabs, tabSize: tabs ? 1 : indent.length, eol: "\n" };
+}
 
 export function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -144,7 +159,7 @@ export function recordKey(r: {
   return [r.kind, r.path, r.pointer?.join("/") ?? r.key ?? r.command ?? ""].join("\u0000");
 }
 
-function opKey(op: Op): string {
+export function opKey(op: Op): string {
   switch (op.kind) {
     case "json-set":
       return recordKey({ kind: op.kind, path: op.path, pointer: op.pointer });
@@ -215,7 +230,7 @@ function pruneParents(text: string, pointer: string[], keepDepth: number): strin
 }
 
 function setJson(text: string, pointer: (string | number)[], value: unknown): string {
-  return applyEdits(text, modify(text, pointer, value, FORMAT));
+  return applyEdits(text, modify(text, pointer, value, { formattingOptions: formatFor(text) }));
 }
 
 export function deepEqual(a: unknown, b: unknown): boolean {
@@ -323,29 +338,124 @@ function hasHook(root: unknown, event: string, matcher: string, command: string)
   );
 }
 
-function removeHook(text: string, event: string, command: string): string {
-  const root = parseJson("settings", text);
-  const groups = hookGroups(root, event);
-  const next = groups
-    .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => h.command !== command) }))
-    .filter((g) => g.hooks.length > 0);
-  if (next.length === groups.length && deepEqual(next, groups)) return text;
-  let out = setJson(text, ["hooks", event], next.length > 0 ? next : undefined);
-  const hooks = getAt(parseJson("settings", out), ["hooks"]);
-  if (hooks.present && hooks.value && Object.keys(hooks.value as object).length === 0) {
-    out = setJson(out, ["hooks"], undefined);
+function lineIndent(text: string, offset: number): string {
+  const start = text.lastIndexOf("\n", offset - 1) + 1;
+  return /^[ \t]*/.exec(text.slice(start))?.[0] ?? "";
+}
+
+/** Appends a compact value to an existing array, leaving every other byte as it was. */
+function appendToArray(text: string, pointer: (string | number)[], value: unknown): string {
+  const node = findNodeAtLocation(
+    parseTree(text) ?? { type: "null", offset: 0, length: 0 },
+    pointer,
+  );
+  if (!node || node.type !== "array") throw new Error("expected an array");
+  const json = JSON.stringify(value);
+  const items = node.children ?? [];
+  const last = items.at(-1);
+  if (!last) {
+    const indent = lineIndent(text, node.offset);
+    const unit = formatFor(text).insertSpaces ? " ".repeat(formatFor(text).tabSize) : "\t";
+    const at = node.offset + 1;
+    return `${text.slice(0, at)}\n${indent}${unit}${json}\n${indent}${text.slice(node.offset + node.length - 1)}`;
   }
+  const end = last.offset + last.length;
+  const sameLine = !text.slice(node.offset, last.offset).includes("\n");
+  const sep = sameLine ? ", " : `,\n${lineIndent(text, last.offset)}`;
+  return `${text.slice(0, end)}${sep}${json}${text.slice(end)}`;
+}
+
+/** Removes one array element and its separating comma, leaving every other byte as it was. */
+function removeFromArray(text: string, pointer: (string | number)[], index: number): string {
+  const node = findNodeAtLocation(
+    parseTree(text) ?? { type: "null", offset: 0, length: 0 },
+    pointer,
+  );
+  const items = node?.children ?? [];
+  const item = items[index];
+  if (!node || !item) return text;
+  if (items.length === 1) {
+    return `${text.slice(0, node.offset + 1)}${text.slice(node.offset + node.length - 1)}`;
+  }
+  if (index > 0) {
+    const prev = items[index - 1];
+    const from = (prev?.offset ?? 0) + (prev?.length ?? 0);
+    return `${text.slice(0, from)}${text.slice(item.offset + item.length)}`;
+  }
+  const next = items[1];
+  return `${text.slice(0, item.offset)}${text.slice(next?.offset ?? item.offset + item.length)}`;
+}
+
+/** The outermost container model-ladder had to create for its hook entry. */
+export type HookCreated = "hooks" | "event" | "group" | "entry";
+
+/** Adds one hook entry in place, touching nothing else in the file. */
+function addHook(
+  text: string,
+  event: string,
+  matcher: string,
+  command: string,
+): { text: string; created: HookCreated } {
+  const root = parseJson("settings", text);
+  const entry = { type: "command", command };
+  const group = { matcher, hooks: [entry] };
+  if (!getAt(root, ["hooks"]).present) {
+    return { text: setJson(text, ["hooks"], { [event]: [group] }), created: "hooks" };
+  }
+  if (!getAt(root, ["hooks", event]).present) {
+    return { text: setJson(text, ["hooks", event], [group]), created: "event" };
+  }
+  const groups = hookGroups(root, event);
+  const idx = groups.findIndex((g) => g.matcher === matcher && Array.isArray(g.hooks));
+  if (idx < 0) {
+    return { text: appendToArray(text, ["hooks", event], group), created: "group" };
+  }
+  return { text: appendToArray(text, ["hooks", event, idx, "hooks"], entry), created: "entry" };
+}
+
+/** Removes the hook entry and only the containers model-ladder created for it. */
+function removeHook(text: string, event: string, command: string, created: HookCreated): string {
+  const groups = hookGroups(parseJson("settings", text), event);
+  const gi = groups.findIndex((g) => (g.hooks ?? []).some((h) => h.command === command));
+  if (gi < 0) return text;
+  const hooks = groups[gi]?.hooks ?? [];
+  const hi = hooks.findIndex((h) => h.command === command);
+  let out =
+    created !== "entry" && hooks.length === 1
+      ? removeFromArray(text, ["hooks", event], gi)
+      : removeFromArray(text, ["hooks", event, gi, "hooks"], hi);
+  const isEmpty = (pointer: string[]): boolean => {
+    const got = getAt(parseJson("settings", out), pointer);
+    return (
+      got.present &&
+      !!got.value &&
+      typeof got.value === "object" &&
+      Object.keys(got.value).length === 0
+    );
+  };
+  if ((created === "event" || created === "hooks") && isEmpty(["hooks", event])) {
+    out = setJson(out, ["hooks", event], undefined);
+  }
+  if (created === "hooks" && isEmpty(["hooks"])) out = setJson(out, ["hooks"], undefined);
   return out;
 }
 
 // ---------------------------------------------------------------- plan
 
-export function planOp(op: Op): PlannedOp {
+export function planOp(op: Op, recorded?: ManifestRecord): PlannedOp {
   const current = readText(op.path);
   switch (op.kind) {
     case "file":
       if (current === undefined) return { op, action: "create" };
-      return { op, action: current === op.content ? "unchanged" : "update" };
+      if (current === op.content) return { op, action: "unchanged" };
+      if (recorded?.sha && sha256(current) !== recorded.sha) {
+        return {
+          op,
+          action: "update",
+          reason: "edited since install; your copy will be backed up",
+        };
+      }
+      return { op, action: "update" };
     case "block": {
       if (current === undefined) return { op, action: "create" };
       return { op, action: withBlock(current, op.content) === current ? "unchanged" : "update" };
@@ -411,6 +521,7 @@ function backupFile(path: string): string {
 export function applyOp(
   planned: PlannedOp,
   existing: ManifestRecord | undefined,
+  notes: string[] = [],
 ): ManifestRecord | undefined {
   const { op, action } = planned;
   if (action === "skip") return existing;
@@ -430,13 +541,27 @@ export function applyOp(
       // Back up a file model-ladder did not write the first time it takes it over, even when
       // identical, so uninstall gives it back instead of deleting it.
       if (current !== undefined && !existing) backup = backupFile(op.path);
+      // A ladder file the user edited after install: keep their copy before overwriting it.
+      if (
+        current !== undefined &&
+        existing?.sha &&
+        sha256(current) !== existing.sha &&
+        current !== op.content
+      ) {
+        notes.push(
+          `${op.path} was edited since install; your copy was saved to ${backupFile(op.path)}`,
+        );
+      }
       if (action !== "unchanged") writeAtomic(op.path, op.content, op.executable);
       else if (op.executable) chmodSync(op.path, 0o755);
       return { ...base, sha: sha256(op.content), ...(backup ? { backup } : {}) };
     }
     case "block": {
       if (action !== "unchanged") writeAtomic(op.path, withBlock(current ?? "", op.content));
-      return { ...base, createdFile };
+      const trailingNewline =
+        existing?.trailingNewline ??
+        (current === undefined || current === "" || current.endsWith("\n"));
+      return { ...base, createdFile, trailingNewline };
     }
     case "json-set": {
       const text = current ?? "{}\n";
@@ -447,19 +572,13 @@ export function applyOp(
       return { ...base, pointer: op.pointer, value: op.value, prev, existingDepth, createdFile };
     }
     case "json-hook": {
-      const text = current ?? "{}\n";
+      let hookCreated = existing?.hookCreated;
       if (action !== "unchanged") {
-        const root = parseJson(op.path, text);
-        const groups = hookGroups(root, op.event);
-        const entry = { type: "command", command: op.command };
-        const idx = groups.findIndex((g) => g.matcher === op.matcher);
-        const next =
-          idx >= 0
-            ? groups.map((g, i) => (i === idx ? { ...g, hooks: [...(g.hooks ?? []), entry] } : g))
-            : [...groups, { matcher: op.matcher, hooks: [entry] }];
-        writeAtomic(op.path, setJson(text, ["hooks", op.event], next));
+        const added = addHook(current ?? "{}\n", op.event, op.matcher, op.command);
+        writeAtomic(op.path, added.text);
+        hookCreated ??= added.created;
       }
-      return { ...base, event: op.event, command: op.command, createdFile };
+      return { ...base, event: op.event, command: op.command, createdFile, hookCreated };
     }
     case "frontmatter": {
       const text = current ?? "";
@@ -473,17 +592,19 @@ export function applyOp(
 
 export interface ApplyResult {
   applied: PlannedOp[];
+  /** Things the user should know, such as where an edited file was backed up. */
+  notes: string[];
   errors: { op: Op; error: string }[];
 }
 
 export function applyPlan(plan: PlannedOp[]): ApplyResult {
   const manifest = loadManifest();
   const byKey = new Map(manifest.records.map((r) => [recordKey(r), r]));
-  const result: ApplyResult = { applied: [], errors: [] };
+  const result: ApplyResult = { applied: [], notes: [], errors: [] };
   for (const planned of plan) {
     const key = opKey(planned.op);
     try {
-      const record = applyOp(planned, byKey.get(key));
+      const record = applyOp(planned, byKey.get(key), result.notes);
       if (record) byKey.set(key, record);
       result.applied.push(planned);
     } catch (error) {
@@ -557,8 +678,9 @@ export function undoRecord(r: ManifestRecord, force = false): UndoResult {
       return { record: r, outcome: "removed" };
     }
     case "block": {
-      const next = stripBlock(current);
+      let next = stripBlock(current);
       if (next === current) return { record: r, outcome: "already-gone" };
+      if (r.trailingNewline === false) next = next.replace(/\n$/, "");
       if (r.createdFile && !next.trim()) {
         rmSync(r.path, { force: true });
         return { record: r, outcome: "removed" };
@@ -583,7 +705,7 @@ export function undoRecord(r: ManifestRecord, force = false): UndoResult {
       return { record: r, outcome: r.prev?.present ? "restored" : "removed" };
     }
     case "json-hook": {
-      const next = removeHook(current, r.event ?? "", r.command ?? "");
+      const next = removeHook(current, r.event ?? "", r.command ?? "", r.hookCreated ?? "group");
       if (next === current) return { record: r, outcome: "already-gone" };
       writeOrDropJson(r, next);
       return { record: r, outcome: "removed" };
