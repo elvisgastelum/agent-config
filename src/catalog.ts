@@ -64,6 +64,8 @@ export interface CatalogItem {
   settings: CatalogSetting[];
   /** Installs into each runtime's home config only; `--project` is refused. */
   userOnly?: boolean;
+  /** The only runtimes it supports; absent means all of them. */
+  runtimes?: Runtime[];
   /** Setting values already configured on this machine, offered as defaults. */
   discover: () => Record<string, string>;
   ops: (entry: CatalogEntry, runtime: Runtime, config: Config) => Op[];
@@ -532,6 +534,44 @@ function continueOps(runtime: Runtime, project: string | undefined, config: Conf
   }
 }
 
+// ---------------------------------------------------------------- statusline
+
+export const STATUSLINE_FILE = "statusline.sh";
+
+const statusline: CatalogItem = {
+  id: "statusline",
+  title: "Status line",
+  description:
+    "compact Claude Code status line: directory, git branch and dirty mark, model, context and rate-limit usage",
+  settings: [],
+  userOnly: true,
+  runtimes: ["claude"],
+  discover: () => ({}),
+  // The path the standalone claude-statusline installer used, so its copy is taken over in place.
+  ops: () => {
+    const base = { runtime: "claude" as const, component: "catalog" as const };
+    const script = join(claudeDir(), STATUSLINE_FILE);
+    return [
+      {
+        ...base,
+        kind: "file",
+        path: script,
+        content: assetSource(STATUSLINE_FILE),
+        executable: true,
+        label: "status line script",
+      },
+      {
+        ...base,
+        kind: "json-set",
+        path: join(claudeDir(), "settings.json"),
+        pointer: ["statusLine"],
+        value: { type: "command", command: `bash "${script}"` },
+        label: "statusLine command",
+      },
+    ];
+  },
+};
+
 const continueItem: CatalogItem = {
   id: CONTINUE,
   title: "Continue Kaneo tickets",
@@ -542,7 +582,7 @@ const continueItem: CatalogItem = {
   ops: (entry, runtime, config) => continueOps(runtime, entry.project, config),
 };
 
-export const CATALOG: CatalogItem[] = [modelLadder, kaneo, commit, continueItem];
+export const CATALOG: CatalogItem[] = [modelLadder, kaneo, commit, continueItem, statusline];
 
 export function catalogItem(id: string): CatalogItem | undefined {
   return CATALOG.find((i) => i.id === id);
@@ -612,11 +652,12 @@ export function entryDefaults(
 ): EntryDefaults {
   const saved = config.catalog.find((e) => entryKey(e) === entryKey({ item: item.id, project }));
   const ladder = ladderRuntimes(config);
-  const runtimes = saved?.runtimes.length
-    ? saved.runtimes
-    : ladder.length > 0
-      ? ladder
-      : detected();
+  const runtimes =
+    item.runtimes?.length === 1
+      ? item.runtimes
+      : (saved?.runtimes.length ? saved.runtimes : ladder.length > 0 ? ladder : detected()).filter(
+          (r) => !item.runtimes || item.runtimes.includes(r),
+        );
   const discovered = item.discover();
   const settings: EntryDefaults["settings"] = {};
   for (const s of item.settings) {

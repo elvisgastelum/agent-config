@@ -12,7 +12,7 @@ edits  ─┘                          └─ deep      Opus 5.5    last resort,
 
 It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the rungs for **Gentle AI review agents**, and undoes everything with one command.
 
-Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket. See [Catalog](#catalog).
+Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket, `agi install statusline` adds a compact Claude Code status line. See [Catalog](#catalog).
 
 ## Install
 
@@ -118,6 +118,7 @@ agi install kaneo --url https://kaneo.example.com   # user scope: every project
 agi install kaneo --project .                   # one repository, committed with it
 agi install commit                              # title-only commits, drafted by a cheap model
 agi install continue                            # /continue: work the next Kaneo ticket end to end
+agi install statusline                          # compact Claude Code status line
 agi uninstall kaneo [--project .]               # remove that copy only
 ```
 
@@ -181,6 +182,18 @@ A manual action that works Kaneo tickets end to end, moved here from [claude-con
 | Pi       | `~/.pi/agent/prompts/continue.md`                       | `.pi/prompts/continue.md`          |
 
 A `~/.claude/skills/continue/SKILL.md` left by the old standalone installer is replaced and put back on uninstall.
+
+### statusline
+
+A compact Claude Code status line styled after zap-prompt, moved here from [claude-statusline](https://github.com/elvisgastelum/claude-statusline). Claude Code only, user scope only; it needs `bash`, `git` and [`jq`](https://jqlang.org/).
+
+```
+⚡➜ my-project (* main) | Opus 5.5 | ctx 42% | 5h:12% 7d:30%
+```
+
+- Directory name, git branch with a red `*` when the working tree is dirty, model, context window usage, and 5-hour and 7-day rate-limit usage when Claude Code reports them.
+- Writes `~/.claude/statusline.sh` and sets `statusLine` in `~/.claude/settings.json` to run it. Uninstall puts back the previous script and `statusLine`.
+- The old standalone installer wrote the same path, so its copy is taken over in place. Edits to `~/.claude/statusline.sh` show as drifted in `status` and are saved to a backup when you reinstall.
 
 ## How the routing works
 

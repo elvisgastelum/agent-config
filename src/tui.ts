@@ -318,18 +318,22 @@ async function catalogFlow(): Promise<void> {
       : undefined;
   const defaults = entryDefaults(item, project, config, detectedRuntimes);
   const found = detect();
-  const runtimes = ask(
-    await p.multiselect({
-      message: "For which agents?",
-      options: found.map((d) => ({
-        value: d.runtime,
-        label: RUNTIME_LABELS[d.runtime],
-        hint: d.bin || d.dir ? "detected" : "not found",
-      })),
-      initialValues: defaults.runtimes,
-      required: true,
-    }),
-  ) as Runtime[];
+  const supported = found.filter((d) => !item.runtimes || item.runtimes.includes(d.runtime));
+  const runtimes =
+    supported.length === 1
+      ? [supported[0]!.runtime]
+      : (ask(
+          await p.multiselect({
+            message: "For which agents?",
+            options: supported.map((d) => ({
+              value: d.runtime,
+              label: RUNTIME_LABELS[d.runtime],
+              hint: d.bin || d.dir ? "detected" : "not found",
+            })),
+            initialValues: defaults.runtimes,
+            required: true,
+          }),
+        ) as Runtime[]);
   const settings: Record<string, string> = {};
   for (const s of item.settings) {
     const known = defaults.settings[s.key];

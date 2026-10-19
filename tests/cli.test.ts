@@ -311,6 +311,7 @@ test("install model-ladder installs only the ladder; uninstall model-ladder keep
     "kaneo",
     "commit",
     "continue",
+    "statusline",
   ]);
   expect(listed.items[0].entries).toMatchObject([{ scope: "user", runtimes: ["claude"] }]);
   expect(run("catalog").stdout).toContain("install: agent-config install model-ladder\n");
@@ -538,4 +539,39 @@ test("a partial uninstall puts the shared block back into a pre-existing AGENTS.
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+test("install statusline takes over the Claude status line; uninstall restores the previous one", () => {
+  const settingsPath = join(home, ".claude/settings.json");
+  const script = join(home, ".claude/statusline.sh");
+  mkdirSync(dirname(script), { recursive: true });
+  writeFileSync(script, "#!/bin/bash\necho old\n");
+  const previous = { type: "command", command: `bash ${script}` };
+  writeFileSync(settingsPath, `${JSON.stringify({ model: "opus", statusLine: previous })}\n`);
+
+  // With no --runtime it defaults to Claude Code, the only runtime with a status line.
+  const installed = run("install", "statusline", "--yes", "--json");
+  expect(installed.code).toBe(0);
+  const plan = JSON.parse(installed.stdout).plan as { item: string; runtime: string }[];
+  expect(plan.every((x) => x.item === "statusline@user" && x.runtime === "claude")).toBe(true);
+  expect(read(script)).toContain("zap-prompt");
+  expect(JSON.parse(read(settingsPath)).statusLine).toEqual({
+    type: "command",
+    command: `bash "${script}"`,
+  });
+
+  expect(JSON.parse(run("install", "statusline", "--yes", "--json").stdout).applied).toBe(false);
+
+  expect(run("uninstall", "statusline", "--yes").code).toBe(0);
+  expect(read(script)).toBe("#!/bin/bash\necho old\n");
+  expect(JSON.parse(read(settingsPath))).toEqual({ model: "opus", statusLine: previous });
+});
+
+test("install statusline refuses other runtimes and --project", () => {
+  const codex = run("install", "statusline", "--runtime", "codex", "--yes");
+  expect(codex.code).not.toBe(0);
+  expect(codex.stderr).toContain("statusline supports only claude");
+  const project = run("install", "statusline", "--project", home, "--yes");
+  expect(project.code).not.toBe(0);
+  expect(project.stderr).toContain("user scope only");
 });

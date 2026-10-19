@@ -5137,6 +5137,7 @@ function continueOps(runtime, project, config) {
 		}
 	}
 }
+const STATUSLINE_FILE = "statusline.sh";
 const CATALOG = [
 	modelLadder,
 	kaneo,
@@ -5148,6 +5149,40 @@ const CATALOG = [
 		settings: [],
 		discover: () => ({}),
 		ops: (entry, runtime, config) => continueOps(runtime, entry.project, config)
+	},
+	{
+		id: "statusline",
+		title: "Status line",
+		description: "compact Claude Code status line: directory, git branch and dirty mark, model, context and rate-limit usage",
+		settings: [],
+		userOnly: true,
+		runtimes: ["claude"],
+		discover: () => ({}),
+		ops: () => {
+			const base = {
+				runtime: "claude",
+				component: "catalog"
+			};
+			const script = join(claudeDir(), STATUSLINE_FILE);
+			return [{
+				...base,
+				kind: "file",
+				path: script,
+				content: assetSource(STATUSLINE_FILE),
+				executable: true,
+				label: "status line script"
+			}, {
+				...base,
+				kind: "json-set",
+				path: join(claudeDir(), "settings.json"),
+				pointer: ["statusLine"],
+				value: {
+					type: "command",
+					command: `bash "${script}"`
+				},
+				label: "statusLine command"
+			}];
+		}
 	}
 ];
 function catalogItem(id) {
@@ -5199,7 +5234,7 @@ function entryDefaults(item, project, config, detected) {
 		project
 	}));
 	const ladder = ladderRuntimes(config);
-	const runtimes = saved?.runtimes.length ? saved.runtimes : ladder.length > 0 ? ladder : detected();
+	const runtimes = item.runtimes?.length === 1 ? item.runtimes : (saved?.runtimes.length ? saved.runtimes : ladder.length > 0 ? ladder : detected()).filter((r) => !item.runtimes || item.runtimes.includes(r));
 	const discovered = item.discover();
 	const settings = {};
 	for (const s of item.settings) {
@@ -5852,10 +5887,10 @@ async function catalogFlow() {
 		}
 	}))) : void 0;
 	const defaults = entryDefaults(item, project, config, detectedRuntimes);
-	const found = detect();
-	const runtimes = ask(await multiselect({
+	const supported = detect().filter((d) => !item.runtimes || item.runtimes.includes(d.runtime));
+	const runtimes = supported.length === 1 ? [supported[0].runtime] : ask(await multiselect({
 		message: "For which agents?",
-		options: found.map((d) => ({
+		options: supported.map((d) => ({
 			value: d.runtime,
 			label: RUNTIME_LABELS[d.runtime],
 			hint: d.bin || d.dir ? "detected" : "not found"
@@ -6324,7 +6359,8 @@ const SHORT_COMMANDS = {
 const HELP = `agent-config ${VERSION}
 Configure Claude Code, OpenCode, Codex and Pi from a catalog of abilities, such as
 the model ladder (route reads and edits to the cheapest capable model: fast → balanced
-→ deep), Kaneo work tracking, title-only commits and the /continue ticket action.
+→ deep), Kaneo work tracking, title-only commits, the /continue ticket action and a
+Claude Code status line.
 Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.3.0).
 
 Usage:
@@ -6492,7 +6528,10 @@ async function saveEntryFor(id, config, values) {
 async function catalogEntryFor(item, project, config, values) {
 	const defaults = entryDefaults(item, project, config, detectedRuntimes);
 	const flagged = values.runtime ?? [];
-	for (const r of flagged) if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
+	for (const r of flagged) {
+		if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
+		if (item.runtimes && !item.runtimes.includes(r)) throw new UsageError(`${item.id} supports only ${item.runtimes.join(", ")}`);
+	}
 	const runtimes = flagged.length > 0 ? flagged : defaults.runtimes;
 	if (runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
 	const settings = {};
