@@ -86,10 +86,10 @@ describe("kaneo catalog item", () => {
   test("keeps the ladder block and the user's text when only kaneo is uninstalled", () => {
     const memory = join(box.home, ".claude/CLAUDE.md");
     put(memory, "# Mine\n");
-    const ladder = {
+    const ladder: Config = {
       ...defaultConfig(),
-      runtimes: ["claude" as Runtime],
-      components: ["instructions" as const],
+      components: ["instructions"],
+      catalog: [{ item: "model-ladder", runtimes: ["claude"], settings: {} }],
     };
     expect(applyPlan(buildPlan(ladder)).errors).toEqual([]);
     const entry = kaneoEntry(["claude"]);
@@ -305,7 +305,7 @@ describe("kaneo catalog item", () => {
 test("a whole-config plan re-applies saved catalog entries and leaves deselected ladder parts alone", () => {
   const entry = kaneoEntry(["claude"]);
   const config = withEntry(entry);
-  config.runtimes = ["claude"];
+  upsertEntry(config, { item: "model-ladder", runtimes: ["claude"], settings: {} });
   config.components = ["skill", "instructions"];
   expect(applyPlan(buildPlan(config)).errors).toEqual([]);
   expect(existsSync(join(box.home, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);

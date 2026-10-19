@@ -1,5 +1,5 @@
-// The interactive flow: pick runtimes and components, choose models per rung, review the
-// plan, apply. Ctrl+C at any prompt leaves without further changes.
+// The interactive flow: pick a catalog item (for the model ladder: runtimes, components and
+// models per rung), review the plan, apply. Ctrl+C at any prompt leaves without further changes.
 
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
@@ -7,6 +7,7 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import {
   CATALOG,
+  catalogItem,
   entryDefaults,
   entryKey,
   missingProjectWarnings,
@@ -25,7 +26,15 @@ import {
   uninstallSelection,
 } from "./commands.ts";
 import { defaultConfig, loadConfig, saveConfig, type Config } from "./config.ts";
-import { applyPlan, COMPONENTS, COMPONENT_LABELS, type Action, type PlannedOp } from "./ops.ts";
+import {
+  applyPlan,
+  COMPONENTS,
+  COMPONENT_LABELS,
+  LADDER_ITEM,
+  LADDER_KEY,
+  type Action,
+  type PlannedOp,
+} from "./ops.ts";
 import { RUNTIME_COMPONENTS } from "./runtimes.ts";
 import {
   EFFORTS,
@@ -149,11 +158,11 @@ async function chooseReviewTiers(config: Config): Promise<void> {
   }
 }
 
-async function installFlow(): Promise<void> {
-  const config = loadConfig();
+/** Installs or updates the model ladder: agents, parts, models per rung, review rungs, guard. */
+async function ladderFlow(config: Config): Promise<void> {
   const found = detect();
-  const detected = found.filter((d) => d.bin || d.dir).map((d) => d.runtime);
-  config.runtimes = ask(
+  const defaults = entryDefaults(catalogItem(LADDER_ITEM)!, undefined, config, detectedRuntimes);
+  const runtimes = ask(
     await p.multiselect({
       message: "Configure which agents?",
       options: found.map((d) => ({
@@ -161,14 +170,12 @@ async function installFlow(): Promise<void> {
         label: RUNTIME_LABELS[d.runtime],
         hint: d.bin || d.dir ? "detected" : "not found",
       })),
-      initialValues: config.runtimes.length > 0 ? config.runtimes : detected,
+      initialValues: defaults.runtimes,
       required: true,
     }),
   ) as Runtime[];
 
-  const offered = COMPONENTS.filter((c) =>
-    config.runtimes.some((r) => RUNTIME_COMPONENTS[r].includes(c)),
-  );
+  const offered = COMPONENTS.filter((c) => runtimes.some((r) => RUNTIME_COMPONENTS[r].includes(c)));
   config.components = ask(
     await p.multiselect({
       message: "Install which parts?",
@@ -178,9 +185,9 @@ async function installFlow(): Promise<void> {
     }),
   );
 
-  await chooseModels(config, config.runtimes);
+  await chooseModels(config, runtimes);
   if (config.components.includes("review-models")) await chooseReviewTiers(config);
-  if (config.components.includes("read-guard") && config.runtimes.includes("claude")) {
+  if (config.components.includes("read-guard") && runtimes.includes("claude")) {
     const value = ask(
       await p.text({
         message: "Read guard: block whole reads of files with at least how many lines?",
@@ -192,6 +199,13 @@ async function installFlow(): Promise<void> {
     config.minLines = Number(value);
   }
 
+  upsertEntry(config, { item: LADDER_ITEM, runtimes, settings: {} });
+  await applyWithConfirm(buildPlan(config, [LADDER_KEY]), config);
+}
+
+/** Re-applies every saved catalog item, for example after an update of agent-config. */
+async function reapplyFlow(): Promise<void> {
+  const config = loadConfig();
   for (const w of missingProjectWarnings(config)) p.log.warn(w);
   await applyWithConfirm(buildPlan(config), config);
 }
@@ -250,7 +264,11 @@ async function catalogFlow(): Promise<void> {
           await p.select({
             message: item.title,
             options: [
-              { value: "install", label: "Install or update", hint: "user or project scope" },
+              {
+                value: "install",
+                label: "Install or update",
+                hint: item.userOnly ? "agents, parts, models" : "user or project scope",
+              },
               { value: "uninstall", label: "Uninstall", hint: "remove and restore" },
             ],
           }),
@@ -270,6 +288,7 @@ async function catalogFlow(): Promise<void> {
     await uninstallAndReport({ key: entryKey(entry), runtimes: [] });
     return;
   }
+  if (item.id === LADDER_ITEM) return ladderFlow(config);
 
   const scope = ask(
     await p.select({
@@ -452,26 +471,30 @@ export async function runTui(): Promise<number> {
   p.intro(`${pc.bgCyan(pc.black(" agent-config "))} ${pc.dim(`v${VERSION}`)}`);
   p.log.message(
     pc.dim(
-      "Route reads and edits to the cheapest capable model: fast → balanced → deep. The main session keeps the reasoning.",
+      "Pick abilities from the catalog, such as the model ladder: route reads and edits to the cheapest capable model.",
     ),
   );
   try {
     for (;;) {
-      const hasInstall = status().length > 0;
+      const saved = loadConfig().catalog.length > 0;
       const choice = ask(
         await p.select({
           message: "What do you want to do?",
           options: [
             {
-              value: "install",
-              label: hasInstall ? "Update configuration" : "Install",
-              hint: "agents, skill, hooks, models",
-            },
-            {
               value: "catalog",
               label: "Catalog",
-              hint: `optional abilities: ${CATALOG.map((i) => i.id).join(", ")}`,
+              hint: `install, configure or remove: ${CATALOG.map((i) => i.id).join(", ")}`,
             },
+            ...(saved
+              ? [
+                  {
+                    value: "install",
+                    label: "Re-apply installed items",
+                    hint: "write the saved catalog items again, e.g. after an update",
+                  },
+                ]
+              : []),
             { value: "status", label: "Status", hint: "what is installed and whether it changed" },
             { value: "doctor", label: "Doctor", hint: "check runtimes and prerequisites" },
             { value: "uninstall", label: "Uninstall", hint: "remove and restore" },
@@ -482,23 +505,23 @@ export async function runTui(): Promise<number> {
             },
             {
               value: "reset",
-              label: "Reset saved choices",
-              hint: "back to the recommended ladder",
+              label: "Reset ladder choices",
+              hint: "back to the recommended parts and models; keeps installed items",
             },
             { value: "exit", label: "Exit" },
           ],
         }),
       );
       if (choice === "exit") break;
-      if (choice === "install") await installFlow();
+      if (choice === "install") await reapplyFlow();
       if (choice === "catalog") await catalogFlow();
       if (choice === "status") statusFlow();
       if (choice === "doctor") doctorFlow();
       if (choice === "uninstall") await uninstallFlow();
       if (choice === "self-update" && (await selfUpdateFlow())) break;
       if (choice === "reset") {
-        saveConfig({ ...defaultConfig(), runtimes: loadConfig().runtimes });
-        p.log.success("Saved choices reset. Run Update to apply them.");
+        saveConfig({ ...defaultConfig(), catalog: loadConfig().catalog });
+        p.log.success("Ladder choices reset. Re-apply installed items to write them.");
       }
     }
   } catch (error) {

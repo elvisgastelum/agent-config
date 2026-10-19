@@ -3,7 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { catalogOps, entryKey, forgetCatalog, missingProjects } from "./catalog.ts";
+import { catalogOps, entryKey, forgetCatalog, ladderRuntimes, missingProjects } from "./catalog.ts";
 import { loadConfig, saveConfig, type Config } from "./config.ts";
 import {
   applyPlan,
@@ -21,7 +21,6 @@ import {
   uninstall,
 } from "./ops.ts";
 import { codexDir, home, piDir, RUNTIME_BIN, runtimeDir } from "./paths.ts";
-import { allOps } from "./runtimes.ts";
 import { defaultInstallHome, legacyInstallHome } from "./selfupdate.ts";
 import { RUNTIMES, type Runtime } from "./tiers.ts";
 
@@ -58,30 +57,29 @@ export function detectedRuntimes(): Runtime[] {
 }
 
 /**
- * Plans the whole saved configuration, or with `only` just those catalog entries (keys such as
- * "kaneo@user"), leaving the ladder and other entries alone.
+ * Plans every saved catalog entry, or with `only` just those (keys such as "kaneo@user" or
+ * "model-ladder@user"), leaving the other entries alone.
  */
 export function buildPlan(config: Config, only?: string[]): PlannedOp[] {
   const manifest = loadManifest().records;
   const records = new Map(manifest.map((r) => [recordKey(r), r]));
-  const ladder = only ? [] : allOps(config);
-  const catalog = catalogOps(config, only);
-  const ops = [...ladder, ...catalog];
+  const ops = catalogOps(config, only);
   const wanted = new Set(ops.map(opKey));
   // Entries whose project directory is gone are neither applied nor cleaned up from here.
   const missing = new Set(missingProjects(config).map(entryKey));
   const planned = new Set((only ?? config.catalog.map(entryKey)).filter((k) => !missing.has(k)));
-  // Installed items of the selected runtimes and parts that the configuration no longer
-  // produces (a moved hook, a renamed setting, a runtime dropped from a catalog entry) are
-  // undone, so nothing stale stays behind. Parts that were not selected are left alone.
+  const ladder = ladderRuntimes(config);
+  // Installed parts of the planned entries that the configuration no longer produces (a moved
+  // hook, a renamed setting, a runtime dropped from a catalog entry) are undone, so nothing
+  // stale stays behind. Ladder parts or runtimes that were deselected are left alone.
   const stale = manifest
-    .filter((r) =>
-      r.component === "catalog"
-        ? r.item !== undefined && planned.has(r.item) && !wanted.has(recordKey(r))
-        : !only &&
-          config.runtimes.includes(r.runtime) &&
-          config.components.includes(r.component) &&
-          !wanted.has(recordKey(r)),
+    .filter(
+      (r) =>
+        r.item !== undefined &&
+        planned.has(r.item) &&
+        !wanted.has(recordKey(r)) &&
+        (r.component === "catalog" ||
+          (ladder.includes(r.runtime) && config.components.includes(r.component))),
     )
     .map(planRemoval);
   return [...stale, ...ops.map((op) => planOp(op, records.get(opKey(op))))];
@@ -127,9 +125,6 @@ export function uninstallSelection(
     results.filter((r) => r.outcome === "kept-modified").map((r) => r.record.item),
   );
   const config = loadConfig();
-  if (key === undefined)
-    config.runtimes =
-      runtimes.length === 0 ? [] : config.runtimes.filter((r) => !runtimes.includes(r));
   forgetCatalog(
     config,
     (e) => (key === undefined || entryKey(e) === key) && !kept.has(entryKey(e)),

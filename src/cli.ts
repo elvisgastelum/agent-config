@@ -11,6 +11,7 @@ import {
   catalogItem,
   entryDefaults,
   entryKey,
+  ladderRuntimes,
   missingProjectWarnings,
   scopeLabel,
   upsertEntry,
@@ -32,6 +33,7 @@ import { configPath, setting } from "./paths.ts";
 import {
   applyPlan,
   COMPONENTS,
+  LADDER_ITEM,
   type LadderComponent,
   type ManifestRecord,
   type PlannedOp,
@@ -52,15 +54,17 @@ import { VERSION } from "./version.ts";
 const SHORT_COMMANDS: Record<string, string> = { i: "install", u: "self-update" };
 
 const HELP = `agent-config ${VERSION}
-Configure Claude Code, OpenCode, Codex and Pi. Model ladder: route reads and
-edits to the cheapest capable model (fast → balanced → deep).
+Configure Claude Code, OpenCode, Codex and Pi from a catalog of abilities, such as
+the model ladder (route reads and edits to the cheapest capable model: fast → balanced
+→ deep) and Kaneo work tracking.
 Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.3.0).
 
 Usage:
   agent-config                     open the TUI (in a terminal)
-  agent-config install [flags]     apply the saved (or flagged) configuration (\`agi i\` for short)
-  agent-config install <item>      add a catalog item, e.g. \`agi install kaneo\` (--project <dir>
-                                   for one repository instead of your user config)
+  agent-config install             re-apply the saved catalog items (\`agi i\` for short)
+  agent-config install <item>      add a catalog item, e.g. \`agi install model-ladder\` or
+                                   \`agi install kaneo\` (--project <dir> for one repository
+                                   instead of your user config; kaneo only)
   agent-config catalog             list catalog items and where they are installed
   agent-config status              list what agent-config installed and whether it changed
   agent-config uninstall [flags]   remove it and restore what it replaced
@@ -76,12 +80,16 @@ Usage:
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
-  --component <id>               ${COMPONENTS.join(" | ")} (repeatable; default: saved, else all)
+
+Model ladder flags (\`install model-ladder\`; on a bare \`install\` they install the ladder too):
+  --component <id>             ${COMPONENTS.join(" | ")} (repeatable; default: saved, else all)
   --model <runtime>:<tier>=<id>  model for a rung, e.g. claude:fast=claude-haiku-5-5 (repeatable)
   --effort <runtime>:<tier>=<l>  low | medium | high, e.g. codex:deep=high (repeatable)
   --review <lens>=<tier>         rung for a Gentle AI review agent, e.g. review-risk=deep (repeatable)
   --min-lines <n>                read guard threshold (default 350)
-  --yes                          apply or uninstall without asking
+
+Other flags:
+  --yes                        apply or uninstall without asking
   --dry-run                      show the plan, write nothing
   --project <dir>                catalog item: install into this repository instead of user scope
   --url <base-url>               kaneo: Kaneo base URL, e.g. https://kaneo.example.com (default:
@@ -126,15 +134,9 @@ function parseAssign(raw: string, flag: string): { left: string; tier: string; v
   return { left: m[1] ?? "", tier: m[2] ?? "", value: m[3] ?? "" };
 }
 
-function applyFlags(config: Config, values: Record<string, unknown>): void {
+/** Applies the ladder flags (parts, models, review rungs, read guard) to the saved settings. */
+function applyLadderFlags(config: Config, values: Record<string, unknown>): void {
   const list = (k: string): string[] => (values[k] as string[] | undefined) ?? [];
-  if (list("runtime").length > 0) {
-    for (const r of list("runtime"))
-      if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
-    config.runtimes = list("runtime") as Runtime[];
-  } else if (config.runtimes.length === 0) {
-    config.runtimes = detectedRuntimes();
-  }
   if (list("component").length > 0) {
     for (const c of list("component")) {
       if (!(COMPONENTS as readonly string[]).includes(c))
@@ -198,6 +200,7 @@ function catalogTarget(
   }
   const raw = values.project as string | undefined;
   if (raw === undefined) return { item };
+  if (item.userOnly) throw new UsageError(`${item.id} installs at user scope only; drop --project`);
   const project = resolve(raw);
   if (existsSync(project) && statSync(project).isDirectory()) return { item, project };
   const key = entryKey({ item: item.id, project });
@@ -384,10 +387,10 @@ async function main(argv: string[]): Promise<number> {
       `--${catalogFlag} only applies to ${catalogFlag === "url" ? "install (or apply)" : "install or uninstall"} <item>`,
     );
   }
-  const ladderFlag = itemId ? given.find((k) => LADDER_ONLY.includes(k)) : undefined;
-  if (ladderFlag) {
+  const ladderFlag = given.find((k) => LADDER_ONLY.includes(k));
+  if (ladderFlag && itemId && (itemId !== LADDER_ITEM || command === "uninstall")) {
     throw new UsageError(
-      `--${ladderFlag} configures the ladder; run it with \`agent-config install\` without an item`,
+      `--${ladderFlag} configures the model ladder; run \`agent-config install ${LADDER_ITEM}\``,
     );
   }
   switch (command) {
@@ -401,14 +404,22 @@ async function main(argv: string[]): Promise<number> {
     case "install":
     case "apply": {
       const config = loadConfig();
-      if (itemId) {
-        const { item, project } = catalogTarget(itemId, values);
+      // Ladder flags on a bare install keep configuring the ladder, as before 0.5.0.
+      const ladderFlags = ladderFlag !== undefined || values.runtime !== undefined;
+      const id = itemId ?? (ladderFlags ? LADDER_ITEM : undefined);
+      if (id) {
+        const { item, project } = catalogTarget(id, values);
         const entry = await catalogEntryFor(item, project, config, values);
+        if (item.id === LADDER_ITEM) applyLadderFlags(config, values);
         upsertEntry(config, entry);
-        return applyAndReport(buildPlan(config, [entryKey(entry)]), config, values, json);
+        if (itemId)
+          return applyAndReport(buildPlan(config, [entryKey(entry)]), config, values, json);
       }
-      applyFlags(config, values);
-      if (config.runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
+      if (config.catalog.length === 0) {
+        throw new UsageError(
+          `nothing to install yet; add a catalog item, e.g. \`agent-config install ${LADDER_ITEM}\` (see \`agent-config catalog\`)`,
+        );
+      }
       for (const w of missingProjectWarnings(config))
         process.stderr.write(`agent-config: warning: ${w}\n`);
       return applyAndReport(buildPlan(config), config, values, json);
@@ -428,17 +439,19 @@ async function main(argv: string[]): Promise<number> {
             files: records.filter((r) => r.record.item === entryKey(e)).length,
           })),
       }));
+      const width = Math.max(...CATALOG.map((i) => i.id.length));
+      const indent = " ".repeat(width + 1);
       const text = items
         .map((i) =>
           [
-            `${pc.bold(i.id.padEnd(8))} ${i.title}`,
-            `         ${i.description}`,
-            `         installed: ${
+            `${pc.bold(i.id.padEnd(width))} ${i.title}`,
+            `${indent}${i.description}`,
+            `${indent}installed: ${
               i.entries.length === 0
                 ? "no"
                 : i.entries.map((e) => `${scopeLabel(e)} (${e.runtimes.join(", ")})`).join("; ")
             }`,
-            `         install: agent-config install ${i.id} [--project <dir>]`,
+            `${indent}install: agent-config install ${i.id}${catalogItem(i.id)?.userOnly ? "" : " [--project <dir>]"}`,
           ].join("\n"),
         )
         .join("\n\n");
@@ -547,7 +560,7 @@ async function main(argv: string[]): Promise<number> {
       }
       const config = loadConfig();
       const flagged = (values.runtime as string[] | undefined)?.at(-1);
-      const runtime = flagged ?? delegateRuntime(config.runtimes);
+      const runtime = flagged ?? delegateRuntime(ladderRuntimes(config));
       if (!runtime || !isRuntime(runtime)) {
         throw new UsageError(
           runtime ? `unknown runtime "${runtime}"` : "no runtime found; pass --runtime",

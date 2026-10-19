@@ -22,7 +22,7 @@ beforeEach(() => {
 afterEach(() => box.restore());
 
 function config(runtimes: Runtime[]): Config {
-  return { ...defaultConfig(), runtimes };
+  return { ...defaultConfig(), catalog: [{ item: "model-ladder", runtimes, settings: {} }] };
 }
 
 function install(c: Config) {

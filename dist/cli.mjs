@@ -3131,6 +3131,10 @@ const COMPONENTS = [
 	"read-guard",
 	"review-models"
 ];
+/** The ladder's catalog item; its parts keep their own components instead of "catalog". */
+const LADDER_ITEM = "model-ladder";
+/** The ladder's entry key: it installs at user scope only. */
+const LADDER_KEY = `${LADDER_ITEM}@user`;
 const COMPONENT_LABELS = {
 	agents: "Ladder agents (read + edit on fast, balanced, deep)",
 	skill: "Routing skill (when to delegate, how to climb)",
@@ -3239,7 +3243,10 @@ function loadManifest() {
 	const data = JSON.parse(text);
 	return {
 		version: 1,
-		records: Array.isArray(data.records) ? data.records : []
+		records: (Array.isArray(data.records) ? data.records : []).map((r) => r.item === void 0 && r.component !== "catalog" ? {
+			...r,
+			item: LADDER_KEY
+		} : r)
 	};
 }
 function saveManifest(manifest) {
@@ -4446,9 +4453,6 @@ function runtimeOps(runtime, config) {
 	if (wanted.includes("review-models")) ops.push(...reviewOps(runtime, config));
 	return ops;
 }
-function allOps(config) {
-	return config.runtimes.flatMap((r) => runtimeOps(r, config));
-}
 //#endregion
 //#region src/catalog.ts
 /** Identifies an entry in the config and its ops in the manifest: "kaneo@user" or "kaneo@/repo". */
@@ -4627,6 +4631,14 @@ function kaneoMcpOp(runtime, project, url) {
 	}
 }
 const CATALOG = [{
+	id: LADDER_ITEM,
+	title: "Model ladder",
+	description: "Route reads and edits to the cheapest capable model (fast → balanced → deep): ladder agents, skill, instructions, read guard, review models.",
+	settings: [],
+	userOnly: true,
+	discover: () => ({}),
+	ops: (_entry, runtime, config) => runtimeOps(runtime, config)
+}, {
 	id: "kaneo",
 	title: "Kaneo work tracking",
 	description: "kaneo-work-tracking skill, always-on rules, the kaneo MCP server and a cheap kaneo-scribe agent that saves tickets",
@@ -4659,7 +4671,8 @@ const CATALOG = [{
 		const url = found && kaneoBaseUrl(found);
 		return url ? { url } : {};
 	},
-	ops: (entry, runtime, tiers) => {
+	ops: (entry, runtime, config) => {
+		const tiers = config.tiers[runtime];
 		const where = layout(runtime, entry.project);
 		const scribe = scribeAgent(runtime, where.agents, tiers);
 		const ops = [
@@ -4697,6 +4710,10 @@ const CATALOG = [{
 function catalogItem(id) {
 	return CATALOG.find((i) => i.id === id);
 }
+/** The runtimes the model ladder is installed for; empty when it is not installed. */
+function ladderRuntimes(config) {
+	return config.catalog.find((e) => e.item === "model-ladder")?.runtimes ?? [];
+}
 /** One line per skipped project entry, telling how to forget it. */
 function missingProjectWarnings(config) {
 	return missingProjects(config).map((e) => `${e.item}: project directory ${e.project} is gone; skipped. Run \`agent-config uninstall ${e.item} --project ${e.project}\` to forget it.`);
@@ -4716,7 +4733,7 @@ function catalogOps(config, keys) {
 		const key = entryKey(entry);
 		const item = catalogItem(entry.item);
 		if (!item || keys && !keys.includes(key) || missing.has(key)) continue;
-		for (const runtime of entry.runtimes) for (const op of item.ops(entry, runtime, config.tiers[runtime])) {
+		for (const runtime of entry.runtimes) for (const op of item.ops(entry, runtime, config)) {
 			const tagged = {
 				...op,
 				item: key
@@ -4728,7 +4745,7 @@ function catalogOps(config, keys) {
 }
 /**
 * Defaults for installing an item at a scope, shared by the CLI and the TUI: runtimes come from
-* the saved entry, else the configured runtimes, else detection; settings from the saved entry,
+* the saved entry, else the ladder's runtimes, else detection; settings from the saved entry,
 * else what this machine already has configured.
 */
 function entryDefaults(item, project, config, detected) {
@@ -4736,7 +4753,8 @@ function entryDefaults(item, project, config, detected) {
 		item: item.id,
 		project
 	}));
-	const runtimes = saved?.runtimes.length ? saved.runtimes : config.runtimes.length > 0 ? config.runtimes : detected();
+	const ladder = ladderRuntimes(config);
+	const runtimes = saved?.runtimes.length ? saved.runtimes : ladder.length > 0 ? ladder : detected();
 	const discovered = item.discover();
 	const settings = {};
 	for (const s of item.settings) {
@@ -4775,7 +4793,6 @@ function forgetCatalog(config, match, runtimes) {
 function defaultConfig() {
 	return {
 		version: 1,
-		runtimes: [],
 		components: [...COMPONENTS],
 		tiers: {
 			claude: defaultTierMap("claude"),
@@ -4797,7 +4814,6 @@ function loadConfig() {
 	} catch {
 		return config;
 	}
-	if (Array.isArray(raw.runtimes)) config.runtimes = raw.runtimes.filter(isRuntime);
 	if (Array.isArray(raw.components)) config.components = raw.components.filter((c) => COMPONENTS.includes(c));
 	for (const runtime of RUNTIMES) for (const tier of TIERS) {
 		const saved = raw.tiers?.[runtime]?.[tier];
@@ -4808,18 +4824,25 @@ function loadConfig() {
 	for (const [lens, tier] of Object.entries(raw.reviewTiers ?? {})) if (isReviewLens(lens) && typeof tier === "string" && isTier(tier)) config.reviewTiers[lens] = tier;
 	if (typeof raw.minLines === "number" && raw.minLines > 0) config.minLines = Math.floor(raw.minLines);
 	if (Array.isArray(raw.catalog)) config.catalog = raw.catalog.flatMap(catalogEntry);
+	const legacy = Array.isArray(raw.runtimes) ? raw.runtimes.filter(isRuntime) : [];
+	if (legacy.length > 0 && !config.catalog.some((e) => e.item === "model-ladder")) config.catalog.unshift({
+		item: LADDER_ITEM,
+		runtimes: legacy,
+		settings: {}
+	});
 	return config;
 }
 /** A saved catalog entry, or nothing when it names an unknown item or is malformed. */
 function catalogEntry(raw) {
 	if (!raw || typeof raw !== "object") return [];
 	const e = raw;
-	if (typeof e.item !== "string" || !catalogItem(e.item)) return [];
-	if (e.project !== void 0 && (typeof e.project !== "string" || !isAbsolute(e.project))) return [];
+	const item = typeof e.item === "string" ? catalogItem(e.item) : void 0;
+	if (!item) return [];
+	if (e.project !== void 0 && (typeof e.project !== "string" || !isAbsolute(e.project) || item.userOnly)) return [];
 	const settings = {};
 	for (const [k, v] of Object.entries(e.settings ?? {})) if (typeof v === "string") settings[k] = v;
 	return [{
-		item: e.item,
+		item: item.id,
 		...e.project ? { project: e.project } : {},
 		runtimes: Array.isArray(e.runtimes) ? e.runtimes.filter(isRuntime) : [],
 		settings
@@ -5045,19 +5068,18 @@ function detectedRuntimes() {
 	return detect().filter((d) => d.bin || d.dir).map((d) => d.runtime);
 }
 /**
-* Plans the whole saved configuration, or with `only` just those catalog entries (keys such as
-* "kaneo@user"), leaving the ladder and other entries alone.
+* Plans every saved catalog entry, or with `only` just those (keys such as "kaneo@user" or
+* "model-ladder@user"), leaving the other entries alone.
 */
 function buildPlan(config, only) {
 	const manifest = loadManifest().records;
 	const records = new Map(manifest.map((r) => [recordKey(r), r]));
-	const ladder = only ? [] : allOps(config);
-	const catalog = catalogOps(config, only);
-	const ops = [...ladder, ...catalog];
+	const ops = catalogOps(config, only);
 	const wanted = new Set(ops.map(opKey));
 	const missing = new Set(missingProjects(config).map(entryKey));
 	const planned = new Set((only ?? config.catalog.map(entryKey)).filter((k) => !missing.has(k)));
-	return [...manifest.filter((r) => r.component === "catalog" ? r.item !== void 0 && planned.has(r.item) && !wanted.has(recordKey(r)) : !only && config.runtimes.includes(r.runtime) && config.components.includes(r.component) && !wanted.has(recordKey(r))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
+	const ladder = ladderRuntimes(config);
+	return [...manifest.filter((r) => r.item !== void 0 && planned.has(r.item) && !wanted.has(recordKey(r)) && (r.component === "catalog" || ladder.includes(r.runtime) && config.components.includes(r.component))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
 }
 /**
 * After uninstalling some runtimes, puts back catalog files the remaining runtimes still use: a
@@ -5077,7 +5099,6 @@ function uninstallSelection(selection, force = false) {
 	const results = uninstall((r) => (key === void 0 || r.item === key) && (runtimes.length === 0 || runtimes.includes(r.runtime)), force);
 	const kept = new Set(results.filter((r) => r.outcome === "kept-modified").map((r) => r.record.item));
 	const config = loadConfig();
-	if (key === void 0) config.runtimes = runtimes.length === 0 ? [] : config.runtimes.filter((r) => !runtimes.includes(r));
 	forgetCatalog(config, (e) => (key === void 0 || entryKey(e) === key) && !kept.has(entryKey(e)), runtimes);
 	saveConfig(config);
 	const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
@@ -5252,21 +5273,21 @@ async function chooseReviewTiers(config) {
 		}))
 	}));
 }
-async function installFlow() {
-	const config = loadConfig();
+/** Installs or updates the model ladder: agents, parts, models per rung, review rungs, guard. */
+async function ladderFlow(config) {
 	const found = detect();
-	const detected = found.filter((d) => d.bin || d.dir).map((d) => d.runtime);
-	config.runtimes = ask(await multiselect({
+	const defaults = entryDefaults(catalogItem(LADDER_ITEM), void 0, config, detectedRuntimes);
+	const runtimes = ask(await multiselect({
 		message: "Configure which agents?",
 		options: found.map((d) => ({
 			value: d.runtime,
 			label: RUNTIME_LABELS[d.runtime],
 			hint: d.bin || d.dir ? "detected" : "not found"
 		})),
-		initialValues: config.runtimes.length > 0 ? config.runtimes : detected,
+		initialValues: defaults.runtimes,
 		required: true
 	}));
-	const offered = COMPONENTS.filter((c) => config.runtimes.some((r) => RUNTIME_COMPONENTS[r].includes(c)));
+	const offered = COMPONENTS.filter((c) => runtimes.some((r) => RUNTIME_COMPONENTS[r].includes(c)));
 	config.components = ask(await multiselect({
 		message: "Install which parts?",
 		options: offered.map((c) => ({
@@ -5276,9 +5297,9 @@ async function installFlow() {
 		initialValues: config.components.filter((c) => offered.includes(c)),
 		required: true
 	}));
-	await chooseModels(config, config.runtimes);
+	await chooseModels(config, runtimes);
 	if (config.components.includes("review-models")) await chooseReviewTiers(config);
-	if (config.components.includes("read-guard") && config.runtimes.includes("claude")) {
+	if (config.components.includes("read-guard") && runtimes.includes("claude")) {
 		const value = ask(await text({
 			message: "Read guard: block whole reads of files with at least how many lines?",
 			initialValue: String(config.minLines),
@@ -5286,6 +5307,16 @@ async function installFlow() {
 		}));
 		config.minLines = Number(value);
 	}
+	upsertEntry(config, {
+		item: LADDER_ITEM,
+		runtimes,
+		settings: {}
+	});
+	await applyWithConfirm(buildPlan(config, [LADDER_KEY]), config);
+}
+/** Re-applies every saved catalog item, for example after an update of agent-config. */
+async function reapplyFlow() {
+	const config = loadConfig();
 	for (const w of missingProjectWarnings(config)) log.warn(w);
 	await applyWithConfirm(buildPlan(config), config);
 }
@@ -5334,7 +5365,7 @@ async function catalogFlow() {
 		options: [{
 			value: "install",
 			label: "Install or update",
-			hint: "user or project scope"
+			hint: item.userOnly ? "agents, parts, models" : "user or project scope"
 		}, {
 			value: "uninstall",
 			label: "Uninstall",
@@ -5355,6 +5386,7 @@ async function catalogFlow() {
 		});
 		return;
 	}
+	if (item.id === "model-ladder") return ladderFlow(config);
 	const project = ask(await select({
 		message: "Install where?",
 		options: [{
@@ -5494,23 +5526,23 @@ async function selfUpdateFlow() {
 }
 async function runTui() {
 	intro(`${import_picocolors.default.bgCyan(import_picocolors.default.black(" agent-config "))} ${import_picocolors.default.dim(`v${VERSION}`)}`);
-	log.message(import_picocolors.default.dim("Route reads and edits to the cheapest capable model: fast → balanced → deep. The main session keeps the reasoning."));
+	log.message(import_picocolors.default.dim("Pick abilities from the catalog, such as the model ladder: route reads and edits to the cheapest capable model."));
 	try {
 		for (;;) {
-			const hasInstall = status().length > 0;
+			const saved = loadConfig().catalog.length > 0;
 			const choice = ask(await select({
 				message: "What do you want to do?",
 				options: [
 					{
-						value: "install",
-						label: hasInstall ? "Update configuration" : "Install",
-						hint: "agents, skill, hooks, models"
-					},
-					{
 						value: "catalog",
 						label: "Catalog",
-						hint: `optional abilities: ${CATALOG.map((i) => i.id).join(", ")}`
+						hint: `install, configure or remove: ${CATALOG.map((i) => i.id).join(", ")}`
 					},
+					...saved ? [{
+						value: "install",
+						label: "Re-apply installed items",
+						hint: "write the saved catalog items again, e.g. after an update"
+					}] : [],
 					{
 						value: "status",
 						label: "Status",
@@ -5533,8 +5565,8 @@ async function runTui() {
 					},
 					{
 						value: "reset",
-						label: "Reset saved choices",
-						hint: "back to the recommended ladder"
+						label: "Reset ladder choices",
+						hint: "back to the recommended parts and models; keeps installed items"
 					},
 					{
 						value: "exit",
@@ -5543,7 +5575,7 @@ async function runTui() {
 				]
 			}));
 			if (choice === "exit") break;
-			if (choice === "install") await installFlow();
+			if (choice === "install") await reapplyFlow();
 			if (choice === "catalog") await catalogFlow();
 			if (choice === "status") statusFlow();
 			if (choice === "doctor") doctorFlow();
@@ -5552,9 +5584,9 @@ async function runTui() {
 			if (choice === "reset") {
 				saveConfig({
 					...defaultConfig(),
-					runtimes: loadConfig().runtimes
+					catalog: loadConfig().catalog
 				});
-				log.success("Saved choices reset. Run Update to apply them.");
+				log.success("Ladder choices reset. Re-apply installed items to write them.");
 			}
 		}
 	} catch (error) {
@@ -5845,15 +5877,17 @@ const SHORT_COMMANDS = {
 	u: "self-update"
 };
 const HELP = `agent-config ${VERSION}
-Configure Claude Code, OpenCode, Codex and Pi. Model ladder: route reads and
-edits to the cheapest capable model (fast → balanced → deep).
+Configure Claude Code, OpenCode, Codex and Pi from a catalog of abilities, such as
+the model ladder (route reads and edits to the cheapest capable model: fast → balanced
+→ deep) and Kaneo work tracking.
 Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.3.0).
 
 Usage:
   agent-config                     open the TUI (in a terminal)
-  agent-config install [flags]     apply the saved (or flagged) configuration (\`agi i\` for short)
-  agent-config install <item>      add a catalog item, e.g. \`agi install kaneo\` (--project <dir>
-                                   for one repository instead of your user config)
+  agent-config install             re-apply the saved catalog items (\`agi i\` for short)
+  agent-config install <item>      add a catalog item, e.g. \`agi install model-ladder\` or
+                                   \`agi install kaneo\` (--project <dir> for one repository
+                                   instead of your user config; kaneo only)
   agent-config catalog             list catalog items and where they are installed
   agent-config status              list what agent-config installed and whether it changed
   agent-config uninstall [flags]   remove it and restore what it replaced
@@ -5869,12 +5903,16 @@ Usage:
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
-  --component <id>               ${COMPONENTS.join(" | ")} (repeatable; default: saved, else all)
+
+Model ladder flags (\`install model-ladder\`; on a bare \`install\` they install the ladder too):
+  --component <id>             ${COMPONENTS.join(" | ")} (repeatable; default: saved, else all)
   --model <runtime>:<tier>=<id>  model for a rung, e.g. claude:fast=claude-haiku-5-5 (repeatable)
   --effort <runtime>:<tier>=<l>  low | medium | high, e.g. codex:deep=high (repeatable)
   --review <lens>=<tier>         rung for a Gentle AI review agent, e.g. review-risk=deep (repeatable)
   --min-lines <n>                read guard threshold (default 350)
-  --yes                          apply or uninstall without asking
+
+Other flags:
+  --yes                        apply or uninstall without asking
   --dry-run                      show the plan, write nothing
   --project <dir>                catalog item: install into this repository instead of user scope
   --url <base-url>               kaneo: Kaneo base URL, e.g. https://kaneo.example.com (default:
@@ -5932,12 +5970,9 @@ function parseAssign(raw, flag) {
 		value: m[3] ?? ""
 	};
 }
-function applyFlags(config, values) {
+/** Applies the ladder flags (parts, models, review rungs, read guard) to the saved settings. */
+function applyLadderFlags(config, values) {
 	const list = (k) => values[k] ?? [];
-	if (list("runtime").length > 0) {
-		for (const r of list("runtime")) if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
-		config.runtimes = list("runtime");
-	} else if (config.runtimes.length === 0) config.runtimes = detectedRuntimes();
 	if (list("component").length > 0) {
 		for (const c of list("component")) if (!COMPONENTS.includes(c)) throw new UsageError(`unknown component "${c}"`);
 		config.components = list("component");
@@ -5982,6 +6017,7 @@ function catalogTarget(id, values, forUninstall = false) {
 	if (!item) throw new UsageError(`unknown catalog item "${id}"; available: ${CATALOG.map((i) => i.id).join(", ")}`);
 	const raw = values.project;
 	if (raw === void 0) return { item };
+	if (item.userOnly) throw new UsageError(`${item.id} installs at user scope only; drop --project`);
 	const project = resolve(raw);
 	if (existsSync(project) && statSync(project).isDirectory()) return {
 		item,
@@ -6156,8 +6192,8 @@ async function main(argv) {
 	].includes(command) ? positionals[1] : void 0;
 	const catalogFlag = given.find((k) => CATALOG_ONLY.includes(k));
 	if (catalogFlag && (!itemId || catalogFlag === "url" && command === "uninstall")) throw new UsageError(`--${catalogFlag} only applies to ${catalogFlag === "url" ? "install (or apply)" : "install or uninstall"} <item>`);
-	const ladderFlag = itemId ? given.find((k) => LADDER_ONLY.includes(k)) : void 0;
-	if (ladderFlag) throw new UsageError(`--${ladderFlag} configures the ladder; run it with \`agent-config install\` without an item`);
+	const ladderFlag = given.find((k) => LADDER_ONLY.includes(k));
+	if (ladderFlag && itemId && (itemId !== "model-ladder" || command === "uninstall")) throw new UsageError(`--${ladderFlag} configures the model ladder; run \`agent-config install ${LADDER_ITEM}\``);
 	switch (command) {
 		case "":
 			if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -6168,14 +6204,16 @@ async function main(argv) {
 		case "install":
 		case "apply": {
 			const config = loadConfig();
-			if (itemId) {
-				const { item, project } = catalogTarget(itemId, values);
+			const ladderFlags = ladderFlag !== void 0 || values.runtime !== void 0;
+			const id = itemId ?? (ladderFlags ? "model-ladder" : void 0);
+			if (id) {
+				const { item, project } = catalogTarget(id, values);
 				const entry = await catalogEntryFor(item, project, config, values);
+				if (item.id === "model-ladder") applyLadderFlags(config, values);
 				upsertEntry(config, entry);
-				return applyAndReport(buildPlan(config, [entryKey(entry)]), config, values, json);
+				if (itemId) return applyAndReport(buildPlan(config, [entryKey(entry)]), config, values, json);
 			}
-			applyFlags(config, values);
-			if (config.runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
+			if (config.catalog.length === 0) throw new UsageError(`nothing to install yet; add a catalog item, e.g. \`agent-config install ${LADDER_ITEM}\` (see \`agent-config catalog\`)`);
 			for (const w of missingProjectWarnings(config)) process.stderr.write(`agent-config: warning: ${w}\n`);
 			return applyAndReport(buildPlan(config), config, values, json);
 		}
@@ -6192,11 +6230,13 @@ async function main(argv) {
 					files: records.filter((r) => r.record.item === entryKey(e)).length
 				}))
 			}));
+			const width = Math.max(...CATALOG.map((i) => i.id.length));
+			const indent = " ".repeat(width + 1);
 			const text = items.map((i) => [
-				`${import_picocolors.default.bold(i.id.padEnd(8))} ${i.title}`,
-				`         ${i.description}`,
-				`         installed: ${i.entries.length === 0 ? "no" : i.entries.map((e) => `${scopeLabel(e)} (${e.runtimes.join(", ")})`).join("; ")}`,
-				`         install: agent-config install ${i.id} [--project <dir>]`
+				`${import_picocolors.default.bold(i.id.padEnd(width))} ${i.title}`,
+				`${indent}${i.description}`,
+				`${indent}installed: ${i.entries.length === 0 ? "no" : i.entries.map((e) => `${scopeLabel(e)} (${e.runtimes.join(", ")})`).join("; ")}`,
+				`${indent}install: agent-config install ${i.id}${catalogItem(i.id)?.userOnly ? "" : " [--project <dir>]"}`
 			].join("\n")).join("\n\n");
 			out(json, { items }, text);
 			return 0;
@@ -6271,7 +6311,7 @@ async function main(argv) {
 			if (verify !== void 0 && role !== "edit") throw new UsageError("--verify only applies to delegate edit");
 			if (verify !== void 0 && (!verify || /[\r\n]/.test(verify))) throw new UsageError("--verify expects one single-line command");
 			const config = loadConfig();
-			const runtime = values.runtime?.at(-1) ?? delegateRuntime(config.runtimes);
+			const runtime = values.runtime?.at(-1) ?? delegateRuntime(ladderRuntimes(config));
 			if (!runtime || !isRuntime(runtime)) throw new UsageError(runtime ? `unknown runtime "${runtime}"` : "no runtime found; pass --runtime");
 			const cwd = resolve(values.cwd ?? process.cwd());
 			if (!existsSync(cwd) || !statSync(cwd).isDirectory()) throw new UsageError(`--cwd ${cwd} is not a directory`);
