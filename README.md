@@ -211,6 +211,9 @@ vp check        # format, lint, type check
 vp test         # tests (includes a check that dist/ is current)
 vp pack         # rebuild dist/cli.mjs — commit it with your change
 node src/cli.ts --help
+vp run bump     # bump the version from the commits since the last release, rebuild dist/, commit
 ```
+
+`vp run bump` reads the [Conventional Commits](https://www.conventionalcommits.org) since the last change to the `package.json` version: `fix`/`perf` bump the patch, `feat` the minor, and `!` or a `BREAKING CHANGE:` footer the major (the minor while the version is below 1.0.0). It writes the version, runs `vp pack` and commits `package.json` and `dist/` as `chore(release): <version>`, leaving any other change uncommitted. Pass `major`, `minor` or `patch` to choose the bump, `--dry-run` to only print it, and `--no-build` to skip `vp pack` (`vp run bump --dry-run`). `vpr bump` and `pnpm bump` work too.
 
 `dist/cli.mjs` is committed and bundles every dependency, so `install.sh` runs it with Node alone. Tests run against a temporary `HOME`; nothing touches your real agent configuration.
