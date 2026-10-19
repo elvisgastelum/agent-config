@@ -168,6 +168,42 @@ test("refuses to update a checkout that is not the installed copy", () => {
   expect(JSON.parse(res.stdout).check.reason).toContain("not the installed copy");
 });
 
+test("a failed update leaves a pre-rename install where it was, still working", () => {
+  // The origin now holds the broken version from the previous test.
+  const { home: h, legacy } = legacyHome("legacy-failed-update");
+  git(legacy, "reset", "-q", "--hard", firstCommit);
+  const res = spawnSync("bash", [join(repo, "install.sh")], {
+    env: { PATH: process.env.PATH, HOME: h, AGENT_CONFIG_REPO: origin, AGENT_CONFIG_NO_RUN: "1" },
+    encoding: "utf8",
+  });
+  expect(res.status).toBe(1);
+  expect(existsSync(join(h, ".local", "share", "agent-config"))).toBe(false);
+  expect(git(legacy, "rev-parse", "HEAD")).toBe(firstCommit);
+  expect(spawnSync(process.execPath, [join(legacy, "dist", "cli.mjs"), "--version"]).status).toBe(
+    0,
+  );
+});
+
+test("uninstalling a pre-rename install keeps it while its old records list kept files", () => {
+  const { home: h, legacy } = legacyHome("legacy-uninstall");
+  // A 0.2.0 CLI keeps edited files (exit 3) and records them in the old state folder.
+  writeFileSync(join(legacy, "dist", "cli.mjs"), "process.exit(3);\n");
+  const oldState = join(h, ".local", "state", "model-ladder");
+  mkdirSync(oldState, { recursive: true });
+  writeFileSync(
+    join(oldState, "manifest.json"),
+    JSON.stringify({ version: 1, records: [{ kind: "file" }] }, null, 2),
+  );
+  const res = spawnSync("bash", [join(repo, "install.sh"), "--uninstall"], {
+    env: { PATH: process.env.PATH, HOME: h, NO_COLOR: "1" },
+    encoding: "utf8",
+  });
+  expect(res.status).toBe(0);
+  expect(res.stderr).toContain("kept files you edited");
+  expect(existsSync(legacy)).toBe(true);
+  expect(existsSync(join(oldState, "manifest.json"))).toBe(true);
+});
+
 test("reports an unreachable origin with git's own reason", () => {
   const copy = cloneTo("offline");
   git(copy, "remote", "set-url", "origin", join(root, "does-not-exist"));

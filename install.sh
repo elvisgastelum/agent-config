@@ -76,8 +76,12 @@ main() {
         "re-run the installer without --uninstall, then run it again with --uninstall."
     fi
     # Files you edited after installing are kept and stay recorded. Keep the tool too, so
-    # `--uninstall --force` can still remove them.
-    if [ -f "$state_dir/manifest.json" ] && ! grep -q '"records": \[\]' "$state_dir/manifest.json"; then
+    # `--uninstall --force` can still remove them. A pre-rename CLI records them in the old folder.
+    local kept=0 manifest
+    for manifest in "$state_dir/manifest.json" "$legacy_state_dir/manifest.json"; do
+      if [ -f "$manifest" ] && ! grep -q '"records": \[\]' "$manifest"; then kept=1; fi
+    done
+    if [ "$kept" = 1 ]; then
       warn "kept files you edited after installing (listed above), and agent-config itself so they can still be removed."
       warn "to remove them too: re-run with --uninstall --force (or keep them and delete $home_dir by hand)."
       return 0
@@ -118,11 +122,13 @@ main() {
     }
   }
 
-  # Move a pre-rename install to the new location, keeping its history, before updating it.
+  # A pre-rename install is updated where it is and moved to the new location only once the
+  # update works, so a failed update leaves the old command and checkout working.
+  local move_to=""
   if [ "$home_dir" = "$default_home" ] && [ ! -e "$home_dir" ] && [ -d "$legacy_home/.git" ]; then
-    say "Moving $legacy_home to $home_dir (model-ladder is now agent-config)"
-    mkdir -p "$(dirname "$home_dir")"
-    mv "$legacy_home" "$home_dir"
+    move_to="$home_dir"
+    home_dir="$legacy_home"
+    entry="$home_dir/dist/cli.mjs"
     # Point the official pre-rename remote at the renamed repo; a fork or custom remote is kept.
     case "$(git -C "$home_dir" remote get-url origin 2>/dev/null || true)" in
       *elvisgastelum/model-ladder*) git -C "$home_dir" remote set-url origin "$repo" </dev/null >&2 || true ;;
@@ -160,6 +166,16 @@ main() {
     fi
     die "update failed and the previous version does not run either." \
       "remove $home_dir and re-run the installer."
+  fi
+
+  if [ -n "$move_to" ]; then
+    say "Moving $home_dir to $move_to (model-ladder is now agent-config)"
+    mkdir -p "$(dirname "$move_to")"
+    mv "$home_dir" "$move_to" ||
+      die "could not move $home_dir to $move_to; the updated copy still works where it is." \
+        "move it by hand, then re-run the installer."
+    home_dir="$move_to"
+    entry="$home_dir/dist/cli.mjs"
   fi
 
   mkdir -p "$bin_dir"
