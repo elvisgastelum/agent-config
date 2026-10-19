@@ -86,7 +86,7 @@ describe("uninstall", () => {
 
     expect(read(join(h, ".claude/CLAUDE.md"))).toContain(BLOCK_BEGIN);
     const applied = JSON.parse(read(join(h, ".claude/settings.json")));
-    expect(applied.env).toEqual({ FOO: "1", MODEL_LADDER_MIN_LINES: "350" });
+    expect(applied.env).toEqual({ FOO: "1", AGENT_CONFIG_MIN_LINES: "350" });
     expect(applied.hooks.PreToolUse).toHaveLength(2);
 
     const results = uninstall(() => true);
@@ -94,7 +94,7 @@ describe("uninstall", () => {
     expect(read(join(h, ".claude/CLAUDE.md"))).toBe(memory);
     expect(JSON.parse(read(join(h, ".claude/settings.json")))).toEqual(JSON.parse(settings));
     expect(existsSync(join(h, ".claude/agents/ladder-read-fast.md"))).toBe(false);
-    expect(existsSync(join(h, ".claude/hooks/model-ladder/read-guard.mjs"))).toBe(false);
+    expect(existsSync(join(h, ".claude/hooks/agent-config/read-guard.mjs"))).toBe(false);
   });
 
   test("removes files it created, including a CLAUDE.md that did not exist", () => {

@@ -1,9 +1,10 @@
-# model-ladder
+# agent-config
 
-CLI + TUI that installs model-ladder agents, skill, instructions, read-guard hook and Gentle AI review models into Claude Code, OpenCode, Codex and Pi, and undoes them.
+CLI + TUI (`agent-config`, alias `model-ladder`) that installs the model-ladder feature (ladder agents, skill, instructions, read-guard hook, Gentle AI review models) into Claude Code, OpenCode, Codex and Pi, and undoes it.
 
 - `src/tiers.ts` rungs and default models; `src/content.ts` skill, instructions and agent prompts; `src/runtimes.ts` per-runtime file operations; `src/ops.ts` plan/apply/uninstall engine with manifest and backups; `src/tui.ts` clack TUI; `src/cli.ts` entry; `assets/read-guard.mjs` Claude hook (no dependencies, copied into `~/.claude/hooks`).
-- Every write goes through an `Op` so uninstall can restore it. Never write agent config files directly.
+- Every write goes through an `Op` so uninstall can restore it. Never write agent config files directly. Installed items the configuration no longer produces are planned as `remove`.
+- Renamed from model-ladder in 0.3.0: keep reading `MODEL_LADDER_*` (`setting()` in `src/paths.ts`), the legacy folders (`src/migrate.ts`), the legacy block markers (`src/ops.ts`) and the `model-ladder` command alias. The feature keeps its name: `model-ladder` skill, `ladder-*` agents.
 - Tests use a temporary `HOME` (`tests/helpers.ts`); never point tests at real config.
 - `install.sh` needs only git and Node: it clones and runs the committed, self-contained `dist/cli.mjs`. After changing `src/` or dependencies, run `vp pack` and commit `dist/` (a test fails when it is stale). Keep installer stdout clean for `--json`.
 - Vite+ is the development stack only; never make users install pnpm, vp or dependencies.

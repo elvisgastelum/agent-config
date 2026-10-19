@@ -1,4 +1,4 @@
-// Every location model-ladder reads or writes, resolved from HOME and XDG variables at
+// Every location agent-config reads or writes, resolved from HOME and XDG variables at
 // call time so tests (and CLAUDE_CONFIG_DIR users) can point it elsewhere.
 
 import { join } from "node:path";
@@ -9,17 +9,34 @@ export function home(): string {
   return process.env.HOME || homedir();
 }
 
+/** The tool's name before it was renamed to agent-config; still read for compatibility. */
+export const LEGACY_NAME = "model-ladder";
+
+/** Reads AGENT_CONFIG_<name>, falling back to the pre-rename MODEL_LADDER_<name>. */
+export function setting(name: string): string | undefined {
+  return process.env[`AGENT_CONFIG_${name}`] || process.env[`MODEL_LADDER_${name}`] || undefined;
+}
+
+function stateRoot(): string {
+  return process.env.XDG_STATE_HOME || join(home(), ".local", "state");
+}
+
+function configRoot(): string {
+  return process.env.XDG_CONFIG_HOME || join(home(), ".config");
+}
+
 export function statePaths(): { dir: string; manifest: string; backups: string } {
-  const dir = join(process.env.XDG_STATE_HOME || join(home(), ".local", "state"), "model-ladder");
+  const dir = join(stateRoot(), "agent-config");
   return { dir, manifest: join(dir, "manifest.json"), backups: join(dir, "backups") };
 }
 
 export function configPath(): string {
-  return join(
-    process.env.XDG_CONFIG_HOME || join(home(), ".config"),
-    "model-ladder",
-    "config.json",
-  );
+  return join(configRoot(), "agent-config", "config.json");
+}
+
+/** Where the pre-rename tool kept its state and configuration. */
+export function legacyDirs(): { state: string; config: string } {
+  return { state: join(stateRoot(), LEGACY_NAME), config: join(configRoot(), LEGACY_NAME) };
 }
 
 export function claudeDir(): string {

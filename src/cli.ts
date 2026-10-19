@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// model-ladder: the TUI for humans, plain commands (and --json) for scripts and agents.
+// agent-config: the TUI for humans, plain commands (and --json) for scripts and agents.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
@@ -8,27 +8,29 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { buildPlan, detectedRuntimes, doctor, status, tildify } from "./commands.ts";
 import { loadConfig, saveConfig, type Config } from "./config.ts";
-import { configPath } from "./paths.ts";
+import { migrateLegacyLayout } from "./migrate.ts";
+import { configPath, setting } from "./paths.ts";
 import { applyPlan, COMPONENTS, uninstall, type Component } from "./ops.ts";
 import { EFFORTS, isReviewLens, isRuntime, isTier, type Effort, type Runtime } from "./tiers.ts";
 import { formatPlan, runTui } from "./tui.ts";
-import { DELEGATED_ENV, delegate } from "./delegate.ts";
-import { checkForUpdate, runUpdate } from "./selfupdate.ts";
+import { DELEGATED_ENV, LEGACY_DELEGATED_ENV, delegate } from "./delegate.ts";
+import { checkForUpdate, defaultInstallHome, legacyInstallHome, runUpdate } from "./selfupdate.ts";
 import { VERSION } from "./version.ts";
 
-const HELP = `model-ladder ${VERSION}
-Route reads and edits to the cheapest capable model (fast → balanced → deep)
-for Claude Code, OpenCode, Codex and Pi.
+const HELP = `agent-config ${VERSION}
+Configure Claude Code, OpenCode, Codex and Pi. Model ladder: route reads and
+edits to the cheapest capable model (fast → balanced → deep).
+Also installed as \`model-ladder\` (its name before 0.3.0).
 
 Usage:
-  model-ladder                     open the TUI (in a terminal)
-  model-ladder install [flags]     apply the saved (or flagged) configuration
-  model-ladder status              list what model-ladder installed and whether it changed
-  model-ladder uninstall [flags]   remove it and restore what it replaced
-  model-ladder doctor              check runtimes and prerequisites
-  model-ladder config              print the saved configuration and its path
-  model-ladder self-update         update model-ladder itself (--dry-run only checks)
-  model-ladder delegate <read|edit> [--tier t] [--runtime r] "<task>"
+  agent-config                     open the TUI (in a terminal)
+  agent-config install [flags]     apply the saved (or flagged) configuration
+  agent-config status              list what agent-config installed and whether it changed
+  agent-config uninstall [flags]   remove it and restore what it replaced
+  agent-config doctor              check runtimes and prerequisites
+  agent-config config              print the saved configuration and its path
+  agent-config self-update         update agent-config itself (--dry-run only checks)
+  agent-config delegate <read|edit> [--tier t] [--runtime r] "<task>"
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
@@ -57,7 +59,7 @@ Delegate flags:
 
 Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
 3 uninstall kept files you edited (re-run with --force) / delegate ended partial or escalate,
-4 delegate refused: already running inside a model-ladder delegated agent, 130 cancelled.`;
+4 delegate refused: already running inside a agent-config delegated agent, 130 cancelled.`;
 
 class UsageError extends Error {}
 
@@ -124,7 +126,8 @@ function applyFlags(config: Config, values: Record<string, unknown>): void {
 
 /** The runtime a delegating agent most likely runs in, else the first configured one. */
 function delegateRuntime(configured: Runtime[]): string | undefined {
-  if (process.env.MODEL_LADDER_RUNTIME) return process.env.MODEL_LADDER_RUNTIME;
+  const runtime = setting("RUNTIME");
+  if (runtime) return runtime;
   if (process.env.CLAUDECODE) return "claude";
   return configured[0] ?? detectedRuntimes()[0];
 }
@@ -163,6 +166,11 @@ async function main(argv: string[]): Promise<number> {
   if (values.help) return (out(false, null, HELP), 0);
 
   const command = positionals[0] ?? "";
+  for (const dir of migrateLegacyLayout()) {
+    process.stderr.write(
+      `agent-config: moved ${dir} to its agent-config location (renamed from model-ladder)\n`,
+    );
+  }
   // Flags that belong to one command are refused elsewhere instead of being silently ignored.
   const given = Object.keys(values).filter((k) => values[k as keyof typeof values] !== undefined);
   const misplaced =
@@ -190,7 +198,9 @@ async function main(argv: string[]): Promise<number> {
       applyFlags(config, values);
       if (config.runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
       const plan = buildPlan(config);
-      const changes = plan.filter((x) => x.action === "create" || x.action === "update");
+      const changes = plan.filter(
+        (x) => x.action === "create" || x.action === "update" || x.action === "remove",
+      );
       const planJson = plan.map(({ op, action, reason }) => ({
         runtime: op.runtime,
         component: op.component,
@@ -321,9 +331,9 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "delegate": {
-      if (process.env[DELEGATED_ENV]) {
+      if (process.env[DELEGATED_ENV] || process.env[LEGACY_DELEGATED_ENV]) {
         process.stderr.write(
-          "error: model-ladder delegate cannot run inside an agent it started (no nested delegation).\n" +
+          "error: agent-config delegate cannot run inside an agent it started (no nested delegation).\n" +
             "  fix: answer with what you have, or reply STATUS: escalate so the caller climbs a rung.\n",
         );
         return 4;
@@ -379,13 +389,13 @@ async function main(argv: string[]): Promise<number> {
         config.tiers[runtime],
         {
           onStart: (t, model) =>
-            process.stderr.write(`model-ladder: ${role} ${t} (${model}) running…\n`),
+            process.stderr.write(`agent-config: ${role} ${t} (${model}) running…\n`),
         },
       );
       const last = attempts.at(-1);
       for (const a of attempts) {
         process.stderr.write(
-          `model-ladder: ${role} ${a.tier} (${a.model}) → ${a.status} in ${(a.durationMs / 1000).toFixed(1)}s${a.error ? `: ${a.error}` : ""}\n`,
+          `agent-config: ${role} ${a.tier} (${a.model}) → ${a.status} in ${(a.durationMs / 1000).toFixed(1)}s${a.error ? `: ${a.error}` : ""}\n`,
         );
       }
       out(
@@ -406,11 +416,13 @@ async function main(argv: string[]): Promise<number> {
       const check = checkForUpdate();
       const summary = !check.updatable
         ? `cannot update: ${check.reason}`
-        : check.behind === 0 || !check.latest
+        : (check.behind === 0 || !check.latest) && !check.relocate
           ? `up to date: v${check.current.version} (${check.current.commit})`
-          : `update available: v${check.current.version} (${check.current.commit}) -> v${check.latest.version} (${check.latest.commit}), ${check.behind} commit(s)`;
+          : check.behind === 0
+            ? `up to date, but still in the pre-rename location ${legacyInstallHome()}: updating moves it to ${defaultInstallHome()}`
+            : `update available: v${check.current.version} (${check.current.commit}) -> v${check.latest?.version} (${check.latest?.commit}), ${check.behind} commit(s)`;
       if (!check.updatable) return (out(json, { check, updated: false }, summary), 1);
-      if (check.behind === 0 || values["dry-run"])
+      if ((check.behind === 0 && !check.relocate) || values["dry-run"])
         return (out(json, { check, updated: false }, summary), 0);
       if (!values.yes) {
         if (!process.stdin.isTTY) {
@@ -428,7 +440,7 @@ async function main(argv: string[]): Promise<number> {
         json,
         { check, updated: result.ok, commit: result.commit, message: result.message },
         result.ok
-          ? `${result.message}. Run \`model-ladder install\` to re-apply your configuration with it.`
+          ? `${result.message}. Run \`agent-config install\` to re-apply your configuration with it.`
           : result.message,
       );
       return result.ok ? 0 : 1;
@@ -455,10 +467,10 @@ main(process.argv.slice(2)).then(
       (error as { code?: string })?.code?.startsWith("ERR_PARSE_ARGS")
     ) {
       const hint = (error as { code?: string })?.code?.startsWith("ERR_PARSE_ARGS")
-        ? 'A task that starts with - goes after --, e.g. model-ladder delegate read -- "- item".\n'
+        ? 'A task that starts with - goes after --, e.g. agent-config delegate read -- "- item".\n'
         : "";
       process.stderr.write(
-        `error: ${(error as Error).message}\n${hint}Run model-ladder --help for usage.\n`,
+        `error: ${(error as Error).message}\n${hint}Run agent-config --help for usage.\n`,
       );
       process.exit(2);
     }

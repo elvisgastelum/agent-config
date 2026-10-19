@@ -1,8 +1,8 @@
 {
-  "name": "model-ladder",
-  "version": "0.2.0",
+  "name": "agent-config",
+  "version": "0.3.0",
   "private": true,
-  "description": "Route reads and edits to the cheapest capable model (Haiku → Sonnet → Opus) for Claude Code, OpenCode, Codex and Pi, so the main session's context stays small.",
+  "description": "Configure Claude Code, OpenCode, Codex and Pi from one TUI. First feature: the model ladder, which routes reads and edits to the cheapest capable model (Haiku → Sonnet → Opus) so the main session's context stays small.",
   "homepage": "https://github.com/elvisgastelum/agent-config#readme",
   "bugs": {
     "url": "https://github.com/elvisgastelum/agent-config/issues"
@@ -14,6 +14,7 @@
     "url": "git+https://github.com/elvisgastelum/agent-config.git"
   },
   "bin": {
+    "agent-config": "./dist/cli.mjs",
     "model-ladder": "./dist/cli.mjs"
   },
   "files": [
@@ -26,7 +27,7 @@
     "dev": "vp pack --watch",
     "test": "vp test",
     "check": "vp check",
-    "model-ladder": "node dist/cli.mjs"
+    "agent-config": "node dist/cli.mjs"
   },
   "devDependencies": {
     "@clack/prompts": "^1.8.1",

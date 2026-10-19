@@ -294,7 +294,7 @@ export function runtimeOps(runtime: Runtime, config: Config): Op[] {
     });
   }
   if (wanted.includes("read-guard") && runtime === "claude") {
-    const script = join(claudeDir(), "hooks", "model-ladder", READ_GUARD_FILE);
+    const script = join(claudeDir(), "hooks", "agent-config", READ_GUARD_FILE);
     const settings = join(claudeDir(), "settings.json");
     ops.push(
       {
@@ -321,9 +321,9 @@ export function runtimeOps(runtime: Runtime, config: Config): Op[] {
         component: "read-guard",
         kind: "json-set",
         path: settings,
-        pointer: ["env", "MODEL_LADDER_MIN_LINES"],
+        pointer: ["env", "AGENT_CONFIG_MIN_LINES"],
         value: String(config.minLines),
-        label: `env MODEL_LADDER_MIN_LINES=${config.minLines}`,
+        label: `env AGENT_CONFIG_MIN_LINES=${config.minLines}`,
       },
     );
   }

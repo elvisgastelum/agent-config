@@ -1,11 +1,11 @@
-// Updates model-ladder itself. The installed copy is a git checkout; updating reuses its
+// Updates agent-config itself. The installed copy is a git checkout; updating reuses its
 // install.sh, which pulls, checks the new dist runs, and rolls back when it does not.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { home } from "./paths.ts";
+import { home, LEGACY_NAME, setting } from "./paths.ts";
 import { VERSION } from "./version.ts";
 
 /** The checkout this CLI runs from (dist/cli.mjs and src/selfupdate.ts sit one level below). */
@@ -14,7 +14,16 @@ export function checkoutRoot(): string {
 }
 
 export function installHome(): string {
-  return process.env.MODEL_LADDER_HOME || join(home(), ".local", "share", "model-ladder");
+  return setting("HOME") || defaultInstallHome();
+}
+
+export function defaultInstallHome(): string {
+  return join(home(), ".local", "share", "agent-config");
+}
+
+/** Where the pre-rename installer put the checkout. */
+export function legacyInstallHome(): string {
+  return join(home(), ".local", "share", LEGACY_NAME);
 }
 
 function git(root: string, ...args: string[]): string {
@@ -42,6 +51,8 @@ export interface UpdateCheck {
   latest?: { version: string; commit: string };
   /** Commits on the remote that this copy does not have. */
   behind: number;
+  /** The copy is still in the pre-rename location and an update would move it. */
+  relocate?: boolean;
 }
 
 function gitError(error: unknown): string {
@@ -75,7 +86,7 @@ export function checkForUpdate(root = checkoutRoot()): UpdateCheck {
   }
   if (ref === "HEAD") {
     return refuse(
-      "the installed copy is pinned to a fixed commit or tag (detached HEAD); re-run the installer with MODEL_LADDER_REF=<branch> to follow a branch",
+      "the installed copy is pinned to a fixed commit or tag (detached HEAD); re-run the installer with AGENT_CONFIG_REF=<branch> to follow a branch",
       { current },
     );
   }
@@ -93,7 +104,8 @@ export function checkForUpdate(root = checkoutRoot()): UpdateCheck {
       // Keep the current version label when the remote package.json cannot be read.
     }
     const latest = { version, commit: git(root, "rev-parse", "--short", `origin/${ref}`) };
-    return { updatable: true, ref, current, latest, behind };
+    const relocate = samePath(root, legacyInstallHome()) && !existsSync(defaultInstallHome());
+    return { updatable: true, ref, current, latest, behind, ...(relocate ? { relocate } : {}) };
   } catch (error) {
     return refuse(`cannot compare with origin/${ref}: ${gitError(error)}`, { ref, current });
   }
@@ -106,6 +118,8 @@ export interface UpdateResult {
   /** The installer's messages (its stderr), for showing on failure. */
   log: string;
   commit?: string;
+  /** Where the installed copy is after the update (it moves out of a pre-rename location). */
+  root: string;
 }
 
 const ENTRY = join("dist", "cli.mjs");
@@ -121,6 +135,10 @@ function runs(root: string): boolean {
 
 export function runUpdate(check: UpdateCheck, root = checkoutRoot()): UpdateResult {
   const before = check.current.commit;
+  // A copy still in the pre-rename location moves to the new one as part of the update.
+  const moving = samePath(root, legacyInstallHome()) && !existsSync(defaultInstallHome());
+  const target = moving ? defaultInstallHome() : installHome();
+  const finalRoot = moving ? target : root;
   const res = spawnSync("bash", [join(root, "install.sh")], {
     encoding: "utf8",
     stdio: ["ignore", "ignore", "pipe"],
@@ -129,40 +147,44 @@ export function runUpdate(check: UpdateCheck, root = checkoutRoot()): UpdateResu
     env: {
       ...process.env,
       // The path as configured (checkForUpdate verified it is this checkout), not its realpath.
-      MODEL_LADDER_HOME: installHome(),
-      MODEL_LADDER_REF: check.ref,
-      MODEL_LADDER_NO_RUN: "1",
+      AGENT_CONFIG_HOME: target,
+      AGENT_CONFIG_REF: check.ref,
+      AGENT_CONFIG_NO_RUN: "1",
       NO_COLOR: "1",
     },
   });
   const log = res.stderr ?? "";
   let after = "";
   try {
-    after = git(root, "rev-parse", "--short", "HEAD");
+    after = git(finalRoot, "rev-parse", "--short", "HEAD");
   } catch {
     // Reported below as an inconsistent install.
   }
   if (res.status === 0) {
+    const moved = moving ? `, moved to ${target}` : "";
     return {
       ok: true,
-      message: `Updated to v${check.latest?.version} (${after})`,
+      message: `Updated to v${check.latest?.version} (${after})${moved}`,
       log,
       commit: after,
+      root: finalRoot,
     };
   }
   const killed = res.error || res.signal ? " (the installer was interrupted)" : "";
   // Only claim the previous version is installed when that is what is on disk and it runs.
-  if (after === before && runs(root)) {
+  if (after === before && runs(finalRoot)) {
     return {
       ok: false,
       message: `Update failed${killed}; the previous version is still installed.`,
       log,
+      root: finalRoot,
     };
   }
   return {
     ok: false,
     message: `Update failed${killed} and the installed copy may be inconsistent (at ${after || "an unknown commit"}); re-run the install one-liner to repair it.`,
     log,
+    root: finalRoot,
   };
 }
 

@@ -40,6 +40,7 @@ const ACTION_COLOR: Record<Action, (s: string) => string> = {
   update: pc.yellow,
   unchanged: pc.dim,
   skip: pc.dim,
+  remove: pc.red,
 };
 
 export function formatPlan(plan: PlannedOp[]): string {
@@ -182,7 +183,9 @@ async function installFlow(): Promise<void> {
 
   const plan = buildPlan(config);
   p.note(formatPlan(plan), "Plan");
-  const changes = plan.filter((x) => x.action === "create" || x.action === "update").length;
+  const changes = plan.filter(
+    (x) => x.action === "create" || x.action === "update" || x.action === "remove",
+  ).length;
   if (changes === 0) {
     saveConfig(config);
     p.log.success("Everything is already up to date.");
@@ -204,7 +207,7 @@ async function installFlow(): Promise<void> {
   spin.stop("Applied");
   for (const note of result.notes) p.log.warn(note);
   p.log.info(
-    "Restart running agent sessions to pick up the new agents. Run `model-ladder status` any time; `model-ladder uninstall` undoes everything.",
+    "Restart running agent sessions to pick up the new agents. Run `agent-config status` any time; `agent-config uninstall` undoes everything.",
   );
 }
 
@@ -219,7 +222,7 @@ function statusFlow(): void {
     ({ record, state }) =>
       `${color[state](state.padEnd(8))} ${pc.bold(record.runtime.padEnd(9))} ${record.label} ${pc.dim(tildify(record.path))}`,
   );
-  p.note(lines.join("\n"), "Installed by model-ladder");
+  p.note(lines.join("\n"), "Installed by agent-config");
 }
 
 function doctorFlow(): void {
@@ -245,7 +248,7 @@ async function uninstallFlow(): Promise<void> {
     }),
   ) as Runtime[];
   if (
-    !ask(await p.confirm({ message: "Remove model-ladder files and restore what they replaced?" }))
+    !ask(await p.confirm({ message: "Remove agent-config files and restore what they replaced?" }))
   )
     return;
   const results = uninstall((r) => runtimes.includes(r.runtime));
@@ -268,14 +271,16 @@ async function selfUpdateFlow(): Promise<boolean> {
     return false;
   }
   const { current, latest, behind } = check;
-  if (behind === 0 || !latest) {
+  if ((behind === 0 || !latest) && !check.relocate) {
     spin.stop(`Already up to date: v${current.version} (${current.commit})`);
     return false;
   }
   spin.stop(
-    `New version: v${latest.version} (${latest.commit}), ${behind} commit(s) newer than v${current.version} (${current.commit})`,
+    behind === 0 || !latest
+      ? `Up to date, but installed in the pre-rename location; updating moves it to the agent-config location`
+      : `New version: v${latest.version} (${latest.commit}), ${behind} commit(s) newer than v${current.version} (${current.commit})`,
   );
-  if (!ask(await p.confirm({ message: "Update model-ladder now?" }))) return false;
+  if (!ask(await p.confirm({ message: "Update agent-config now?" }))) return false;
   spin.start("Updating");
   const result = runUpdate(check);
   if (!result.ok) {
@@ -293,16 +298,16 @@ async function selfUpdateFlow(): Promise<boolean> {
       }),
     )
   ) {
-    const code = reapplyWithNewVersion();
+    const code = reapplyWithNewVersion(result.root);
     if (code !== 0)
-      p.log.warn(`Re-applying exited with code ${code}; run \`model-ladder install\` to retry.`);
+      p.log.warn(`Re-applying exited with code ${code}; run \`agent-config install\` to retry.`);
   }
-  p.log.info("Start model-ladder again to use the new version.");
+  p.log.info("Start agent-config again to use the new version.");
   return true;
 }
 
 export async function runTui(): Promise<number> {
-  p.intro(`${pc.bgCyan(pc.black(" model-ladder "))} ${pc.dim(`v${VERSION}`)}`);
+  p.intro(`${pc.bgCyan(pc.black(" agent-config "))} ${pc.dim(`v${VERSION}`)}`);
   p.log.message(
     pc.dim(
       "Route reads and edits to the cheapest capable model: fast → balanced → deep. The main session keeps the reasoning.",
@@ -325,7 +330,7 @@ export async function runTui(): Promise<number> {
             { value: "uninstall", label: "Uninstall", hint: "remove and restore" },
             {
               value: "self-update",
-              label: "Update model-ladder version",
+              label: "Update agent-config version",
               hint: `installed v${VERSION}; checks GitHub for a newer one`,
             },
             {

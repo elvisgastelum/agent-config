@@ -2587,8 +2587,20 @@ function applyEdits(text, edits) {
 function home() {
 	return process.env.HOME || homedir();
 }
+/** The tool's name before it was renamed to agent-config; still read for compatibility. */
+const LEGACY_NAME = "model-ladder";
+/** Reads AGENT_CONFIG_<name>, falling back to the pre-rename MODEL_LADDER_<name>. */
+function setting(name) {
+	return process.env[`AGENT_CONFIG_${name}`] || process.env[`MODEL_LADDER_${name}`] || void 0;
+}
+function stateRoot() {
+	return process.env.XDG_STATE_HOME || join(home(), ".local", "state");
+}
+function configRoot() {
+	return process.env.XDG_CONFIG_HOME || join(home(), ".config");
+}
 function statePaths() {
-	const dir = join(process.env.XDG_STATE_HOME || join(home(), ".local", "state"), "model-ladder");
+	const dir = join(stateRoot(), "agent-config");
 	return {
 		dir,
 		manifest: join(dir, "manifest.json"),
@@ -2596,7 +2608,14 @@ function statePaths() {
 	};
 }
 function configPath() {
-	return join(process.env.XDG_CONFIG_HOME || join(home(), ".config"), "model-ladder", "config.json");
+	return join(configRoot(), "agent-config", "config.json");
+}
+/** Where the pre-rename tool kept its state and configuration. */
+function legacyDirs() {
+	return {
+		state: join(stateRoot(), LEGACY_NAME),
+		config: join(configRoot(), LEGACY_NAME)
+	};
 }
 function claudeDir() {
 	return process.env.CLAUDE_CONFIG_DIR || join(home(), ".claude");
@@ -2642,8 +2661,23 @@ const COMPONENT_LABELS = {
 	"read-guard": "Read guard hook: blocks full reads of large files (Claude Code)",
 	"review-models": "Gentle AI review agents on ladder models"
 };
-const BLOCK_BEGIN = "<!-- BEGIN model-ladder: managed by model-ladder, edits inside this block are overwritten -->";
-const BLOCK_END = "<!-- END model-ladder -->";
+/** Plans undoing an installed item that the current configuration no longer produces. */
+function planRemoval(record) {
+	return {
+		op: {
+			kind: record.kind,
+			runtime: record.runtime,
+			component: record.component,
+			path: record.path,
+			label: record.label
+		},
+		action: "remove",
+		reason: "no longer part of the configuration",
+		record
+	};
+}
+const BLOCK_BEGIN = "<!-- BEGIN agent-config: managed by agent-config, edits inside this block are overwritten -->";
+const BLOCK_END = "<!-- END agent-config -->";
 /** Matches the file's own indentation so edits do not reformat what they did not touch. */
 function formatFor(text) {
 	const indent = /^([ \t]+)\S/m.exec(text)?.[1] ?? "  ";
@@ -2676,7 +2710,7 @@ function writeAtomic(path, text, executable = false) {
 		mode = statSync(target).mode & 4095;
 	} catch {}
 	mkdirSync(dirname(target), { recursive: true });
-	const tmp = `${target}.model-ladder-tmp`;
+	const tmp = `${target}.agent-config-tmp`;
 	writeFileSync(tmp, text);
 	if (executable) chmodSync(tmp, (mode ?? 420) | 73);
 	else if (mode !== void 0) chmodSync(tmp, mode);
@@ -2752,7 +2786,7 @@ function existingPrefix(root, pointer) {
 	while (depth < pointer.length - 1 && getAt(root, pointer.slice(0, depth + 1)).present) depth++;
 	return depth;
 }
-/** Removes the now-empty parent objects model-ladder created for a key. */
+/** Removes the now-empty parent objects agent-config created for a key. */
 function pruneParents(text, pointer, keepDepth) {
 	let out = text;
 	for (let depth = pointer.length - 1; depth > keepDepth; depth--) {
@@ -2813,23 +2847,35 @@ function setFrontmatter(text, key, value) {
 	else lines.splice(fm.end, 0, `${key}: ${value}`);
 	return lines.join("\n");
 }
+const MARKERS = [[BLOCK_BEGIN, BLOCK_END], ["<!-- BEGIN model-ladder: managed by model-ladder, edits inside this block are overwritten -->", "<!-- END model-ladder -->"]];
+/** The managed block's position, under the current or the pre-rename markers. */
+function findBlock(text) {
+	for (const [open, close] of MARKERS) {
+		const begin = text.indexOf(open);
+		const endIdx = begin >= 0 ? text.indexOf(close, begin) : -1;
+		if (begin >= 0 && endIdx >= 0) return {
+			begin,
+			end: endIdx + close.length
+		};
+	}
+}
+function hasBlock(text) {
+	return findBlock(text) !== void 0;
+}
 function stripBlock(text) {
-	const begin = text.indexOf(BLOCK_BEGIN);
-	if (begin < 0) return text;
-	const endIdx = text.indexOf(BLOCK_END, begin);
-	if (endIdx < 0) return text;
-	const before = text.slice(0, begin).replace(/\n+$/, "");
-	const after = text.slice(endIdx + 25).replace(/^\n+/, "");
+	const found = findBlock(text);
+	if (!found) return text;
+	const before = text.slice(0, found.begin).replace(/\n+$/, "");
+	const after = text.slice(found.end).replace(/^\n+/, "");
 	if (!before) return after;
 	return after ? `${before}\n\n${after}` : `${before}\n`;
 }
 function withBlock(text, content) {
 	const block = `${BLOCK_BEGIN}\n${content.trim()}\n${BLOCK_END}\n`;
-	const begin = text.indexOf(BLOCK_BEGIN);
-	const endIdx = begin >= 0 ? text.indexOf(BLOCK_END, begin) : -1;
-	if (begin >= 0 && endIdx >= 0) {
-		const tail = text.slice(endIdx + 25).replace(/^\n/, "");
-		return `${text.slice(0, begin)}${block}${tail}`;
+	const found = findBlock(text);
+	if (found) {
+		const tail = text.slice(found.end).replace(/^\n/, "");
+		return `${text.slice(0, found.begin)}${block}${tail}`;
 	}
 	if (!text.trim()) return block;
 	return `${text.replace(/\n*$/, "")}\n\n${block}`;
@@ -2918,7 +2964,7 @@ function addHook(text, event, matcher, command) {
 		created: "entry"
 	};
 }
-/** Removes the hook entry and only the containers model-ladder created for it. */
+/** Removes the hook entry and only the containers agent-config created for it. */
 function removeHook(text, event, command, created) {
 	const groups = hookGroups(parseJson("settings", text), event);
 	const gi = groups.findIndex((g) => (g.hooks ?? []).some((h) => h.command === command));
@@ -3030,7 +3076,7 @@ function missingDirs(dir) {
 	for (let d = dir; !existsSync(d) && dirname(d) !== d; d = dirname(d)) dirs.push(d);
 	return dirs;
 }
-/** Deletes a JSON file model-ladder created once nothing but `{}` is left in it. */
+/** Deletes a JSON file agent-config created once nothing but `{}` is left in it. */
 function writeOrDropJson(r, text) {
 	const value = parseJson(r.path, text);
 	if (r.createdFile && value && typeof value === "object" && Object.keys(value).length === 0) rmSync(r.path, { force: true });
@@ -3136,6 +3182,20 @@ function applyPlan(plan) {
 		errors: []
 	};
 	for (const planned of plan) {
+		if (planned.action === "remove" && planned.record) {
+			const res = undoRecord(planned.record);
+			if (res.outcome === "kept-modified") result.notes.push(`${planned.record.path} was kept: ${res.note}`);
+			else {
+				byKey.delete(recordKey(planned.record));
+				pruneCreatedDirs([planned.record]);
+			}
+			result.applied.push(planned);
+			saveManifest({
+				version: 1,
+				records: [...byKey.values()]
+			});
+			continue;
+		}
 		const key = opKey(planned.op);
 		try {
 			const record = applyOp(planned, byKey.get(key), result.notes);
@@ -3159,7 +3219,7 @@ function recordState(r) {
 	if (current === void 0) return "missing";
 	switch (r.kind) {
 		case "file": return sha256(current) === r.sha ? "ok" : "drifted";
-		case "block": return current.includes("<!-- BEGIN model-ladder: managed by model-ladder, edits inside this block are overwritten -->") ? "ok" : "missing";
+		case "block": return hasBlock(current) ? "ok" : "missing";
 		case "json-set": {
 			const got = getAt(parseJson(r.path, current), r.pointer ?? []);
 			return got.present && deepEqual(got.value, r.value) ? "ok" : "drifted";
@@ -3261,6 +3321,13 @@ function undoRecord(r, force = false) {
 		}
 	}
 }
+/** Removes directories agent-config created for these records, deepest first, once empty. */
+function pruneCreatedDirs(records) {
+	const dirs = new Set(records.flatMap((r) => r.createdDirs ?? []));
+	for (const dir of [...dirs].sort((a, b) => b.length - a.length)) try {
+		if (readdirSync(dir).length === 0) rmdirSync(dir);
+	} catch {}
+}
 function uninstall(filter, force = false) {
 	const manifest = loadManifest();
 	const results = [];
@@ -3274,10 +3341,7 @@ function uninstall(filter, force = false) {
 		results.push(res);
 		if (res.outcome === "kept-modified") keep.unshift(r);
 	}
-	const dirs = new Set(results.filter((r) => r.outcome !== "kept-modified").flatMap((r) => r.record.createdDirs ?? []));
-	for (const dir of [...dirs].sort((a, b) => b.length - a.length)) try {
-		if (readdirSync(dir).length === 0) rmdirSync(dir);
-	} catch {}
+	pruneCreatedDirs(results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record));
 	saveManifest({
 		version: 1,
 		records: keep
@@ -3462,9 +3526,9 @@ Every ladder agent replies with \`STATUS: done | partial | escalate\`. Edit agen
 If you are yourself a subagent or a parallel worker without an agent tool, run the same ladder from the shell:
 
 \`\`\`sh
-model-ladder delegate read --runtime ${runtime} "<the read handoff above>"
-model-ladder delegate edit --runtime ${runtime} --tier balanced --verify "<verify command>" "<the edit handoff above>"
-printf '%s' "<long handoff>" | model-ladder delegate read --runtime ${runtime} -
+agent-config delegate read --runtime ${runtime} "<the read handoff above>"
+agent-config delegate edit --runtime ${runtime} --tier balanced --verify "<verify command>" "<the edit handoff above>"
+printf '%s' "<long handoff>" | agent-config delegate read --runtime ${runtime} -
 \`\`\`
 
 It runs the ladder agent headlessly, climbs fast → balanced → deep by itself on \`partial\`, \`escalate\` or failure, and prints only the final reply (rung and timing go to stderr; \`--json\` for structured output, \`--no-climb\` to stay on one rung, \`-\` to read the task from stdin). Edits may run only the \`--verify\` command; without it the edit agent gets no shell. Exit codes: 0 done, 3 still partial after the last rung, 1 failed, 4 refused because you are already running inside a delegated agent: then do the work yourself or reply \`STATUS: escalate\`. Ladder agents never call it.
@@ -3478,7 +3542,7 @@ It runs the ladder agent headlessly, climbs fast → balanced → deep by itself
 
 ## Gentle AI reviews
 
-Gentle AI review agents (\`review-risk\`, \`review-resilience\`, \`review-readability\`, \`review-reliability\`, \`review-refuter\`) run on the rungs model-ladder assigned them. The review lifecycle stays Gentle AI's: never relaunch a lens on another model yourself, and follow only the transitions the review returns. A bounded review correction is an edit like any other: hand the frozen finding as the spec to a ladder edit agent and verify it yourself before capturing the result.
+Gentle AI review agents (\`review-risk\`, \`review-resilience\`, \`review-readability\`, \`review-reliability\`, \`review-refuter\`) run on the rungs agent-config assigned them. The review lifecycle stays Gentle AI's: never relaunch a lens on another model yourself, and follow only the transitions the review returns. A bounded review correction is an edit like any other: hand the frozen finding as the spec to a ladder edit agent and verify it yourself before capturing the result.
 `;
 }
 function instructionsBlock(runtime, minLines) {
@@ -3489,14 +3553,14 @@ Reads and edits go to the cheapest capable model; this session keeps the reasoni
 - Reads start at \`ladder-read-fast\`; edits start at \`ladder-edit-fast\` for pattern work and \`ladder-edit-balanced\` for new logic. Context offload is a named delegation reason.
 - Climb one rung (fast → balanced → deep) only when a reply is \`partial\` or \`escalate\` or fails verification; after deep fails, do it yourself.
 - Before editing, read the exact lines yourself with offset/limit. Keep debugging, design and security, data or concurrency changes in this session, and verify every delegated edit.
-- Without an agent tool (for example as a parallel subagent), use \`model-ladder delegate read|edit --runtime ${runtime} "<task>"\` from the shell instead.`;
+- Without an agent tool (for example as a parallel subagent), use \`agent-config delegate read|edit --runtime ${runtime} "<task>"\` from the shell instead.`;
 }
 const ROLE_BODY = {
 	read: `You are a read-only worker on the model ladder. The parent session delegated a question so that file contents stay out of its context. Answer that question and nothing else.
 
 Rules:
 - Read, search and summarize only. Never edit files, never run commands that change anything.
-- You are already a ladder agent: never delegate further (no subagents, no \`model-ladder delegate\`).
+- You are already a ladder agent: never delegate further (no subagents, no \`agent-config delegate\`).
 - Cite evidence as \`path:line\` using the line numbers your read tool shows. Never estimate a line number.
 - Quote at most 5 lines per excerpt, and only when the exact text matters. Never paste whole files.
 - Keep the whole reply under 300 words unless the parent set another budget.
@@ -3515,7 +3579,7 @@ Rules:
 - Write only inside the allowed edit surfaces. If the change needs another file, stop and say so in STATUS.
 - Run the verify command once after the change. If it fails, fix and run it once more. If it still fails, stop.
 - Never commit, push, install dependencies, or run repository-wide formatters or generators.
-- You are already a ladder agent: never delegate further (no subagents, no \`model-ladder delegate\`).
+- You are already a ladder agent: never delegate further (no subagents, no \`agent-config delegate\`).
 - Never paste the code you wrote into your reply. The parent reads the diff.
 
 Reply in exactly this shape:
@@ -3828,7 +3892,7 @@ function runtimeOps(runtime, config) {
 		label: "instructions block"
 	});
 	if (wanted.includes("read-guard") && runtime === "claude") {
-		const script = join(claudeDir(), "hooks", "model-ladder", READ_GUARD_FILE);
+		const script = join(claudeDir(), "hooks", "agent-config", READ_GUARD_FILE);
 		const settings = join(claudeDir(), "settings.json");
 		ops.push({
 			runtime,
@@ -3852,9 +3916,9 @@ function runtimeOps(runtime, config) {
 			component: "read-guard",
 			kind: "json-set",
 			path: settings,
-			pointer: ["env", "MODEL_LADDER_MIN_LINES"],
+			pointer: ["env", "AGENT_CONFIG_MIN_LINES"],
 			value: String(config.minLines),
-			label: `env MODEL_LADDER_MIN_LINES=${config.minLines}`
+			label: `env AGENT_CONFIG_MIN_LINES=${config.minLines}`
 		});
 	}
 	if (wanted.includes("review-models")) ops.push(...reviewOps(runtime, config));
@@ -3864,129 +3928,8 @@ function allOps(config) {
 	return config.runtimes.flatMap((r) => runtimeOps(r, config));
 }
 //#endregion
-//#region src/commands.ts
-function onPath(bin) {
-	try {
-		execFileSync("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
-		return true;
-	} catch {
-		return false;
-	}
-}
-function detect() {
-	return RUNTIMES.map((runtime) => ({
-		runtime,
-		bin: onPath(RUNTIME_BIN[runtime]),
-		dir: existsSync(runtimeDir(runtime))
-	}));
-}
-function detectedRuntimes() {
-	return detect().filter((d) => d.bin || d.dir).map((d) => d.runtime);
-}
-function buildPlan(config) {
-	const records = new Map(loadManifest().records.map((r) => [recordKey(r), r]));
-	return allOps(config).map((op) => planOp(op, records.get(opKey(op))));
-}
-function tildify(path) {
-	const h = home();
-	return path.startsWith(`${h}/`) ? `~${path.slice(h.length)}` : path;
-}
-function status() {
-	return loadManifest().records.map((record) => ({
-		record,
-		state: recordState(record)
-	}));
-}
-function doctor() {
-	const checks = [];
-	checks.push({
-		name: "node",
-		ok: Number(process.versions.node.split(".")[0]) >= 22,
-		detail: process.version
-	});
-	for (const d of detect()) checks.push({
-		name: d.runtime,
-		ok: d.bin || d.dir,
-		detail: d.bin || d.dir ? `${d.bin ? "cli on PATH" : "cli not on PATH"}, ${tildify(runtimeDir(d.runtime))}` : "not installed"
-	});
-	const codexConfig = join(codexDir(), "config.toml");
-	if (existsSync(codexConfig)) {
-		const text = readFileSync(codexConfig, "utf8");
-		const enabled = /^\s*multi_agent\s*=\s*true/m.test(text);
-		checks.push({
-			name: "codex multi_agent",
-			ok: enabled,
-			detail: enabled ? "enabled" : "add `multi_agent = true` under [features] in ~/.codex/config.toml so Codex can spawn ladder agents"
-		});
-	}
-	if (existsSync(piDir())) {
-		const settings = join(piDir(), "settings.json");
-		const text = existsSync(settings) ? readFileSync(settings, "utf8") : "";
-		const subagents = /subagent|gentle-pi/.test(text) || existsSync(join(piDir(), "subagents.json"));
-		checks.push({
-			name: "pi subagents",
-			ok: subagents,
-			detail: subagents ? "subagent support found" : "install a Pi subagent extension (for example gentle-pi) so Pi can call ladder agents"
-		});
-	}
-	const gentle = onPath("gentle-ai");
-	checks.push({
-		name: "gentle-ai",
-		ok: true,
-		detail: gentle ? "installed (review-models applies)" : "not installed (review-models skips)"
-	});
-	const drifted = status().filter((s) => s.state !== "ok");
-	checks.push({
-		name: "managed files",
-		ok: drifted.length === 0,
-		detail: drifted.length === 0 ? "all as installed" : `${drifted.length} changed or missing (often \`gentle-ai sync\` resetting review models); run \`model-ladder install\` to reapply`
-	});
-	return checks;
-}
-function defaultConfig() {
-	return {
-		version: 1,
-		runtimes: [],
-		components: [...COMPONENTS],
-		tiers: {
-			claude: defaultTierMap("claude"),
-			opencode: defaultTierMap("opencode"),
-			codex: defaultTierMap("codex"),
-			pi: defaultTierMap("pi")
-		},
-		reviewTiers: { ...DEFAULT_REVIEW_TIERS },
-		minLines: 350
-	};
-}
-/** Loads the saved config over the defaults, dropping anything unrecognized. */
-function loadConfig() {
-	const config = defaultConfig();
-	let raw;
-	try {
-		raw = JSON.parse(readFileSync(configPath(), "utf8"));
-	} catch {
-		return config;
-	}
-	if (Array.isArray(raw.runtimes)) config.runtimes = raw.runtimes.filter(isRuntime);
-	if (Array.isArray(raw.components)) config.components = raw.components.filter((c) => COMPONENTS.includes(c));
-	for (const runtime of RUNTIMES) for (const tier of TIERS) {
-		const saved = raw.tiers?.[runtime]?.[tier];
-		if (!saved) continue;
-		if (typeof saved.model === "string") config.tiers[runtime][tier].model = saved.model;
-		if (EFFORTS.includes(saved.effort)) config.tiers[runtime][tier].effort = saved.effort;
-	}
-	for (const [lens, tier] of Object.entries(raw.reviewTiers ?? {})) if (isReviewLens(lens) && typeof tier === "string" && isTier(tier)) config.reviewTiers[lens] = tier;
-	if (typeof raw.minLines === "number" && raw.minLines > 0) config.minLines = Math.floor(raw.minLines);
-	return config;
-}
-function saveConfig(config) {
-	const path = configPath();
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
-}
-//#endregion
 //#region src/version.ts
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 //#endregion
 //#region src/selfupdate.ts
 /** The checkout this CLI runs from (dist/cli.mjs and src/selfupdate.ts sit one level below). */
@@ -3994,7 +3937,14 @@ function checkoutRoot() {
 	return dirname(dirname(fileURLToPath(import.meta.url)));
 }
 function installHome() {
-	return process.env.MODEL_LADDER_HOME || join(home(), ".local", "share", "model-ladder");
+	return setting("HOME") || defaultInstallHome();
+}
+function defaultInstallHome() {
+	return join(home(), ".local", "share", "agent-config");
+}
+/** Where the pre-rename installer put the checkout. */
+function legacyInstallHome() {
+	return join(home(), ".local", "share", LEGACY_NAME);
 }
 function git(root, ...args) {
 	return execFileSync("git", [
@@ -4051,7 +4001,7 @@ function checkForUpdate(root = checkoutRoot()) {
 	} catch (error) {
 		return refuse(`cannot read the installed checkout: ${gitError(error)}`);
 	}
-	if (ref === "HEAD") return refuse("the installed copy is pinned to a fixed commit or tag (detached HEAD); re-run the installer with MODEL_LADDER_REF=<branch> to follow a branch", { current });
+	if (ref === "HEAD") return refuse("the installed copy is pinned to a fixed commit or tag (detached HEAD); re-run the installer with AGENT_CONFIG_REF=<branch> to follow a branch", { current });
 	try {
 		git(root, "fetch", "--quiet", "origin", ref);
 	} catch (error) {
@@ -4070,12 +4020,14 @@ function checkForUpdate(root = checkoutRoot()) {
 			version,
 			commit: git(root, "rev-parse", "--short", `origin/${ref}`)
 		};
+		const relocate = samePath(root, legacyInstallHome()) && !existsSync(defaultInstallHome());
 		return {
 			updatable: true,
 			ref,
 			current,
 			latest,
-			behind
+			behind,
+			...relocate ? { relocate } : {}
 		};
 	} catch (error) {
 		return refuse(`cannot compare with origin/${ref}: ${gitError(error)}`, {
@@ -4093,6 +4045,9 @@ function runs(root) {
 }
 function runUpdate(check, root = checkoutRoot()) {
 	const before = check.current.commit;
+	const moving = samePath(root, legacyInstallHome()) && !existsSync(defaultInstallHome());
+	const target = moving ? defaultInstallHome() : installHome();
+	const finalRoot = moving ? target : root;
 	const res = spawnSync("bash", [join(root, "install.sh")], {
 		encoding: "utf8",
 		stdio: [
@@ -4103,33 +4058,39 @@ function runUpdate(check, root = checkoutRoot()) {
 		timeout: 9e5,
 		env: {
 			...process.env,
-			MODEL_LADDER_HOME: installHome(),
-			MODEL_LADDER_REF: check.ref,
-			MODEL_LADDER_NO_RUN: "1",
+			AGENT_CONFIG_HOME: target,
+			AGENT_CONFIG_REF: check.ref,
+			AGENT_CONFIG_NO_RUN: "1",
 			NO_COLOR: "1"
 		}
 	});
 	const log = res.stderr ?? "";
 	let after = "";
 	try {
-		after = git(root, "rev-parse", "--short", "HEAD");
+		after = git(finalRoot, "rev-parse", "--short", "HEAD");
 	} catch {}
-	if (res.status === 0) return {
-		ok: true,
-		message: `Updated to v${check.latest?.version} (${after})`,
-		log,
-		commit: after
-	};
+	if (res.status === 0) {
+		const moved = moving ? `, moved to ${target}` : "";
+		return {
+			ok: true,
+			message: `Updated to v${check.latest?.version} (${after})${moved}`,
+			log,
+			commit: after,
+			root: finalRoot
+		};
+	}
 	const killed = res.error || res.signal ? " (the installer was interrupted)" : "";
-	if (after === before && runs(root)) return {
+	if (after === before && runs(finalRoot)) return {
 		ok: false,
 		message: `Update failed${killed}; the previous version is still installed.`,
-		log
+		log,
+		root: finalRoot
 	};
 	return {
 		ok: false,
 		message: `Update failed${killed} and the installed copy may be inconsistent (at ${after || "an unknown commit"}); re-run the install one-liner to repair it.`,
-		log
+		log,
+		root: finalRoot
 	};
 }
 /** Re-applies the saved configuration with the freshly installed CLI (new prompts and agents). */
@@ -4139,6 +4100,159 @@ function reapplyWithNewVersion(root = checkoutRoot()) {
 		"install",
 		"--yes"
 	], { stdio: "inherit" }).status ?? 1;
+}
+//#endregion
+//#region src/commands.ts
+function onPath(bin) {
+	try {
+		execFileSync("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+function detect() {
+	return RUNTIMES.map((runtime) => ({
+		runtime,
+		bin: onPath(RUNTIME_BIN[runtime]),
+		dir: existsSync(runtimeDir(runtime))
+	}));
+}
+function detectedRuntimes() {
+	return detect().filter((d) => d.bin || d.dir).map((d) => d.runtime);
+}
+function buildPlan(config) {
+	const manifest = loadManifest().records;
+	const records = new Map(manifest.map((r) => [recordKey(r), r]));
+	const ops = allOps(config);
+	const wanted = new Set(ops.map(opKey));
+	return [...manifest.filter((r) => config.runtimes.includes(r.runtime) && config.components.includes(r.component) && !wanted.has(recordKey(r))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
+}
+function tildify(path) {
+	const h = home();
+	return path.startsWith(`${h}/`) ? `~${path.slice(h.length)}` : path;
+}
+function status() {
+	return loadManifest().records.map((record) => ({
+		record,
+		state: recordState(record)
+	}));
+}
+function doctor() {
+	const checks = [];
+	checks.push({
+		name: "node",
+		ok: Number(process.versions.node.split(".")[0]) >= 22,
+		detail: process.version
+	});
+	for (const d of detect()) checks.push({
+		name: d.runtime,
+		ok: d.bin || d.dir,
+		detail: d.bin || d.dir ? `${d.bin ? "cli on PATH" : "cli not on PATH"}, ${tildify(runtimeDir(d.runtime))}` : "not installed"
+	});
+	const codexConfig = join(codexDir(), "config.toml");
+	if (existsSync(codexConfig)) {
+		const text = readFileSync(codexConfig, "utf8");
+		const enabled = /^\s*multi_agent\s*=\s*true/m.test(text);
+		checks.push({
+			name: "codex multi_agent",
+			ok: enabled,
+			detail: enabled ? "enabled" : "add `multi_agent = true` under [features] in ~/.codex/config.toml so Codex can spawn ladder agents"
+		});
+	}
+	if (existsSync(piDir())) {
+		const settings = join(piDir(), "settings.json");
+		const text = existsSync(settings) ? readFileSync(settings, "utf8") : "";
+		const subagents = /subagent|gentle-pi/.test(text) || existsSync(join(piDir(), "subagents.json"));
+		checks.push({
+			name: "pi subagents",
+			ok: subagents,
+			detail: subagents ? "subagent support found" : "install a Pi subagent extension (for example gentle-pi) so Pi can call ladder agents"
+		});
+	}
+	if (existsSync(legacyInstallHome())) checks.push({
+		name: "install location",
+		ok: false,
+		detail: `${tildify(legacyInstallHome())} is the pre-rename location; run \`agent-config self-update\` or the install one-liner to move it to ${tildify(defaultInstallHome())}`
+	});
+	const gentle = onPath("gentle-ai");
+	checks.push({
+		name: "gentle-ai",
+		ok: true,
+		detail: gentle ? "installed (review-models applies)" : "not installed (review-models skips)"
+	});
+	const drifted = status().filter((s) => s.state !== "ok");
+	checks.push({
+		name: "managed files",
+		ok: drifted.length === 0,
+		detail: drifted.length === 0 ? "all as installed" : `${drifted.length} changed or missing (often \`gentle-ai sync\` resetting review models); run \`agent-config install\` to reapply`
+	});
+	return checks;
+}
+function defaultConfig() {
+	return {
+		version: 1,
+		runtimes: [],
+		components: [...COMPONENTS],
+		tiers: {
+			claude: defaultTierMap("claude"),
+			opencode: defaultTierMap("opencode"),
+			codex: defaultTierMap("codex"),
+			pi: defaultTierMap("pi")
+		},
+		reviewTiers: { ...DEFAULT_REVIEW_TIERS },
+		minLines: 350
+	};
+}
+/** Loads the saved config over the defaults, dropping anything unrecognized. */
+function loadConfig() {
+	const config = defaultConfig();
+	let raw;
+	try {
+		raw = JSON.parse(readFileSync(configPath(), "utf8"));
+	} catch {
+		return config;
+	}
+	if (Array.isArray(raw.runtimes)) config.runtimes = raw.runtimes.filter(isRuntime);
+	if (Array.isArray(raw.components)) config.components = raw.components.filter((c) => COMPONENTS.includes(c));
+	for (const runtime of RUNTIMES) for (const tier of TIERS) {
+		const saved = raw.tiers?.[runtime]?.[tier];
+		if (!saved) continue;
+		if (typeof saved.model === "string") config.tiers[runtime][tier].model = saved.model;
+		if (EFFORTS.includes(saved.effort)) config.tiers[runtime][tier].effort = saved.effort;
+	}
+	for (const [lens, tier] of Object.entries(raw.reviewTiers ?? {})) if (isReviewLens(lens) && typeof tier === "string" && isTier(tier)) config.reviewTiers[lens] = tier;
+	if (typeof raw.minLines === "number" && raw.minLines > 0) config.minLines = Math.floor(raw.minLines);
+	return config;
+}
+function saveConfig(config) {
+	const path = configPath();
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+}
+//#endregion
+//#region src/migrate.ts
+function move(from, to) {
+	if (!existsSync(from) || existsSync(to)) return false;
+	mkdirSync(dirname(to), { recursive: true });
+	renameSync(from, to);
+	return true;
+}
+/** Returns what was moved, for one line of output; empty when there was nothing to do. */
+function migrateLegacyLayout() {
+	const legacy = legacyDirs();
+	const state = statePaths();
+	const moved = [];
+	if (move(legacy.config, dirname(configPath()))) moved.push(legacy.config);
+	if (move(legacy.state, state.dir)) {
+		moved.push(legacy.state);
+		try {
+			const manifest = JSON.parse(readFileSync(state.manifest, "utf8"));
+			for (const r of manifest.records ?? []) if (r.backup?.startsWith(`${legacy.state}/`)) r.backup = state.dir + r.backup.slice(legacy.state.length);
+			writeFileSync(state.manifest, `${JSON.stringify(manifest, null, 2)}\n`);
+		} catch {}
+	}
+	return moved;
 }
 //#endregion
 //#region src/tui.ts
@@ -4151,7 +4265,8 @@ const ACTION_COLOR = {
 	create: import_picocolors.default.green,
 	update: import_picocolors.default.yellow,
 	unchanged: import_picocolors.default.dim,
-	skip: import_picocolors.default.dim
+	skip: import_picocolors.default.dim,
+	remove: import_picocolors.default.red
 };
 function formatPlan(plan) {
 	const lines = [];
@@ -4281,7 +4396,7 @@ async function installFlow() {
 	}
 	const plan = buildPlan(config);
 	note(formatPlan(plan), "Plan");
-	const changes = plan.filter((x) => x.action === "create" || x.action === "update").length;
+	const changes = plan.filter((x) => x.action === "create" || x.action === "update" || x.action === "remove").length;
 	if (changes === 0) {
 		saveConfig(config);
 		log.success("Everything is already up to date.");
@@ -4302,7 +4417,7 @@ async function installFlow() {
 	}
 	spin.stop("Applied");
 	for (const note of result.notes) log.warn(note);
-	log.info("Restart running agent sessions to pick up the new agents. Run `model-ladder status` any time; `model-ladder uninstall` undoes everything.");
+	log.info("Restart running agent sessions to pick up the new agents. Run `agent-config status` any time; `agent-config uninstall` undoes everything.");
 }
 function statusFlow() {
 	const entries = status();
@@ -4316,7 +4431,7 @@ function statusFlow() {
 		missing: import_picocolors.default.red
 	};
 	const lines = entries.map(({ record, state }) => `${color[state](state.padEnd(8))} ${import_picocolors.default.bold(record.runtime.padEnd(9))} ${record.label} ${import_picocolors.default.dim(tildify(record.path))}`);
-	note(lines.join("\n"), "Installed by model-ladder");
+	note(lines.join("\n"), "Installed by agent-config");
 }
 function doctorFlow() {
 	const lines = doctor().map((c) => `${c.ok ? import_picocolors.default.green("✔") : import_picocolors.default.yellow("!")} ${c.name.padEnd(18)} ${import_picocolors.default.dim(c.detail)}`);
@@ -4338,7 +4453,7 @@ async function uninstallFlow() {
 		initialValues: installed,
 		required: true
 	}));
-	if (!ask(await confirm({ message: "Remove model-ladder files and restore what they replaced?" }))) return;
+	if (!ask(await confirm({ message: "Remove agent-config files and restore what they replaced?" }))) return;
 	const results = uninstall((r) => runtimes.includes(r.runtime));
 	const kept = results.filter((r) => r.outcome === "kept-modified");
 	log.success(`Undid ${results.length - kept.length} change(s).`);
@@ -4358,12 +4473,12 @@ async function selfUpdateFlow() {
 		return false;
 	}
 	const { current, latest, behind } = check;
-	if (behind === 0 || !latest) {
+	if ((behind === 0 || !latest) && !check.relocate) {
 		spin.stop(`Already up to date: v${current.version} (${current.commit})`);
 		return false;
 	}
-	spin.stop(`New version: v${latest.version} (${latest.commit}), ${behind} commit(s) newer than v${current.version} (${current.commit})`);
-	if (!ask(await confirm({ message: "Update model-ladder now?" }))) return false;
+	spin.stop(behind === 0 || !latest ? `Up to date, but installed in the pre-rename location; updating moves it to the agent-config location` : `New version: v${latest.version} (${latest.commit}), ${behind} commit(s) newer than v${current.version} (${current.commit})`);
+	if (!ask(await confirm({ message: "Update agent-config now?" }))) return false;
 	spin.start("Updating");
 	const result = runUpdate(check);
 	if (!result.ok) {
@@ -4373,14 +4488,14 @@ async function selfUpdateFlow() {
 	}
 	spin.stop(result.message);
 	if (status().length > 0 && ask(await confirm({ message: "Re-apply your saved configuration with the new version (agents, skill, instructions)?" }))) {
-		const code = reapplyWithNewVersion();
-		if (code !== 0) log.warn(`Re-applying exited with code ${code}; run \`model-ladder install\` to retry.`);
+		const code = reapplyWithNewVersion(result.root);
+		if (code !== 0) log.warn(`Re-applying exited with code ${code}; run \`agent-config install\` to retry.`);
 	}
-	log.info("Start model-ladder again to use the new version.");
+	log.info("Start agent-config again to use the new version.");
 	return true;
 }
 async function runTui() {
-	intro(`${import_picocolors.default.bgCyan(import_picocolors.default.black(" model-ladder "))} ${import_picocolors.default.dim(`v${VERSION}`)}`);
+	intro(`${import_picocolors.default.bgCyan(import_picocolors.default.black(" agent-config "))} ${import_picocolors.default.dim(`v${VERSION}`)}`);
 	log.message(import_picocolors.default.dim("Route reads and edits to the cheapest capable model: fast → balanced → deep. The main session keeps the reasoning."));
 	try {
 		for (;;) {
@@ -4410,7 +4525,7 @@ async function runTui() {
 					},
 					{
 						value: "self-update",
-						label: "Update model-ladder version",
+						label: "Update agent-config version",
 						hint: `installed v${VERSION}; checks GitHub for a newer one`
 					},
 					{
@@ -4451,7 +4566,7 @@ async function runTui() {
 //#endregion
 //#region src/delegate.ts
 /** Set in every process `delegate` starts; its presence means "already delegated". */
-const DELEGATED_ENV = "MODEL_LADDER_DELEGATED";
+const DELEGATED_ENV = "AGENT_CONFIG_DELEGATED";
 /**
 * A task that starts with "-" would be parsed as an option by runtimes that take the prompt
 * as a bare positional argument, so give it a leading word.
@@ -4574,7 +4689,7 @@ function agentFileProblem(runtime, role, tier) {
 	const name = agentName(role, tier);
 	const file = runtime === "claude" ? join(claudeDir(), "agents", `${name}.md`) : runtime === "opencode" ? join(opencodeDir(), "agents", `${name}.md`) : void 0;
 	if (!file) return void 0;
-	const fix = `run \`model-ladder install --runtime ${runtime}\``;
+	const fix = `run \`agent-config install --runtime ${runtime}\``;
 	if (!existsSync(file)) return `${name} is not installed for ${runtime}; ${fix}`;
 	if (runtime === "opencode" && role === "read") {
 		const text = readFileSync(file, "utf8");
@@ -4620,7 +4735,7 @@ function runOnce(req, tier, tiers, prompt, timeoutMs) {
 		reply: "",
 		error: problem
 	};
-	const scratch = mkdtempSync(join(tmpdir(), "model-ladder-delegate-"));
+	const scratch = mkdtempSync(join(tmpdir(), "agent-config-delegate-"));
 	try {
 		const inv = invocation(req, tier, tiers, prompt, scratch);
 		const res = spawnSync(inv.bin, inv.args, {
@@ -4720,19 +4835,20 @@ function delegate(req, tiers, hooks = {}) {
 }
 //#endregion
 //#region src/cli.ts
-const HELP = `model-ladder ${VERSION}
-Route reads and edits to the cheapest capable model (fast → balanced → deep)
-for Claude Code, OpenCode, Codex and Pi.
+const HELP = `agent-config ${VERSION}
+Configure Claude Code, OpenCode, Codex and Pi. Model ladder: route reads and
+edits to the cheapest capable model (fast → balanced → deep).
+Also installed as \`model-ladder\` (its name before 0.3.0).
 
 Usage:
-  model-ladder                     open the TUI (in a terminal)
-  model-ladder install [flags]     apply the saved (or flagged) configuration
-  model-ladder status              list what model-ladder installed and whether it changed
-  model-ladder uninstall [flags]   remove it and restore what it replaced
-  model-ladder doctor              check runtimes and prerequisites
-  model-ladder config              print the saved configuration and its path
-  model-ladder self-update         update model-ladder itself (--dry-run only checks)
-  model-ladder delegate <read|edit> [--tier t] [--runtime r] "<task>"
+  agent-config                     open the TUI (in a terminal)
+  agent-config install [flags]     apply the saved (or flagged) configuration
+  agent-config status              list what agent-config installed and whether it changed
+  agent-config uninstall [flags]   remove it and restore what it replaced
+  agent-config doctor              check runtimes and prerequisites
+  agent-config config              print the saved configuration and its path
+  agent-config self-update         update agent-config itself (--dry-run only checks)
+  agent-config delegate <read|edit> [--tier t] [--runtime r] "<task>"
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
@@ -4761,7 +4877,7 @@ Delegate flags:
 
 Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
 3 uninstall kept files you edited (re-run with --force) / delegate ended partial or escalate,
-4 delegate refused: already running inside a model-ladder delegated agent, 130 cancelled.`;
+4 delegate refused: already running inside a agent-config delegated agent, 130 cancelled.`;
 var UsageError = class extends Error {};
 const DELEGATE_ONLY = [
 	"tier",
@@ -4823,7 +4939,8 @@ function applyFlags(config, values) {
 }
 /** The runtime a delegating agent most likely runs in, else the first configured one. */
 function delegateRuntime(configured) {
-	if (process.env.MODEL_LADDER_RUNTIME) return process.env.MODEL_LADDER_RUNTIME;
+	const runtime = setting("RUNTIME");
+	if (runtime) return runtime;
 	if (process.env.CLAUDECODE) return "claude";
 	return configured[0] ?? detectedRuntimes()[0];
 }
@@ -4883,6 +5000,7 @@ async function main(argv) {
 	if (values.version) return out(json, { version: VERSION }, VERSION), 0;
 	if (values.help) return out(false, null, HELP), 0;
 	const command = positionals[0] ?? "";
+	for (const dir of migrateLegacyLayout()) process.stderr.write(`agent-config: moved ${dir} to its agent-config location (renamed from model-ladder)\n`);
 	const given = Object.keys(values).filter((k) => values[k] !== void 0);
 	const misplaced = command === "delegate" ? given.find((k) => NOT_FOR_DELEGATE.includes(k)) : given.find((k) => DELEGATE_ONLY.includes(k));
 	if (misplaced) throw new UsageError(command === "delegate" ? `--${misplaced} does not apply to delegate` : `--${misplaced} only applies to delegate`);
@@ -4899,7 +5017,7 @@ async function main(argv) {
 			applyFlags(config, values);
 			if (config.runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
 			const plan = buildPlan(config);
-			const changes = plan.filter((x) => x.action === "create" || x.action === "update");
+			const changes = plan.filter((x) => x.action === "create" || x.action === "update" || x.action === "remove");
 			const planJson = plan.map(({ op, action, reason }) => ({
 				runtime: op.runtime,
 				component: op.component,
@@ -4989,8 +5107,8 @@ async function main(argv) {
 			return 0;
 		}
 		case "delegate": {
-			if (process.env["MODEL_LADDER_DELEGATED"]) {
-				process.stderr.write("error: model-ladder delegate cannot run inside an agent it started (no nested delegation).\n  fix: answer with what you have, or reply STATUS: escalate so the caller climbs a rung.\n");
+			if (process.env["AGENT_CONFIG_DELEGATED"] || process.env["MODEL_LADDER_DELEGATED"]) {
+				process.stderr.write("error: agent-config delegate cannot run inside an agent it started (no nested delegation).\n  fix: answer with what you have, or reply STATUS: escalate so the caller climbs a rung.\n");
 				return 4;
 			}
 			const role = positionals[1];
@@ -5026,9 +5144,9 @@ async function main(argv) {
 				timeoutMs: timeout * 1e3,
 				maxTimeMs: maxTime * 1e3,
 				...verify ? { verify } : {}
-			}, config.tiers[runtime], { onStart: (t, model) => process.stderr.write(`model-ladder: ${role} ${t} (${model}) running…\n`) });
+			}, config.tiers[runtime], { onStart: (t, model) => process.stderr.write(`agent-config: ${role} ${t} (${model}) running…\n`) });
 			const last = attempts.at(-1);
-			for (const a of attempts) process.stderr.write(`model-ladder: ${role} ${a.tier} (${a.model}) → ${a.status} in ${(a.durationMs / 1e3).toFixed(1)}s${a.error ? `: ${a.error}` : ""}\n`);
+			for (const a of attempts) process.stderr.write(`agent-config: ${role} ${a.tier} (${a.model}) → ${a.status} in ${(a.durationMs / 1e3).toFixed(1)}s${a.error ? `: ${a.error}` : ""}\n`);
 			out(json, {
 				runtime,
 				role,
@@ -5041,12 +5159,12 @@ async function main(argv) {
 		}
 		case "self-update": {
 			const check = checkForUpdate();
-			const summary = !check.updatable ? `cannot update: ${check.reason}` : check.behind === 0 || !check.latest ? `up to date: v${check.current.version} (${check.current.commit})` : `update available: v${check.current.version} (${check.current.commit}) -> v${check.latest.version} (${check.latest.commit}), ${check.behind} commit(s)`;
+			const summary = !check.updatable ? `cannot update: ${check.reason}` : (check.behind === 0 || !check.latest) && !check.relocate ? `up to date: v${check.current.version} (${check.current.commit})` : check.behind === 0 ? `up to date, but still in the pre-rename location ${legacyInstallHome()}: updating moves it to ${defaultInstallHome()}` : `update available: v${check.current.version} (${check.current.commit}) -> v${check.latest?.version} (${check.latest?.commit}), ${check.behind} commit(s)`;
 			if (!check.updatable) return out(json, {
 				check,
 				updated: false
 			}, summary), 1;
-			if (check.behind === 0 || values["dry-run"]) return out(json, {
+			if (check.behind === 0 && !check.relocate || values["dry-run"]) return out(json, {
 				check,
 				updated: false
 			}, summary), 0;
@@ -5065,7 +5183,7 @@ async function main(argv) {
 				updated: result.ok,
 				commit: result.commit,
 				message: result.message
-			}, result.ok ? `${result.message}. Run \`model-ladder install\` to re-apply your configuration with it.` : result.message);
+			}, result.ok ? `${result.message}. Run \`agent-config install\` to re-apply your configuration with it.` : result.message);
 			return result.ok ? 0 : 1;
 		}
 		case "config": {
@@ -5081,8 +5199,8 @@ async function main(argv) {
 }
 main(process.argv.slice(2)).then((code) => process.exit(code), (error) => {
 	if (error instanceof UsageError || error?.code?.startsWith("ERR_PARSE_ARGS")) {
-		const hint = error?.code?.startsWith("ERR_PARSE_ARGS") ? "A task that starts with - goes after --, e.g. model-ladder delegate read -- \"- item\".\n" : "";
-		process.stderr.write(`error: ${error.message}\n${hint}Run model-ladder --help for usage.\n`);
+		const hint = error?.code?.startsWith("ERR_PARSE_ARGS") ? "A task that starts with - goes after --, e.g. agent-config delegate read -- \"- item\".\n" : "";
+		process.stderr.write(`error: ${error.message}\n${hint}Run agent-config --help for usage.\n`);
 		process.exit(2);
 	}
 	process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
