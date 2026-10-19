@@ -484,14 +484,11 @@ async function main(argv: string[]): Promise<number> {
       const config = loadConfig();
       forget(config);
       saveConfig(config);
-      const removed = results.filter((r) => r.outcome !== "kept-modified");
-      const restoreErrors = restoreShared(
-        config,
-        removed.map((r) => r.record.path),
-      );
-      for (const e of restoreErrors)
-        process.stderr.write(`error: could not restore ${e.op.label} (${e.op.path}): ${e.error}\n`);
-      if (restoreErrors.length > 0) return 1;
+      // Only a partial uninstall can leave other runtimes needing a file it removed.
+      const removed = results
+        .filter((r) => r.outcome !== "kept-modified")
+        .map((r) => r.record.path);
+      const restoreErrors = runtimes.length > 0 ? restoreShared(config, removed) : [];
       out(
         json,
         {
@@ -509,6 +506,9 @@ async function main(argv: string[]): Promise<number> {
           )
           .join("\n"),
       );
+      for (const e of restoreErrors)
+        process.stderr.write(`error: could not restore ${e.op.label} (${e.op.path}): ${e.error}\n`);
+      if (restoreErrors.length > 0) return 1;
       // 3: finished, but files edited after install were kept (re-run with --force to remove them).
       return results.some((r) => r.outcome === "kept-modified") ? 3 : 0;
     }
