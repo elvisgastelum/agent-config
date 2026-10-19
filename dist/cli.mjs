@@ -3477,7 +3477,13 @@ function isDangling(path) {
 	} catch {
 		return false;
 	}
-	return !existsSync(path);
+	try {
+		statSync(path);
+		return false;
+	} catch (error) {
+		const code = error.code;
+		return code === "ENOENT" || code === "ENOTDIR";
+	}
 }
 /**
 * Broken symlinks on a target path: the file itself or a parent directory. An older installer
@@ -3623,9 +3629,24 @@ function backupFile(path) {
 }
 /** Applies one planned op and returns the manifest record to keep for it. */
 function applyOp(planned, existing, notes = []) {
+	if (planned.action === "skip") return existing;
+	const fresh = replaceDanglingLinks(planned.op.path);
+	try {
+		return writeTarget(planned, existing, notes, [...existing?.replacedLinks ?? [], ...fresh]);
+	} catch (error) {
+		for (const link of fresh) {
+			try {
+				rmdirSync(link.path);
+			} catch {}
+			try {
+				symlinkSync(link.target, link.path);
+			} catch {}
+		}
+		throw error;
+	}
+}
+function writeTarget(planned, existing, notes, replacedLinks) {
 	const { op, action } = planned;
-	if (action === "skip") return existing;
-	const replacedLinks = [...existing?.replacedLinks ?? [], ...replaceDanglingLinks(op.path)];
 	const base = {
 		kind: op.kind,
 		runtime: op.runtime,
@@ -3727,7 +3748,7 @@ function applyPlan(plan) {
 					result.notes.push(`${record.path} was left as you changed it and is no longer managed` + (original && existsSync(original) ? `; your original is saved at ${original}` : ""));
 				} else {
 					pruneCreatedDirs([record]);
-					restoreLinks([record]);
+					for (const note of restoreLinks([record], [...byKey.values()]).values()) result.notes.push(note);
 				}
 				result.applied.push(planned);
 			} catch (error) {
@@ -3876,17 +3897,37 @@ function pruneCreatedDirs(records) {
 		if (readdirSync(dir).length === 0) rmdirSync(dir);
 	} catch {}
 }
-/** Puts back the broken symlinks agent-config replaced, once nothing it wrote is in their place. */
-function restoreLinks(records) {
-	for (const link of records.flatMap((r) => r.replacedLinks ?? [])) {
+/**
+* Puts back the broken symlinks these undone records replaced. A link whose folder still holds
+* other managed files moves to one of those records (`remaining`), to come back when the last one
+* goes. Returns why each link that could not be put back was not, by record.
+*/
+function restoreLinks(records, remaining) {
+	const failed = /* @__PURE__ */ new Map();
+	for (const r of records) for (const link of r.replacedLinks ?? []) {
+		const lost = `could not restore the symlink ${link.path} -> ${link.target}`;
+		let occupied = true;
 		try {
 			lstatSync(link.path);
+		} catch {
+			occupied = false;
+		}
+		if (occupied) {
+			const heir = remaining.find((k) => k !== r && (k.path === link.path || k.path.startsWith(`${link.path}/`)));
+			if (heir) {
+				heir.replacedLinks = [...(heir.replacedLinks ?? []).filter((l) => l.path !== link.path), link];
+				const inside = (r.createdDirs ?? []).filter((d) => d === link.path || d.startsWith(`${link.path}/`));
+				heir.createdDirs = [.../* @__PURE__ */ new Set([...heir.createdDirs ?? [], ...inside])].sort((a, b) => b.length - a.length);
+			} else failed.set(r, `${lost}: something else is there now`);
 			continue;
-		} catch {}
+		}
 		try {
 			symlinkSync(link.target, link.path);
-		} catch {}
+		} catch (error) {
+			failed.set(r, `${lost}: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
+	return failed;
 }
 function uninstall(filter, force = false) {
 	const manifest = loadManifest();
@@ -3903,7 +3944,11 @@ function uninstall(filter, force = false) {
 	}
 	const undone = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record);
 	pruneCreatedDirs(undone);
-	restoreLinks(undone);
+	const failed = restoreLinks(undone, keep);
+	for (const res of results) {
+		const note = failed.get(res.record);
+		if (note) res.note = res.note ? `${res.note}; ${note}` : note;
+	}
 	saveManifest({
 		version: 1,
 		records: keep
