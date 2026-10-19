@@ -2,7 +2,7 @@
 // install.sh, which pulls, checks the new dist runs, and rolls back when it does not.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { home, LEGACY_NAME, setting } from "./paths.ts";
@@ -188,6 +188,28 @@ export function runUpdate(check: UpdateCheck, root = checkoutRoot()): UpdateResu
     log,
     root: finalRoot,
   };
+}
+
+/**
+ * Adds the `agi` alias (a relative symlink to the agent-config wrapper) when it is missing.
+ * Updating runs the old checkout's install.sh, which may predate the alias, so the installed
+ * command adds it on its next run. Only for the wrapper's bin dir; anything already there stays.
+ */
+export function ensureAgiAlias(): void {
+  const bin = setting("BIN_DIR");
+  if (!bin || !existsSync(join(bin, "agent-config"))) return;
+  const agi = join(bin, "agi");
+  try {
+    lstatSync(agi);
+    return;
+  } catch {
+    // Missing: link it below.
+  }
+  try {
+    symlinkSync("agent-config", agi);
+  } catch {
+    // Best effort: the alias is a convenience and never blocks the command.
+  }
 }
 
 /** Re-applies the saved configuration with the freshly installed CLI (new prompts and agents). */

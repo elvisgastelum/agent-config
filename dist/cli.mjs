@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs, styleText } from "node:util";
 import process$1, { stdin, stdout } from "node:process";
@@ -4278,6 +4278,23 @@ function runUpdate(check, root = checkoutRoot()) {
 		root: finalRoot
 	};
 }
+/**
+* Adds the `agi` alias (a relative symlink to the agent-config wrapper) when it is missing.
+* Updating runs the old checkout's install.sh, which may predate the alias, so the installed
+* command adds it on its next run. Only for the wrapper's bin dir; anything already there stays.
+*/
+function ensureAgiAlias() {
+	const bin = setting("BIN_DIR");
+	if (!bin || !existsSync(join(bin, "agent-config"))) return;
+	const agi = join(bin, "agi");
+	try {
+		lstatSync(agi);
+		return;
+	} catch {}
+	try {
+		symlinkSync("agent-config", agi);
+	} catch {}
+}
 /** Re-applies the saved configuration with the freshly installed CLI (new prompts and agents). */
 function reapplyWithNewVersion(root = checkoutRoot()) {
 	return spawnSync(process.execPath, [
@@ -5162,6 +5179,7 @@ async function main(argv) {
 	if (values.help) return out(false, null, HELP), 0;
 	const command = positionals[0] ?? "";
 	const migration = migrateLegacyLayout();
+	ensureAgiAlias();
 	for (const dir of migration.moved) process.stderr.write(`agent-config: moved ${dir} to its agent-config location (renamed from model-ladder)\n`);
 	for (const warning of migration.warnings) process.stderr.write(`agent-config: warning: ${warning}; continuing with the current layout\n`);
 	const given = Object.keys(values).filter((k) => values[k] !== void 0);
