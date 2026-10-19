@@ -7,6 +7,7 @@ import { catalogOps, entryKey } from "./catalog.ts";
 import type { Config } from "./config.ts";
 import {
   applyPlan,
+  type ApplyResult,
   loadManifest,
   opKey,
   planOp,
@@ -83,9 +84,10 @@ export function buildPlan(config: Config, only?: string[]): PlannedOp[] {
  * After uninstalling some runtimes, puts back catalog files the remaining runtimes still use: a
  * project's AGENTS.md block is shared by OpenCode, Codex and Pi but recorded under one of them.
  */
-export function restoreShared(config: Config): void {
+export function restoreShared(config: Config, removed: string[]): ApplyResult["errors"] {
+  const paths = new Set(removed);
   const plan = buildPlan(config, config.catalog.map(entryKey));
-  applyPlan(plan.filter((x) => x.action === "create"));
+  return applyPlan(plan.filter((x) => x.action === "create" && paths.has(x.op.path))).errors;
 }
 
 export function tildify(path: string): string {

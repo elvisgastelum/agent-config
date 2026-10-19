@@ -398,7 +398,9 @@ async function uninstallFlow(): Promise<void> {
   config.runtimes = config.runtimes.filter((r) => !runtimes.includes(r));
   forgetCatalog(config, () => true, runtimes);
   saveConfig(config);
-  restoreShared(config);
+  const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
+  for (const e of restoreShared(config, removed))
+    p.log.error(`Could not restore ${e.op.label} (${tildify(e.op.path)}): ${e.error}`);
 }
 
 /** Returns true when a new version was installed and the TUI should exit. */
