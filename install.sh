@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # model-ladder installer.
 #
-# Humans:     curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh | bash
-# Agents:     curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh \
+# Humans:     curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh | bash
+# Agents:     curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh \
 #               | bash -s -- install --runtime claude --yes --json
-# Uninstall:  curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh \
+# Uninstall:  curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh \
 #               | bash -s -- --uninstall
 #
 # `--uninstall` removes everything model-ladder wrote to your agents (restoring what it
@@ -13,7 +13,7 @@
 #
 # Environment:
 #   MODEL_LADDER_HOME     checkout location   (default: $HOME/.local/share/model-ladder)
-#   MODEL_LADDER_REPO     git URL to clone    (default: https://github.com/elvisgastelum/model-ladder.git)
+#   MODEL_LADDER_REPO     git URL to clone    (default: https://github.com/elvisgastelum/agent-config.git)
 #   MODEL_LADDER_REF      branch or tag       (default: main)
 #   MODEL_LADDER_BIN_DIR  wrapper location    (default: $HOME/.local/bin)
 #   MODEL_LADDER_NO_RUN   set to 1 to install/update without running model-ladder afterwards
@@ -25,7 +25,7 @@ set -euo pipefail
 # Everything lives in main() so bash has read the whole script before any command runs;
 # this matters under `curl | bash`, where the script itself arrives on stdin.
 main() {
-  local repo="${MODEL_LADDER_REPO:-https://github.com/elvisgastelum/model-ladder.git}"
+  local repo="${MODEL_LADDER_REPO:-https://github.com/elvisgastelum/agent-config.git}"
   local ref="${MODEL_LADDER_REF:-main}"
   local home_dir="${MODEL_LADDER_HOME:-$HOME/.local/share/model-ladder}"
   local bin_dir="${MODEL_LADDER_BIN_DIR:-$HOME/.local/bin}"
