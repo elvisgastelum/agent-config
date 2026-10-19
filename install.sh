@@ -116,10 +116,12 @@ main() {
   }
   build_checkout() {
     check_node || return 1
+    # Keep vite-plus homes and caches inside the checkout so uninstall removes them with it.
+    # (pnpm's own global store is shared with your other projects and is left alone.)
     say "Installing dependencies"
-    (cd "$home_dir" && "${pnpm_cmd[@]}" install --frozen-lockfile </dev/null >&2) || return 1
+    (cd "$home_dir" && VP_HOME="$home_dir/.vite-plus" XDG_CACHE_HOME="$home_dir/.cache" \
+      "${pnpm_cmd[@]}" install --frozen-lockfile </dev/null >&2) || return 1
     say "Building"
-    # Keep vite-plus caches inside the checkout so uninstall removes them with it.
     (cd "$home_dir" && VP_HOME="$home_dir/.vite-plus" XDG_CACHE_HOME="$home_dir/.cache" \
       "${pnpm_cmd[@]}" run build </dev/null >&2) || return 1
     [ -f "$entry" ] || {
