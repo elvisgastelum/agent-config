@@ -16,7 +16,7 @@ It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the run
 curl -fsSL https://raw.githubusercontent.com/elvisgastelum/model-ladder/main/install.sh | bash
 ```
 
-Requires `git` and Node.js 22.12 or newer (the repo pins Node 24.22.0 LTS for development). The installer clones to `~/.local/share/model-ladder`, builds it, adds `model-ladder` to `~/.local/bin` and opens the TUI. Re-run the one-liner to update; a failed update rolls back to the previous version.
+Requires only **git** and **Node.js 22.12 or newer** (24 LTS recommended); the installer stops with a clear message if either is missing. The CLI ships prebuilt and self-contained in `dist/cli.mjs`, so nothing is installed or built on your machine: the installer clones to `~/.local/share/model-ladder`, checks Node, adds `model-ladder` to `~/.local/bin` and opens the TUI. Re-run the one-liner to update; a failed update rolls back to the previous version.
 
 Non-interactive (scripts and agents):
 
@@ -126,12 +126,14 @@ Their limits carry over: delegation costs a fresh agent context and some latency
 
 ## Development
 
+The development stack is [Vite+](https://viteplus.dev) (`vp`), with Node 24.22.0 pinned in `package.json` `devEngines` and `.node-version`. Users never need it.
+
 ```sh
-vp install      # dependencies (Node 24.22.0 is pinned in package.json devEngines and .node-version)
+vp install      # dependencies
 vp check        # format, lint, type check
-vp test         # tests
-vp pack         # build dist/cli.mjs
+vp test         # tests (includes a check that dist/ is current)
+vp pack         # rebuild dist/cli.mjs — commit it with your change
 node src/cli.ts --help
 ```
 
-Tests run against a temporary `HOME`; nothing touches your real agent configuration.
+`dist/cli.mjs` is committed and bundles every dependency, so `install.sh` runs it with Node alone. Tests run against a temporary `HOME`; nothing touches your real agent configuration.

@@ -77,29 +77,16 @@ main() {
     return 0
   fi
 
+  # Requirements: git and Node.js. dist/cli.mjs is prebuilt and self-contained, so there is
+  # nothing to install or build; Vite+ is only the repository's development stack.
   command -v git >/dev/null 2>&1 ||
     die "git is required but was not found." "install git: https://git-scm.com/downloads"
   command -v node >/dev/null 2>&1 ||
     die "Node.js is required but was not found." \
-      "install Node.js 24 LTS (https://nodejs.org, vp env, nvm, fnm or your package manager), then re-run."
-
-  export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-  local -a pnpm_cmd
-  if command -v pnpm >/dev/null 2>&1; then
-    pnpm_cmd=(pnpm)
-  elif command -v corepack >/dev/null 2>&1 && corepack enable >/dev/null 2>&1 &&
-    command -v pnpm >/dev/null 2>&1; then
-    pnpm_cmd=(pnpm)
-  elif command -v corepack >/dev/null 2>&1; then
-    # `corepack enable` can fail without write access to node's bin dir; corepack still works.
-    pnpm_cmd=(corepack pnpm)
-  else
-    die "pnpm is required and corepack is unavailable." \
-      "run 'npm install -g pnpm' (or 'npm install -g corepack && corepack enable'), then re-run."
-  fi
+      "install Node.js 24 LTS (https://nodejs.org or your package manager), then re-run."
 
   # The minimum Node.js version lives in one place: the checkout's package.json `engines.node`.
-  check_node() {
+  check_checkout() {
     local min
     min="$(cd "$home_dir" && node -p '(/[0-9]+\.[0-9]+\.[0-9]+/.exec(require("./package.json").engines.node) || ["0.0.0"])[0]')" ||
       return 1
@@ -110,22 +97,11 @@ main() {
       process.exit(cmp >= 0 ? 0 : 1);
     ' "$min"; then
       printf '%serror:%s Node.js >= %s is required (found %s).\n  fix: %s\n' "$c_err" "$c_off" \
-        "$min" "$(node --version)" "upgrade Node.js (e.g. 'vp env install 24' or 'nvm install 24'), then re-run." >&2
+        "$min" "$(node --version)" "upgrade Node.js (for example to 24 LTS), then re-run." >&2
       return 1
     fi
-  }
-  build_checkout() {
-    check_node || return 1
-    # Keep vite-plus homes and caches inside the checkout so uninstall removes them with it.
-    # (pnpm's own global store is shared with your other projects and is left alone.)
-    say "Installing dependencies"
-    (cd "$home_dir" && VP_HOME="$home_dir/.vite-plus" XDG_CACHE_HOME="$home_dir/.cache" \
-      "${pnpm_cmd[@]}" install --frozen-lockfile </dev/null >&2) || return 1
-    say "Building"
-    (cd "$home_dir" && VP_HOME="$home_dir/.vite-plus" XDG_CACHE_HOME="$home_dir/.cache" \
-      "${pnpm_cmd[@]}" run build </dev/null >&2) || return 1
-    [ -f "$entry" ] || {
-      printf '%serror:%s build did not produce %s\n' "$c_err" "$c_off" "$entry" >&2
+    node "$entry" --version </dev/null >/dev/null || {
+      printf '%serror:%s %s does not run.\n' "$c_err" "$c_off" "$entry" >&2
       return 1
     }
   }
@@ -148,18 +124,18 @@ main() {
     }
   fi
 
-  if ! build_checkout; then
+  if ! check_checkout; then
     if [ -z "$prev" ]; then
       rm -rf "$home_dir"
-      die "installation failed; removed the partial checkout at $home_dir." \
+      die "installation failed; removed the checkout at $home_dir." \
         "fix the error above, then re-run the installer."
     fi
     warn "update failed; restoring the previous version ($prev)"
-    if git -C "$home_dir" reset --hard --quiet "$prev" </dev/null >&2 && build_checkout; then
+    if git -C "$home_dir" reset --hard --quiet "$prev" </dev/null >&2 && check_checkout; then
       die "update to $ref failed; the previous version is still installed and working." \
         "fix the error above, then re-run the installer to update."
     fi
-    die "update failed and the previous version could not be rebuilt." \
+    die "update failed and the previous version does not run either." \
       "remove $home_dir and re-run the installer."
   fi
 

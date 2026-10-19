@@ -2,6 +2,7 @@
 // model-ladder: the TUI for humans, plain commands (and --json) for scripts and agents.
 
 import { parseArgs } from "node:util";
+import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { buildPlan, detectedRuntimes, doctor, status, tildify } from "./commands.ts";
 import { loadConfig, saveConfig, type Config } from "./config.ts";
@@ -157,7 +158,6 @@ async function main(argv: string[]): Promise<number> {
           );
           return 2;
         }
-        const p = await import("@clack/prompts");
         process.stdout.write(`${formatPlan(plan)}\n\n`);
         const ok = await p.confirm({ message: `Apply ${changes.length} change(s)?` });
         if (p.isCancel(ok) || !ok) return 130;
@@ -223,7 +223,6 @@ async function main(argv: string[]): Promise<number> {
           process.stderr.write("error: refusing to uninstall without --yes outside a terminal.\n");
           return 2;
         }
-        const p = await import("@clack/prompts");
         const ok = await p.confirm({ message: `Undo ${entries.length} change(s)?` });
         if (p.isCancel(ok) || !ok) return 130;
       }

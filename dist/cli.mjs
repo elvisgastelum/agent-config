@@ -1,0 +1,4487 @@
+#!/usr/bin/env node
+import { parseArgs, styleText } from "node:util";
+import process$1, { stdin, stdout } from "node:process";
+import l__default, * as l from "node:readline";
+import { ReadStream } from "node:tty";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
+//#region \0rolldown/runtime.js
+var __create = Object.create;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod, mod.exports), cb = null), mod.exports);
+var __copyProps = (to, from, except, desc) => {
+	if (from && typeof from === "object" || typeof from === "function") for (var keys = __getOwnPropNames(from), i = 0, n = keys.length, key; i < n; i++) {
+		key = keys[i];
+		if (!__hasOwnProp.call(to, key) && key !== except) __defProp(to, key, {
+			get: ((k) => from[k]).bind(null, key),
+			enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
+		});
+	}
+	return to;
+};
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(isNodeMode || !mod || !mod.__esModule || !__hasOwnProp.call(mod, "default") ? __defProp(target, "default", {
+	value: mod,
+	enumerable: true
+}) : target, mod));
+//#endregion
+//#region node_modules/.pnpm/fast-string-truncated-width@3.0.3/node_modules/fast-string-truncated-width/dist/utils.js
+const getCodePointsLength = (() => {
+	const SURROGATE_PAIR_RE = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g;
+	return (input) => {
+		let surrogatePairsNr = 0;
+		SURROGATE_PAIR_RE.lastIndex = 0;
+		while (SURROGATE_PAIR_RE.test(input)) surrogatePairsNr += 1;
+		return input.length - surrogatePairsNr;
+	};
+})();
+const isFullWidth = (x) => {
+	return x === 12288 || x >= 65281 && x <= 65376 || x >= 65504 && x <= 65510;
+};
+const isWideNotCJKTNotEmoji = (x) => {
+	return x === 8987 || x === 9001 || x >= 12272 && x <= 12287 || x >= 12289 && x <= 12350 || x >= 12441 && x <= 12543 || x >= 12549 && x <= 12591 || x >= 12593 && x <= 12686 || x >= 12688 && x <= 12771 || x >= 12783 && x <= 12830 || x >= 12832 && x <= 12871 || x >= 12880 && x <= 19903 || x >= 65040 && x <= 65049 || x >= 65072 && x <= 65106 || x >= 65108 && x <= 65126 || x >= 65128 && x <= 65131 || x >= 127488 && x <= 127490 || x >= 127504 && x <= 127547 || x >= 127552 && x <= 127560 || x >= 131072 && x <= 196605 || x >= 196608 && x <= 262141;
+};
+//#endregion
+//#region node_modules/.pnpm/fast-string-truncated-width@3.0.3/node_modules/fast-string-truncated-width/dist/index.js
+const ANSI_RE = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]|\u001b\]8;[^;]*;.*?(?:\u0007|\u001b\u005c)/y;
+const CONTROL_RE = /[\x00-\x08\x0A-\x1F\x7F-\x9F]{1,1000}/y;
+const CJKT_WIDE_RE = /(?:(?![\uFF61-\uFF9F\uFF00-\uFFEF])[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Tangut}]){1,1000}/uy;
+const TAB_RE = /\t{1,1000}/y;
+const EMOJI_RE = /[\u{1F1E6}-\u{1F1FF}]{2}|\u{1F3F4}[\u{E0061}-\u{E007A}]{2}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{1,3}\u{E007F}|(?:\p{Emoji}\uFE0F\u20E3?|\p{Emoji_Modifier_Base}\p{Emoji_Modifier}?|\p{Emoji_Presentation})(?:\u200D(?:\p{Emoji_Modifier_Base}\p{Emoji_Modifier}?|\p{Emoji_Presentation}|\p{Emoji}\uFE0F\u20E3?))*/uy;
+const LATIN_RE = /(?:[\x20-\x7E\xA0-\xFF](?!\uFE0F)){1,1000}/y;
+const MODIFIER_RE = /\p{M}+/gu;
+const NO_TRUNCATION$1 = {
+	limit: Infinity,
+	ellipsis: ""
+};
+const getStringTruncatedWidth = (input, truncationOptions = {}, widthOptions = {}) => {
+	const LIMIT = truncationOptions.limit ?? Infinity;
+	const ELLIPSIS = truncationOptions.ellipsis ?? "";
+	const ELLIPSIS_WIDTH = truncationOptions?.ellipsisWidth ?? (ELLIPSIS ? getStringTruncatedWidth(ELLIPSIS, NO_TRUNCATION$1, widthOptions).width : 0);
+	const ANSI_WIDTH = 0;
+	const CONTROL_WIDTH = widthOptions.controlWidth ?? 0;
+	const TAB_WIDTH = widthOptions.tabWidth ?? 8;
+	const EMOJI_WIDTH = widthOptions.emojiWidth ?? 2;
+	const FULL_WIDTH_WIDTH = 2;
+	const REGULAR_WIDTH = widthOptions.regularWidth ?? 1;
+	const WIDE_WIDTH = widthOptions.wideWidth ?? FULL_WIDTH_WIDTH;
+	const PARSE_BLOCKS = [
+		[LATIN_RE, REGULAR_WIDTH],
+		[ANSI_RE, ANSI_WIDTH],
+		[CONTROL_RE, CONTROL_WIDTH],
+		[TAB_RE, TAB_WIDTH],
+		[EMOJI_RE, EMOJI_WIDTH],
+		[CJKT_WIDE_RE, WIDE_WIDTH]
+	];
+	let indexPrev = 0;
+	let index = 0;
+	let length = input.length;
+	let lengthExtra = 0;
+	let truncationEnabled = false;
+	let truncationIndex = length;
+	let truncationLimit = Math.max(0, LIMIT - ELLIPSIS_WIDTH);
+	let unmatchedStart = 0;
+	let unmatchedEnd = 0;
+	let width = 0;
+	let widthExtra = 0;
+	outer: while (true) {
+		if (unmatchedEnd > unmatchedStart || index >= length && index > indexPrev) {
+			const unmatched = input.slice(unmatchedStart, unmatchedEnd) || input.slice(indexPrev, index);
+			lengthExtra = 0;
+			for (const char of unmatched.replaceAll(MODIFIER_RE, "")) {
+				const codePoint = char.codePointAt(0) || 0;
+				if (isFullWidth(codePoint)) widthExtra = FULL_WIDTH_WIDTH;
+				else if (isWideNotCJKTNotEmoji(codePoint)) widthExtra = WIDE_WIDTH;
+				else widthExtra = REGULAR_WIDTH;
+				if (width + widthExtra > truncationLimit) truncationIndex = Math.min(truncationIndex, Math.max(unmatchedStart, indexPrev) + lengthExtra);
+				if (width + widthExtra > LIMIT) {
+					truncationEnabled = true;
+					break outer;
+				}
+				lengthExtra += char.length;
+				width += widthExtra;
+			}
+			unmatchedStart = unmatchedEnd = 0;
+		}
+		if (index >= length) break outer;
+		for (let i = 0, l = PARSE_BLOCKS.length; i < l; i++) {
+			const [BLOCK_RE, BLOCK_WIDTH] = PARSE_BLOCKS[i];
+			BLOCK_RE.lastIndex = index;
+			if (BLOCK_RE.test(input)) {
+				lengthExtra = BLOCK_RE === CJKT_WIDE_RE ? getCodePointsLength(input.slice(index, BLOCK_RE.lastIndex)) : BLOCK_RE === EMOJI_RE ? 1 : BLOCK_RE.lastIndex - index;
+				widthExtra = lengthExtra * BLOCK_WIDTH;
+				if (width + widthExtra > truncationLimit) truncationIndex = Math.min(truncationIndex, index + Math.floor((truncationLimit - width) / BLOCK_WIDTH));
+				if (width + widthExtra > LIMIT) {
+					truncationEnabled = true;
+					break outer;
+				}
+				width += widthExtra;
+				unmatchedStart = indexPrev;
+				unmatchedEnd = index;
+				index = indexPrev = BLOCK_RE.lastIndex;
+				continue outer;
+			}
+		}
+		index += 1;
+	}
+	return {
+		width: truncationEnabled ? truncationLimit : width,
+		index: truncationEnabled ? truncationIndex : length,
+		truncated: truncationEnabled,
+		ellipsed: truncationEnabled && LIMIT >= ELLIPSIS_WIDTH
+	};
+};
+//#endregion
+//#region node_modules/.pnpm/fast-string-width@3.0.2/node_modules/fast-string-width/dist/index.js
+const NO_TRUNCATION = {
+	limit: Infinity,
+	ellipsis: "",
+	ellipsisWidth: 0
+};
+const fastStringWidth = (input, options = {}) => {
+	return getStringTruncatedWidth(input, NO_TRUNCATION, options).width;
+};
+//#endregion
+//#region node_modules/.pnpm/fast-wrap-ansi@0.2.2/node_modules/fast-wrap-ansi/lib/main.js
+const ESC = "\x1B";
+const CSI = "";
+const END_CODE = 39;
+const ANSI_ESCAPE_BELL = "\x07";
+const ANSI_CSI = "[";
+const ANSI_OSC = "]";
+const ANSI_SGR_TERMINATOR = "m";
+const ANSI_ESCAPE_LINK = `${ANSI_OSC}8;;`;
+const GROUP_REGEX = new RegExp(`(?:\\${ANSI_CSI}(?<code>\\d+)m|\\${ANSI_ESCAPE_LINK}(?<uri>.*)${ANSI_ESCAPE_BELL})`, "y");
+const getClosingCode = (openingCode) => {
+	if (openingCode >= 30 && openingCode <= 37) return 39;
+	if (openingCode >= 90 && openingCode <= 97) return 39;
+	if (openingCode >= 40 && openingCode <= 47) return 49;
+	if (openingCode >= 100 && openingCode <= 107) return 49;
+	if (openingCode === 1 || openingCode === 2) return 22;
+	if (openingCode === 3) return 23;
+	if (openingCode === 4) return 24;
+	if (openingCode === 7) return 27;
+	if (openingCode === 8) return 28;
+	if (openingCode === 9) return 29;
+	if (openingCode === 0) return 0;
+};
+const wrapAnsiCode = (code) => `${ESC}${ANSI_CSI}${code}${ANSI_SGR_TERMINATOR}`;
+const wrapAnsiHyperlink = (url) => `${ESC}${ANSI_ESCAPE_LINK}${url}${ANSI_ESCAPE_BELL}`;
+const wrapWord = (rows, word, columns) => {
+	const characters = word[Symbol.iterator]();
+	let isInsideEscape = false;
+	let isInsideLinkEscape = false;
+	let lastRow = rows.at(-1);
+	let visible = lastRow === void 0 ? 0 : fastStringWidth(lastRow);
+	let currentCharacter = characters.next();
+	let nextCharacter = characters.next();
+	let rawCharacterIndex = 0;
+	while (!currentCharacter.done) {
+		const character = currentCharacter.value;
+		const characterLength = fastStringWidth(character);
+		if (visible + characterLength <= columns) rows[rows.length - 1] += character;
+		else {
+			rows.push(character);
+			visible = 0;
+		}
+		if (character === ESC || character === CSI) {
+			isInsideEscape = true;
+			isInsideLinkEscape = word.startsWith(ANSI_ESCAPE_LINK, rawCharacterIndex + 1);
+		}
+		if (isInsideEscape) {
+			if (isInsideLinkEscape) {
+				if (character === ANSI_ESCAPE_BELL) {
+					isInsideEscape = false;
+					isInsideLinkEscape = false;
+				}
+			} else if (character === ANSI_SGR_TERMINATOR) isInsideEscape = false;
+		} else {
+			visible += characterLength;
+			if (visible === columns && !nextCharacter.done) {
+				rows.push("");
+				visible = 0;
+			}
+		}
+		currentCharacter = nextCharacter;
+		nextCharacter = characters.next();
+		rawCharacterIndex += character.length;
+	}
+	lastRow = rows.at(-1);
+	if (!visible && lastRow !== void 0 && lastRow.length && rows.length > 1) rows[rows.length - 2] += rows.pop();
+};
+const stringVisibleTrimSpacesRight = (string) => {
+	const words = string.split(" ");
+	let last = words.length;
+	while (last) {
+		if (fastStringWidth(words[last - 1])) break;
+		last--;
+	}
+	if (last === words.length) return string;
+	return words.slice(0, last).join(" ") + words.slice(last).join("");
+};
+const exec = (string, columns, options = {}) => {
+	if (options.trim !== false && string.trim() === "") return "";
+	let returnValue = "";
+	let escapeCode;
+	let escapeUrl;
+	const words = string.split(" ");
+	let rows = [""];
+	let rowLength = 0;
+	for (let index = 0; index < words.length; index++) {
+		const word = words[index];
+		if (options.trim !== false) {
+			const row = rows.at(-1) ?? "";
+			const trimmed = row.trimStart();
+			if (row.length !== trimmed.length) {
+				rows[rows.length - 1] = trimmed;
+				rowLength = fastStringWidth(trimmed);
+			}
+		}
+		if (index !== 0) {
+			if (rowLength >= columns && (options.wordWrap === false || options.trim === false)) {
+				rows.push("");
+				rowLength = 0;
+			}
+			if (rowLength || options.trim === false) {
+				rows[rows.length - 1] += " ";
+				rowLength++;
+			}
+		}
+		const wordLength = fastStringWidth(word);
+		if (options.hard && wordLength > columns) {
+			const remainingColumns = columns - rowLength;
+			const breaksStartingThisLine = 1 + Math.floor((wordLength - remainingColumns - 1) / columns);
+			if (Math.floor((wordLength - 1) / columns) < breaksStartingThisLine) rows.push("");
+			wrapWord(rows, word, columns);
+			rowLength = fastStringWidth(rows.at(-1) ?? "");
+			continue;
+		}
+		if (rowLength + wordLength > columns && rowLength && wordLength) {
+			if (options.wordWrap === false && rowLength < columns) {
+				wrapWord(rows, word, columns);
+				rowLength = fastStringWidth(rows.at(-1) ?? "");
+				continue;
+			}
+			rows.push("");
+			rowLength = 0;
+		}
+		if (rowLength + wordLength > columns && options.wordWrap === false) {
+			wrapWord(rows, word, columns);
+			rowLength = fastStringWidth(rows.at(-1) ?? "");
+			continue;
+		}
+		rows[rows.length - 1] += word;
+		rowLength += wordLength;
+	}
+	if (options.trim !== false) rows = rows.map((row) => stringVisibleTrimSpacesRight(row));
+	const preString = rows.join("\n");
+	let inSurrogate = false;
+	for (let i = 0; i < preString.length; i++) {
+		const character = preString[i];
+		returnValue += character;
+		if (!inSurrogate) {
+			inSurrogate = character >= "\ud800" && character <= "\udbff";
+			if (inSurrogate) continue;
+		} else inSurrogate = false;
+		if (character === ESC || character === CSI) {
+			GROUP_REGEX.lastIndex = i + 1;
+			const groups = GROUP_REGEX.exec(preString)?.groups;
+			if (groups?.code !== void 0) {
+				const code = Number.parseFloat(groups.code);
+				escapeCode = code === END_CODE ? void 0 : code;
+			} else if (groups?.uri !== void 0) escapeUrl = groups.uri.length === 0 ? void 0 : groups.uri;
+		}
+		if (preString[i + 1] === "\n") {
+			if (escapeUrl) returnValue += wrapAnsiHyperlink("");
+			const closingCode = escapeCode ? getClosingCode(escapeCode) : void 0;
+			if (escapeCode && closingCode) returnValue += wrapAnsiCode(closingCode);
+		} else if (character === "\n") {
+			if (escapeCode && getClosingCode(escapeCode)) returnValue += wrapAnsiCode(escapeCode);
+			if (escapeUrl) returnValue += wrapAnsiHyperlink(escapeUrl);
+		}
+	}
+	return returnValue;
+};
+const CRLF_OR_LF = /\r?\n/;
+function wrapAnsi(string, columns, options) {
+	return String(string).normalize().split(CRLF_OR_LF).map((line) => exec(line, columns, options)).join("\n");
+}
+//#endregion
+//#region node_modules/.pnpm/@clack+core@1.5.1/node_modules/@clack/core/dist/index.mjs
+var import_src = (/* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const ESC = "\x1B";
+	const CSI = `${ESC}[`;
+	const beep = "\x07";
+	const cursor = {
+		to(x, y) {
+			if (!y) return `${CSI}${x + 1}G`;
+			return `${CSI}${y + 1};${x + 1}H`;
+		},
+		move(x, y) {
+			let ret = "";
+			if (x < 0) ret += `${CSI}${-x}D`;
+			else if (x > 0) ret += `${CSI}${x}C`;
+			if (y < 0) ret += `${CSI}${-y}A`;
+			else if (y > 0) ret += `${CSI}${y}B`;
+			return ret;
+		},
+		up: (count = 1) => `${CSI}${count}A`,
+		down: (count = 1) => `${CSI}${count}B`,
+		forward: (count = 1) => `${CSI}${count}C`,
+		backward: (count = 1) => `${CSI}${count}D`,
+		nextLine: (count = 1) => `${CSI}E`.repeat(count),
+		prevLine: (count = 1) => `${CSI}F`.repeat(count),
+		left: `${CSI}G`,
+		hide: `${CSI}?25l`,
+		show: `${CSI}?25h`,
+		save: `${ESC}7`,
+		restore: `${ESC}8`
+	};
+	module.exports = {
+		cursor,
+		scroll: {
+			up: (count = 1) => `${CSI}S`.repeat(count),
+			down: (count = 1) => `${CSI}T`.repeat(count)
+		},
+		erase: {
+			screen: `${CSI}2J`,
+			up: (count = 1) => `${CSI}1J`.repeat(count),
+			down: (count = 1) => `${CSI}J`.repeat(count),
+			line: `${CSI}2K`,
+			lineEnd: `${CSI}K`,
+			lineStart: `${CSI}1K`,
+			lines(count) {
+				let clear = "";
+				for (let i = 0; i < count; i++) clear += this.line + (i < count - 1 ? cursor.up() : "");
+				if (count) clear += cursor.left;
+				return clear;
+			}
+		},
+		beep
+	};
+})))();
+function findCursor(s, o, l) {
+	if (!l.some((r) => !r.disabled)) return s;
+	const t = s + o, n = Math.max(l.length - 1, 0), e = t < 0 ? n : t > n ? 0 : t;
+	return l[e]?.disabled ? findCursor(e, o < 0 ? -1 : 1, l) : e;
+}
+const settings = {
+	actions: /* @__PURE__ */ new Set([
+		"up",
+		"down",
+		"left",
+		"right",
+		"space",
+		"enter",
+		"cancel"
+	]),
+	aliases: /* @__PURE__ */ new Map([
+		["k", "up"],
+		["j", "down"],
+		["h", "left"],
+		["l", "right"],
+		["", "cancel"],
+		["escape", "cancel"]
+	]),
+	messages: {
+		cancel: "Canceled",
+		error: "Something went wrong"
+	},
+	withGuide: true,
+	accessible: void 0,
+	date: {
+		monthNames: [...[
+			"January",
+			"February",
+			"March",
+			"April",
+			"May",
+			"June",
+			"July",
+			"August",
+			"September",
+			"October",
+			"November",
+			"December"
+		]],
+		messages: {
+			required: "Please enter a valid date",
+			invalidMonth: "There are only 12 months in a year",
+			invalidDay: (n, e) => `There are only ${n} days in ${e}`,
+			afterMin: (n) => `Date must be on or after ${n.toISOString().slice(0, 10)}`,
+			beforeMax: (n) => `Date must be on or before ${n.toISOString().slice(0, 10)}`
+		}
+	}
+};
+function isAccessible(n) {
+	if (n !== void 0) return n;
+	if (settings.accessible !== void 0) return settings.accessible;
+	const e = process.env.ACCESSIBLE;
+	return e !== void 0 && e !== "" && e !== "0" && e !== "false";
+}
+function isActionKey(n, e) {
+	if (typeof n == "string") return settings.aliases.get(n) === e;
+	for (const s of n) if (s !== void 0 && isActionKey(s, e)) return true;
+	return false;
+}
+function diffLines(i, s) {
+	if (i === s) return;
+	const e = i.split(`
+`), t = s.split(`
+`), r = Math.max(e.length, t.length), f = [];
+	for (let n = 0; n < r; n++) e[n] !== t[n] && f.push(n);
+	return {
+		lines: f,
+		numLinesBefore: e.length,
+		numLinesAfter: t.length,
+		numLines: r
+	};
+}
+const R = globalThis.process.platform.startsWith("win");
+const CANCEL_SYMBOL = Symbol("clack:cancel");
+function isCancel(e) {
+	return e === CANCEL_SYMBOL;
+}
+function setRawMode(e, r) {
+	const o = e;
+	o.isTTY && o.setRawMode(r);
+}
+function block({ input: e = stdin, output: r = stdout, overwrite: o = true, hideCursor: n = true } = {}) {
+	const s = l.createInterface({
+		input: e,
+		output: r,
+		prompt: "",
+		tabSize: 1
+	});
+	l.emitKeypressEvents(e, s), e instanceof ReadStream && e.isTTY && e.setRawMode(true);
+	const t = (f, { name: a, sequence: w }) => {
+		if (isActionKey([
+			String(f),
+			a,
+			w
+		], "cancel")) {
+			n && r.write(import_src.cursor.show), process.exit(0);
+			return;
+		}
+		if (!o) return;
+		const i = a === "return" ? 0 : -1, m = a === "return" ? -1 : 0;
+		l.moveCursor(r, i, m, () => {
+			l.clearLine(r, 1, () => {
+				e.once("keypress", t);
+			});
+		});
+	};
+	return n && r.write(import_src.cursor.hide), e.once("keypress", t), () => {
+		e.off("keypress", t), n && r.write(import_src.cursor.show), e instanceof ReadStream && e.isTTY && !R && e.setRawMode(false), s.terminal = false, s.close();
+	};
+}
+const getColumns = (e) => "columns" in e && typeof e.columns == "number" ? e.columns : 80;
+const getRows = (e) => "rows" in e && typeof e.rows == "number" ? e.rows : 20;
+function wrapTextWithPrefix(e, r, o, n = o, s = o, t) {
+	return wrapAnsi(r, getColumns(e ?? stdout) - o.length, {
+		hard: true,
+		trim: false
+	}).split(`
+`).map((c, i, m) => {
+		const d = t ? t(c, i) : c;
+		return i === 0 ? `${n}${d}` : i === m.length - 1 ? `${s}${d}` : `${o}${d}`;
+	}).join(`
+`);
+}
+function runValidation(e, a) {
+	if ("~standard" in e) {
+		const n = e["~standard"].validate(a);
+		return n instanceof Promise ? n.then((r) => r.issues?.at(0)?.message) : n.issues?.at(0)?.message;
+	}
+	return e(a);
+}
+var y = class {
+	input;
+	output;
+	_abortSignal;
+	rl;
+	opts;
+	_render;
+	_track = false;
+	_prevFrame = "";
+	_subscribers = /* @__PURE__ */ new Map();
+	_cursor = 0;
+	state = "initial";
+	error = "";
+	value;
+	userInput = "";
+	/**
+	* Whether accessible (static, screen-reader friendly) output is enabled for
+	* this prompt, resolved from the `accessible` option, the global setting,
+	* and the `ACCESSIBLE` env var.
+	*/
+	get accessible() {
+		return isAccessible(this.opts.accessible);
+	}
+	constructor(t, e = true) {
+		const { input: i = stdin, output: s = stdout, render: r, signal: n, ...o } = t;
+		this.opts = o, this.onKeypress = this.onKeypress.bind(this), this.close = this.close.bind(this), this.render = this.render.bind(this), this._render = r.bind(this), this._track = e, this._abortSignal = n, this.input = i, this.output = s;
+	}
+	/**
+	* Unsubscribe all listeners
+	*/
+	unsubscribe() {
+		this._subscribers.clear();
+	}
+	/**
+	* Set a subscriber with opts
+	* @param event - The event name
+	*/
+	setSubscriber(t, e) {
+		const i = this._subscribers.get(t) ?? [];
+		i.push(e), this._subscribers.set(t, i);
+	}
+	/**
+	* Subscribe to an event
+	* @param event - The event name
+	* @param cb - The callback
+	*/
+	on(t, e) {
+		this.setSubscriber(t, { cb: e });
+	}
+	/**
+	* Subscribe to an event once
+	* @param event - The event name
+	* @param cb - The callback
+	*/
+	once(t, e) {
+		this.setSubscriber(t, {
+			cb: e,
+			once: true
+		});
+	}
+	/**
+	* Emit an event with data
+	* @param event - The event name
+	* @param data - The data to pass to the callback
+	*/
+	emit(t, ...e) {
+		const i = this._subscribers.get(t) ?? [], s = [];
+		for (const r of i) r.cb(...e), r.once && s.push(() => i.splice(i.indexOf(r), 1));
+		for (const r of s) r();
+	}
+	prompt() {
+		return new Promise((t) => {
+			if (this._abortSignal) {
+				if (this._abortSignal.aborted) return this.state = "cancel", this.close(), t(CANCEL_SYMBOL);
+				this._abortSignal.addEventListener("abort", () => {
+					this.state = "cancel", this.close();
+				}, { once: true });
+			}
+			this.rl = l__default.createInterface({
+				input: this.input,
+				tabSize: 2,
+				prompt: "",
+				escapeCodeTimeout: 50,
+				terminal: true
+			}), this.rl.prompt(), this.opts.initialUserInput !== void 0 && this._setUserInput(this.opts.initialUserInput, true), this.input.on("keypress", this.onKeypress), setRawMode(this.input, true), this.output.on("resize", this.render), this.render(), this.once("submit", () => {
+				this.output.write(import_src.cursor.show), this.output.off("resize", this.render), setRawMode(this.input, false), t(this.value);
+			}), this.once("cancel", () => {
+				this.output.write(import_src.cursor.show), this.output.off("resize", this.render), setRawMode(this.input, false), t(CANCEL_SYMBOL);
+			});
+		});
+	}
+	_isActionKey(t, e) {
+		return t === "	";
+	}
+	_shouldSubmit(t, e) {
+		return true;
+	}
+	_setValue(t) {
+		this.value = t, this.emit("value", this.value);
+	}
+	_setUserInput(t, e) {
+		this.userInput = t ?? "", this.emit("userInput", this.userInput), e && this._track && this.rl && (this.rl.write(this.userInput), this._cursor = this.rl.cursor);
+	}
+	_clearUserInput() {
+		this.rl?.write(null, {
+			ctrl: true,
+			name: "u"
+		}), this._setUserInput("");
+	}
+	async onKeypress(t, e) {
+		if (this.state !== "validating") {
+			if (this._track && e.name !== "return" && (e.name && this._isActionKey(t, e) && this.rl?.write(null, {
+				ctrl: true,
+				name: "h"
+			}), this._cursor = this.rl?.cursor ?? 0, this._setUserInput(this.rl?.line)), this.state === "error" && (this.state = "active"), e?.name && (!this._track && settings.aliases.has(e.name) && this.emit("cursor", settings.aliases.get(e.name)), settings.actions.has(e.name) && this.emit("cursor", e.name)), t && (t.toLowerCase() === "y" || t.toLowerCase() === "n") && this.emit("confirm", t.toLowerCase() === "y"), this.emit("key", t, e), e?.name === "return" && this._shouldSubmit(t, e)) {
+				if (this.opts.validate) {
+					const i = runValidation(this.opts.validate, this.value);
+					let s;
+					i instanceof Promise ? (this.state = "validating", this.render(), s = await i) : s = i, s && (this.error = s instanceof Error ? s.message : s, this.state = "error", this.rl?.write(this.userInput));
+				}
+				this.state !== "error" && (this.state = "submit");
+			}
+			isActionKey([
+				t,
+				e?.name,
+				e?.sequence
+			], "cancel") && (this.state = "cancel"), (this.state === "submit" || this.state === "cancel") && this.emit("finalize"), this.render(), (this.state === "submit" || this.state === "cancel") && this.close();
+		}
+	}
+	close() {
+		this.input.unpipe(), this.input.removeListener("keypress", this.onKeypress), this.output.write(`
+`), setRawMode(this.input, false), this.rl?.close(), this.rl = void 0, this.emit(`${this.state}`, this.value), this.unsubscribe();
+	}
+	restoreCursor() {
+		const t = wrapAnsi(this._prevFrame, process.stdout.columns, {
+			hard: true,
+			trim: false
+		}).split(`
+`).length - 1;
+		this.output.write(import_src.cursor.move(-999, t * -1));
+	}
+	render() {
+		const t = wrapAnsi(this._render(this) ?? "", process.stdout.columns, {
+			hard: true,
+			trim: false
+		});
+		if (t !== this._prevFrame) {
+			if (this.state === "initial") this.output.write(import_src.cursor.hide);
+			else {
+				const e = diffLines(this._prevFrame, t), i = getRows(this.output);
+				if (this.restoreCursor(), e) {
+					const s = Math.max(0, e.numLinesAfter - i), r = Math.max(0, e.numLinesBefore - i);
+					let n = e.lines.find((o) => o >= s);
+					if (n === void 0) {
+						this._prevFrame = t;
+						return;
+					}
+					if (e.lines.length === 1) {
+						this.output.write(import_src.cursor.move(0, n - r)), this.output.write(import_src.erase.lines(1));
+						const o = t.split(`
+`);
+						this.output.write(o[n]), this._prevFrame = t, this.output.write(import_src.cursor.move(0, o.length - n - 1));
+						return;
+					} else if (e.lines.length > 1) {
+						if (s < r) n = s;
+						else {
+							const h = n - r;
+							h > 0 && this.output.write(import_src.cursor.move(0, h));
+						}
+						this.output.write(import_src.erase.down());
+						const f = t.split(`
+`).slice(n);
+						this.output.write(f.join(`
+`)), this._prevFrame = t;
+						return;
+					}
+				}
+				this.output.write(import_src.erase.down());
+			}
+			this.output.write(t), this.state === "initial" && (this.state = "active"), this._prevFrame = t;
+		}
+	}
+};
+var r = class extends y {
+	get cursor() {
+		return this.value ? 0 : 1;
+	}
+	get _value() {
+		return this.cursor === 0;
+	}
+	constructor(t) {
+		super(t, false), this.value = !!t.initialValue, this.on("userInput", () => {
+			this.value = this._value;
+		}), this.on("confirm", (i) => {
+			this.output.write(import_src.cursor.move(0, -1)), this.value = i, this.state = "submit", this.close();
+		}), this.on("cursor", () => {
+			this.value = !this.value;
+		});
+	}
+};
+var a = class extends y {
+	options;
+	cursor = 0;
+	get _value() {
+		return this.options[this.cursor]?.value;
+	}
+	get _enabledOptions() {
+		return this.options.filter((e) => e.disabled !== true);
+	}
+	toggleAll() {
+		const e = this._enabledOptions, i = this.value !== void 0 && this.value.length === e.length;
+		this.value = i ? [] : e.map((t) => t.value);
+	}
+	toggleInvert() {
+		const e = this.value;
+		if (!e) return;
+		const i = this._enabledOptions.filter((t) => !e.includes(t.value));
+		this.value = i.map((t) => t.value);
+	}
+	toggleValue() {
+		this.value === void 0 && (this.value = []);
+		const e = this.value.includes(this._value);
+		this.value = e ? this.value.filter((i) => i !== this._value) : [...this.value, this._value];
+	}
+	constructor(e) {
+		super(e, false), this.options = e.options, this.value = [...e.initialValues ?? []];
+		const i = Math.max(this.options.findIndex(({ value: t }) => t === e.cursorAt), 0);
+		this.cursor = this.options[i]?.disabled ? findCursor(i, 1, this.options) : i, this.on("key", (t, l) => {
+			l.name === "a" && this.toggleAll(), l.name === "i" && this.toggleInvert();
+		}), this.on("cursor", (t) => {
+			switch (t) {
+				case "left":
+				case "up":
+					this.cursor = findCursor(this.cursor, -1, this.options);
+					break;
+				case "down":
+				case "right":
+					this.cursor = findCursor(this.cursor, 1, this.options);
+					break;
+				case "space": this.toggleValue();
+			}
+		});
+	}
+};
+let n$1 = class n extends y {
+	options;
+	cursor = 0;
+	get _selectedValue() {
+		return this.options[this.cursor];
+	}
+	changeValue() {
+		const e = this._selectedValue;
+		this.value = e === void 0 ? void 0 : e.value;
+	}
+	constructor(e) {
+		super(e, false), this.options = e.options;
+		const o = this.options.findIndex(({ value: s }) => s === e.initialValue), t = o === -1 ? 0 : o;
+		this.cursor = this.options[t]?.disabled ? findCursor(t, 1, this.options) : t, this.changeValue(), this.on("cursor", (s) => {
+			switch (s) {
+				case "left":
+				case "up":
+					this.cursor = findCursor(this.cursor, -1, this.options);
+					break;
+				case "down":
+				case "right": this.cursor = findCursor(this.cursor, 1, this.options);
+			}
+			this.changeValue();
+		});
+	}
+};
+var n = class extends y {
+	get userInputWithCursor() {
+		if (this.state === "submit") return this.userInput;
+		const t = this.userInput;
+		if (this.cursor >= t.length) return `${this.userInput}\u2588`;
+		const r = t.slice(0, this.cursor), s = t.slice(this.cursor, this.cursor + 1), e = t.slice(this.cursor + 1);
+		return `${r}${styleText("inverse", s)}${e}`;
+	}
+	get cursor() {
+		return this._cursor;
+	}
+	constructor(t) {
+		super({
+			...t,
+			initialUserInput: t.initialUserInput ?? t.initialValue
+		}), this.on("userInput", (r) => {
+			this._setValue(r);
+		}), this.on("finalize", () => {
+			this.value || (this.value = t.defaultValue), this.value === void 0 && (this.value = "");
+		});
+	}
+};
+//#endregion
+//#region node_modules/.pnpm/@clack+prompts@1.8.1/node_modules/@clack/prompts/dist/index.mjs
+function isUnicodeSupported() {
+	if (process$1.platform !== "win32") return process$1.env.TERM !== "linux";
+	return Boolean(process$1.env.CI) || Boolean(process$1.env.WT_SESSION) || Boolean(process$1.env.TERMINUS_SUBLIME) || process$1.env.ConEmuTask === "{cmd::Cmder}" || process$1.env.TERM_PROGRAM === "Terminus-Sublime" || process$1.env.TERM_PROGRAM === "vscode" || process$1.env.TERM === "xterm-256color" || process$1.env.TERM === "alacritty" || process$1.env.TERMINAL_EMULATOR === "JetBrains-JediTerm";
+}
+const unicode = isUnicodeSupported();
+const isCI = () => process.env.CI === "true";
+const unicodeOr = (o, e) => unicode ? o : e;
+const S_STEP_ACTIVE = unicodeOr("◆", "*");
+const S_STEP_CANCEL = unicodeOr("■", "x");
+const S_STEP_ERROR = unicodeOr("▲", "x");
+const S_STEP_SUBMIT = unicodeOr("◇", "o");
+const S_BAR_START = unicodeOr("┌", "T");
+const S_BAR = unicodeOr("│", "|");
+const S_BAR_END = unicodeOr("└", "—");
+const S_RADIO_ACTIVE = unicodeOr("●", ">");
+const S_RADIO_INACTIVE = unicodeOr("○", " ");
+const S_CHECKBOX_ACTIVE = unicodeOr("◻", "[•]");
+const S_CHECKBOX_SELECTED = unicodeOr("◼", "[+]");
+const S_CHECKBOX_INACTIVE = unicodeOr("◻", "[ ]");
+const S_BAR_H = unicodeOr("─", "-");
+const S_CORNER_TOP_RIGHT = unicodeOr("╮", "+");
+const S_CONNECT_LEFT = unicodeOr("├", "+");
+const S_CORNER_BOTTOM_RIGHT = unicodeOr("╯", "+");
+const S_CORNER_BOTTOM_LEFT = unicodeOr("╰", "+");
+const S_INFO = unicodeOr("●", "•");
+const S_SUCCESS = unicodeOr("◆", "*");
+const S_WARN = unicodeOr("▲", "!");
+const S_ERROR = unicodeOr("■", "x");
+const symbol = (o) => {
+	switch (o) {
+		case "initial":
+		case "active": return styleText("cyan", S_STEP_ACTIVE);
+		case "cancel": return styleText("red", S_STEP_CANCEL);
+		case "error": return styleText("yellow", S_STEP_ERROR);
+		case "submit": return styleText("green", S_STEP_SUBMIT);
+		case "validating": return styleText("dim", S_STEP_ACTIVE);
+	}
+};
+const symbolBar = (o) => {
+	switch (o) {
+		case "initial":
+		case "active": return styleText("cyan", S_BAR);
+		case "cancel": return styleText("red", S_BAR);
+		case "error": return styleText("yellow", S_BAR);
+		case "submit": return styleText("green", S_BAR);
+	}
+};
+function formatInstructionFooter(o, e) {
+	const r = [`${e ? `${styleText("cyan", S_BAR)}  ` : ""}${o.join(" • ")}`];
+	return e && r.push(styleText("cyan", S_BAR_END)), r;
+}
+const I = (l, e, w, p, b, C = false) => {
+	let r = e, O = 0;
+	if (C) for (let i = p - 1; i >= w; i--) {
+		const m = l[i];
+		if (m && (r -= m.length), O++, r <= b) break;
+	}
+	else for (let i = w; i < p; i++) {
+		const m = l[i];
+		if (m && (r -= m.length), O++, r <= b) break;
+	}
+	return {
+		lineCount: r,
+		removals: O
+	};
+};
+const limitOptions = ({ cursor: l, options: e, style: w, output: p = process.stdout, maxItems: b = Number.POSITIVE_INFINITY, columnPadding: C = 0, rowPadding: r = 4 }) => {
+	const i = getColumns(p) - C, m = getRows(p), M = styleText("dim", "..."), v = Math.max(m - r, 0), a = Math.max(Math.min(b, v), 5);
+	let f = 0;
+	l >= a - 3 && (f = Math.max(Math.min(l - a + 3, e.length - a), 0));
+	let d = a < e.length && f > 0, c = a < e.length && f + a < e.length;
+	const W = Math.min(f + a, e.length), s = [];
+	let g = 0;
+	d && g++, c && g++;
+	const T = f + (d ? 1 : 0), y = W - (c ? 1 : 0);
+	for (let t = T; t < y; t++) {
+		const n = e[t], h = wrapAnsi(n ? w(n, t === l) : "", i, {
+			hard: true,
+			trim: false
+		}).split(`
+`);
+		s.push(h), g += h.length;
+	}
+	if (g > v) {
+		let t = 0, n = 0, o = g;
+		const h = l - T;
+		let u = v;
+		const L = () => I(s, o, 0, h, u), E = () => I(s, o, h + 1, s.length, u, true);
+		d ? ({lineCount: o, removals: t} = L(), o > u && (c || (u -= 1), {lineCount: o, removals: n} = E())) : (c || (u -= 1), {lineCount: o, removals: n} = E(), o > u && (u -= 1, {lineCount: o, removals: t} = L())), t > 0 && (d = true, s.splice(0, t)), n > 0 && (c = true, s.splice(s.length - n, n));
+	}
+	const x = [];
+	d && x.push(M);
+	for (const t of s) for (const n of t) x.push(n);
+	return c && x.push(M), x;
+};
+const confirm = (e) => {
+	const a = e.active ?? "Yes", o = e.inactive ?? "No";
+	return new r({
+		active: a,
+		inactive: o,
+		signal: e.signal,
+		input: e.input,
+		output: e.output,
+		initialValue: e.initialValue ?? true,
+		render() {
+			const i = e.withGuide ?? settings.withGuide, u = `${symbol(this.state)}  `, l = i ? `${styleText("gray", S_BAR)}  ` : "", f = wrapTextWithPrefix(e.output, e.message, l, u), s = `${i ? `${styleText("gray", S_BAR)}
+` : ""}${f}
+`, c = this.value ? a : o;
+			switch (this.state) {
+				case "submit": return `${s}${i ? `${styleText("gray", S_BAR)}  ` : ""}${styleText("dim", c)}`;
+				case "cancel": return `${s}${i ? `${styleText("gray", S_BAR)}  ` : ""}${styleText(["strikethrough", "dim"], c)}${i ? `
+${styleText("gray", S_BAR)}` : ""}`;
+				default: {
+					const r = i ? `${styleText("cyan", S_BAR)}  ` : "", g = i ? styleText("cyan", S_BAR_END) : "";
+					return `${s}${r}${this.value ? `${styleText("green", S_RADIO_ACTIVE)} ${a}` : `${styleText("dim", S_RADIO_INACTIVE)} ${styleText("dim", a)}`}${e.vertical ? i ? `
+${styleText("cyan", S_BAR)}  ` : `
+` : ` ${styleText("dim", "/")} `}${this.value ? `${styleText("dim", S_RADIO_INACTIVE)} ${styleText("dim", o)}` : `${styleText("green", S_RADIO_ACTIVE)} ${o}`}
+${g}
+`;
+				}
+			}
+		}
+	}).prompt();
+};
+const MULTISELECT_INSTRUCTIONS = [
+	`${styleText("dim", "↑/↓")} to navigate`,
+	`${styleText("dim", "Space:")} select`,
+	`${styleText("dim", "Enter:")} confirm`
+];
+const m = (i, u) => i.split(`
+`).map((d) => u(d)).join(`
+`);
+const multiselect = (i) => {
+	const u = (t, a) => {
+		const r = t.label ?? String(t.value);
+		return a === "disabled" ? `${styleText("gray", S_CHECKBOX_INACTIVE)} ${m(r, (o) => styleText(["strikethrough", "gray"], o))}${t.hint ? ` ${styleText("dim", `(${t.hint ?? "disabled"})`)}` : ""}` : a === "active" ? `${styleText("cyan", S_CHECKBOX_ACTIVE)} ${r}${t.hint ? ` ${styleText("dim", `(${t.hint})`)}` : ""}` : a === "selected" ? `${styleText("green", S_CHECKBOX_SELECTED)} ${m(r, (o) => styleText("dim", o))}${t.hint ? ` ${styleText("dim", `(${t.hint})`)}` : ""}` : a === "cancelled" ? `${m(r, (o) => styleText(["strikethrough", "dim"], o))}` : a === "active-selected" ? `${styleText("green", S_CHECKBOX_SELECTED)} ${r}${t.hint ? ` ${styleText("dim", `(${t.hint})`)}` : ""}` : a === "submitted" ? `${m(r, (o) => styleText("dim", o))}` : `${styleText("dim", S_CHECKBOX_INACTIVE)} ${m(r, (o) => styleText("dim", o))}`;
+	}, d = i.required ?? true, x = i.showInstructions ?? true;
+	return new a({
+		options: i.options,
+		signal: i.signal,
+		input: i.input,
+		output: i.output,
+		initialValues: i.initialValues,
+		required: d,
+		cursorAt: i.cursorAt,
+		validate(t) {
+			if (d && (t === void 0 || t.length === 0)) return `Please select at least one option.
+${styleText("reset", styleText("dim", `Press ${styleText([
+				"gray",
+				"bgWhite",
+				"inverse"
+			], " space ")} to select, ${styleText("gray", styleText("bgWhite", styleText("inverse", " enter ")))} to submit`))}`;
+		},
+		render() {
+			const t = i.withGuide ?? settings.withGuide, a = wrapTextWithPrefix(i.output, i.message, t ? `${symbolBar(this.state)}  ` : "", `${symbol(this.state)}  `), r = `${t ? `${styleText("gray", S_BAR)}
+` : ""}${a}
+`, o = this.value ?? [], g = (n, l) => {
+				if (n.disabled) return u(n, "disabled");
+				const s = o.includes(n.value);
+				return l && s ? u(n, "active-selected") : s ? u(n, "selected") : u(n, l ? "active" : "inactive");
+			};
+			switch (this.state) {
+				case "submit": {
+					const n = this.options.filter(({ value: s }) => o.includes(s)).map((s) => u(s, "submitted")).join(styleText("dim", ", ")) || styleText("dim", "none");
+					return `${r}${wrapTextWithPrefix(i.output, n, t ? `${styleText("gray", S_BAR)}  ` : "")}`;
+				}
+				case "cancel": {
+					const n = this.options.filter(({ value: s }) => o.includes(s)).map((s) => u(s, "cancelled")).join(styleText("dim", ", "));
+					if (n.trim() === "") return `${r}${styleText("gray", S_BAR)}`;
+					return `${r}${wrapTextWithPrefix(i.output, n, t ? `${styleText("gray", S_BAR)}  ` : "")}${t ? `
+${styleText("gray", S_BAR)}` : ""}`;
+				}
+				case "error": {
+					const n = t ? `${styleText("yellow", S_BAR)}  ` : "", l = this.error.split(`
+`).map(($, v) => v === 0 ? `${t ? `${styleText("yellow", S_BAR_END)}  ` : ""}${styleText("yellow", $)}` : `   ${$}`).join(`
+`), s = r.split(`
+`).length, h = l.split(`
+`).length + 1;
+					return `${r}${n}${limitOptions({
+						output: i.output,
+						options: this.options,
+						cursor: this.cursor,
+						maxItems: i.maxItems,
+						columnPadding: n.length,
+						rowPadding: s + h,
+						style: g
+					}).join(`
+${n}`)}
+${l}
+`;
+				}
+				default: {
+					const n = t ? `${styleText("cyan", S_BAR)}  ` : "", l = r.split(`
+`).length, s = x ? formatInstructionFooter(MULTISELECT_INSTRUCTIONS, t) : t ? [styleText("cyan", S_BAR_END)] : [], h = s.join(`
+`), $ = s.length + 1;
+					return `${r}${n}${limitOptions({
+						output: i.output,
+						options: this.options,
+						cursor: this.cursor,
+						maxItems: i.maxItems,
+						columnPadding: n.length,
+						rowPadding: l + $,
+						style: g
+					}).join(`
+${n}`)}
+${h}
+`;
+				}
+			}
+		}
+	}).prompt();
+};
+const log = {
+	message: (s = [], { symbol: e = styleText("gray", S_BAR), secondarySymbol: r = styleText("gray", S_BAR), output: m = process.stdout, spacing: l = 1, withGuide: c } = {}) => {
+		const t = [], o = c ?? settings.withGuide, f = o ? r : "", O = o ? `${e}  ` : "", u = o ? `${r}  ` : "";
+		for (let i = 0; i < l; i++) t.push(f);
+		const g = Array.isArray(s) ? s : s.split(`
+`);
+		if (g.length > 0) {
+			const [i, ...y] = g;
+			i.length > 0 ? t.push(`${O}${i}`) : t.push(o ? e : "");
+			for (const p of y) p.length > 0 ? t.push(`${u}${p}`) : t.push(o ? r : "");
+		}
+		m.write(`${t.join(`
+`)}
+`);
+	},
+	info: (s, e) => {
+		log.message(s, {
+			...e,
+			symbol: styleText("blue", S_INFO)
+		});
+	},
+	success: (s, e) => {
+		log.message(s, {
+			...e,
+			symbol: styleText("green", S_SUCCESS)
+		});
+	},
+	step: (s, e) => {
+		log.message(s, {
+			...e,
+			symbol: styleText("green", S_STEP_SUBMIT)
+		});
+	},
+	warn: (s, e) => {
+		log.message(s, {
+			...e,
+			symbol: styleText("yellow", S_WARN)
+		});
+	},
+	/** alias for `log.warn()`. */
+	warning: (s, e) => {
+		log.warn(s, e);
+	},
+	error: (s, e) => {
+		log.message(s, {
+			...e,
+			symbol: styleText("red", S_ERROR)
+		});
+	}
+};
+const cancel = (o = "", t) => {
+	const i = t?.output ?? process.stdout, e = t?.withGuide ?? settings.withGuide ? `${styleText("gray", S_BAR_END)}  ` : "";
+	i.write(`${e}${styleText("red", o)}
+
+`);
+};
+const intro = (o = "", t) => {
+	const i = t?.output ?? process.stdout, e = t?.withGuide ?? settings.withGuide ? `${styleText("gray", S_BAR_START)}  ` : "";
+	i.write(`${e}${o}
+`);
+};
+const outro = (o = "", t) => {
+	const i = t?.output ?? process.stdout, e = t?.withGuide ?? settings.withGuide ? `${styleText("gray", S_BAR)}
+${styleText("gray", S_BAR_END)}  ` : "";
+	i.write(`${e}${o}
+
+`);
+};
+const W$1 = (o) => o;
+const C = (o, e, s) => {
+	const a = {
+		hard: true,
+		trim: false
+	}, i = wrapAnsi(o, e, a).split(`
+`), c = i.reduce((n, t) => Math.max(fastStringWidth(t), n), 0);
+	return wrapAnsi(o, e - (i.map(s).reduce((n, t) => Math.max(fastStringWidth(t), n), 0) - c), a);
+};
+const note = (o = "", e = "", s) => {
+	const a = s?.output ?? process$1.stdout, i = s?.withGuide ?? settings.withGuide, c = s?.format ?? W$1, g = [
+		"",
+		...C(o, getColumns(a) - 6, c).split(`
+`).map(c),
+		""
+	], n = fastStringWidth(e), t = Math.max(g.reduce((m, F) => {
+		const O = fastStringWidth(F);
+		return O > m ? O : m;
+	}, 0), n) + 2, h = g.map((m) => `${styleText("gray", S_BAR)}  ${m}${" ".repeat(t - fastStringWidth(m))}${styleText("gray", S_BAR)}`).join(`
+`), T = i ? `${styleText("gray", S_BAR)}
+` : "", l$1 = i ? S_CONNECT_LEFT : S_CORNER_BOTTOM_LEFT;
+	a.write(`${T}${styleText("green", S_STEP_SUBMIT)}  ${styleText("reset", e)} ${styleText("gray", S_BAR_H.repeat(Math.max(t - n - 1, 1)) + S_CORNER_TOP_RIGHT)}
+${h}
+${styleText("gray", l$1 + S_BAR_H.repeat(t + 2) + S_CORNER_BOTTOM_RIGHT)}
+`);
+};
+const W = (l) => styleText("magenta", l);
+const spinner = ({ indicator: l = "dots", onCancel: h, output: n = process.stdout, cancelMessage: G, errorMessage: O, frames: E = unicode ? [
+	"◒",
+	"◐",
+	"◓",
+	"◑"
+] : [
+	"•",
+	"o",
+	"O",
+	"0"
+], delay: F = unicode ? 80 : 120, signal: m, ...I } = {}) => {
+	const u = isCI();
+	let M, T, d = false, S = false, s = "", p, w = performance.now();
+	const x = getColumns(n), k = I?.styleFrame ?? W, g = (e) => {
+		const r = e > 1 ? O ?? settings.messages.error : G ?? settings.messages.cancel;
+		S = e === 1, d && (a(r, e), S && typeof h == "function" && h());
+	}, f = () => g(2), i = () => g(1), A = () => {
+		process.on("uncaughtExceptionMonitor", f), process.on("unhandledRejection", f), process.on("SIGINT", i), process.on("SIGTERM", i), process.on("exit", g), m && m.addEventListener("abort", i);
+	}, H = () => {
+		process.removeListener("uncaughtExceptionMonitor", f), process.removeListener("unhandledRejection", f), process.removeListener("SIGINT", i), process.removeListener("SIGTERM", i), process.removeListener("exit", g), m && m.removeEventListener("abort", i);
+	}, y = () => {
+		if (p === void 0) return;
+		u && n.write(`
+`);
+		const r = wrapAnsi(p, x, {
+			hard: true,
+			trim: false
+		}).split(`
+`);
+		r.length > 1 && n.write(import_src.cursor.up(r.length - 1)), n.write(import_src.cursor.to(0)), n.write(import_src.erase.down());
+	}, C = (e) => e.replace(/\.+$/, ""), _ = (e) => {
+		const r = (performance.now() - e) / 1e3, t = Math.floor(r / 60), o = Math.floor(r % 60);
+		return t > 0 ? `[${t}m ${o}s]` : `[${o}s]`;
+	}, N = I.withGuide ?? settings.withGuide, P = (e = "") => {
+		d = true, M = block({ output: n }), s = C(e), w = performance.now(), N && n.write(`${styleText("gray", S_BAR)}
+`);
+		let r = 0, t = 0;
+		A(), T = setInterval(() => {
+			if (u && s === p) return;
+			y(), p = s;
+			const o = k(E[r]);
+			let v;
+			if (u) v = `${o}  ${s}...`;
+			else if (l === "timer") v = `${o}  ${s} ${_(w)}`;
+			else {
+				const B = ".".repeat(Math.floor(t)).slice(0, 3);
+				v = `${o}  ${s}${B}`;
+			}
+			const j = wrapAnsi(v, x, {
+				hard: true,
+				trim: false
+			});
+			n.write(j), r = r + 1 < E.length ? r + 1 : 0, t = t < 4 ? t + .125 : 0;
+		}, F);
+	}, a = (e = "", r = 0, t = false) => {
+		if (!d) return;
+		d = false, clearInterval(T), y();
+		const o = r === 0 ? styleText("green", S_STEP_SUBMIT) : r === 1 ? styleText("red", S_STEP_CANCEL) : styleText("red", S_STEP_ERROR);
+		s = e ?? s, t || (l === "timer" ? n.write(`${o}  ${s} ${_(w)}
+`) : n.write(`${o}  ${s}
+`)), H(), M();
+	};
+	return {
+		start: P,
+		stop: (e = "") => a(e, 0),
+		message: (e = "") => {
+			s = C(e ?? s);
+		},
+		cancel: (e = "") => a(e, 1),
+		error: (e = "") => a(e, 2),
+		clear: () => a("", 0, true),
+		get isCancelled() {
+			return S;
+		}
+	};
+};
+const SELECT_INSTRUCTIONS = [`${styleText("dim", "↑/↓")} to navigate`, `${styleText("dim", "Enter:")} confirm`];
+const c = (t, o) => t.includes(`
+`) ? t.split(`
+`).map((d) => o(d)).join(`
+`) : o(t);
+const select = (t) => {
+	const o = (n, m) => {
+		if (n === void 0) return "";
+		const s = n.label ?? String(n.value);
+		switch (m) {
+			case "disabled": return `${styleText("gray", S_RADIO_INACTIVE)} ${c(s, (i) => styleText("gray", i))}${n.hint ? ` ${styleText("dim", `(${n.hint ?? "disabled"})`)}` : ""}`;
+			case "selected": return `${c(s, (i) => styleText("dim", i))}`;
+			case "active": return `${styleText("green", S_RADIO_ACTIVE)} ${s}${n.hint ? ` ${styleText("dim", `(${n.hint})`)}` : ""}`;
+			case "cancelled": return `${c(s, (i) => styleText(["strikethrough", "dim"], i))}`;
+			default: return `${styleText("dim", S_RADIO_INACTIVE)} ${c(s, (i) => styleText("dim", i))}`;
+		}
+	}, d = t.showInstructions ?? true;
+	return new n$1({
+		options: t.options,
+		signal: t.signal,
+		input: t.input,
+		output: t.output,
+		initialValue: t.initialValue,
+		render() {
+			const n = t.withGuide ?? settings.withGuide, m = `${symbol(this.state)}  `, s = `${symbolBar(this.state)}  `, i = wrapTextWithPrefix(t.output, t.message, s, m), u = `${n ? `${styleText("gray", S_BAR)}
+` : ""}${i}
+`;
+			switch (this.state) {
+				case "submit": {
+					const r = n ? `${styleText("gray", S_BAR)}  ` : "";
+					return `${u}${wrapTextWithPrefix(t.output, o(this.options[this.cursor], "selected"), r)}`;
+				}
+				case "cancel": {
+					const r = n ? `${styleText("gray", S_BAR)}  ` : "";
+					return `${u}${wrapTextWithPrefix(t.output, o(this.options[this.cursor], "cancelled"), r)}${n ? `
+${styleText("gray", S_BAR)}` : ""}`;
+				}
+				default: {
+					const r = n ? `${styleText("cyan", S_BAR)}  ` : "", a = u.split(`
+`).length, p = d ? formatInstructionFooter(SELECT_INSTRUCTIONS, n) : n ? [styleText("cyan", S_BAR_END)] : [], f = p.join(`
+`), b = p.length + 1;
+					return `${u}${r}${limitOptions({
+						output: t.output,
+						cursor: this.cursor,
+						options: this.options,
+						maxItems: t.maxItems,
+						columnPadding: r.length,
+						rowPadding: a + b,
+						style: (g, x) => o(g, g.disabled ? "disabled" : x ? "active" : "inactive")
+					}).join(`
+${r}`)}
+${f}
+`;
+				}
+			}
+		}
+	}).prompt();
+};
+`${styleText("gray", S_BAR)}`;
+const text = (t) => new n({
+	validate: t.validate,
+	placeholder: t.placeholder,
+	defaultValue: t.defaultValue,
+	initialValue: t.initialValue,
+	output: t.output,
+	signal: t.signal,
+	input: t.input,
+	render() {
+		const r = t?.withGuide ?? settings.withGuide, l = `${`${r ? `${styleText("gray", S_BAR)}
+` : ""}${symbol(this.state)}  `}${t.message}
+`, d = t.placeholder && t.placeholder.length > 0 ? styleText("inverse", t.placeholder[0]) + styleText("dim", t.placeholder.slice(1)) : styleText(["inverse", "hidden"], "_"), o = this.userInput ? this.userInputWithCursor : d, s = this.value ?? "";
+		switch (this.state) {
+			case "validating": {
+				const n = r ? `${styleText("cyan", S_BAR)}  ` : "", i = r ? styleText("cyan", S_BAR_END) : "";
+				return `${l}${n}${styleText("dim", o)}
+${i}  ${styleText("dim", "Validating...")}
+`;
+			}
+			case "error": {
+				const n = this.error ? `  ${styleText("yellow", this.error)}` : "", i = r ? `${styleText("yellow", S_BAR)}  ` : "", c = r ? styleText("yellow", S_BAR_END) : "";
+				return `${l.trim()}
+${i}${o}
+${c}${n}
+`;
+			}
+			case "submit": {
+				const n = s ? `${r ? "  " : ""}${styleText("dim", s)}` : "";
+				return `${l}${r ? styleText("gray", S_BAR) : ""}${n}`;
+			}
+			case "cancel": {
+				const n = s ? `  ${styleText(["strikethrough", "dim"], s)}` : "", i = r ? styleText("gray", S_BAR) : "";
+				return `${l}${i}${n}${s.trim() ? `
+${i}` : ""}`;
+			}
+			default: return `${l}${r ? `${styleText("cyan", S_BAR)}  ` : ""}${o}
+${r ? styleText("cyan", S_BAR_END) : ""}
+`;
+		}
+	}
+}).prompt();
+//#endregion
+//#region node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/scanner.js
+var import_picocolors = /* @__PURE__ */ __toESM((/* @__PURE__ */ __commonJSMin(((exports, module) => {
+	let p = process || {};
+	let argv = p.argv || [];
+	let env = p.env || {};
+	let isColorSupported = !(!!env.NO_COLOR || argv.includes("--no-color")) && (!!env.FORCE_COLOR || argv.includes("--color") || p.platform === "win32" || (p.stdout || {}).isTTY && env.TERM !== "dumb" || !!env.CI);
+	let formatter = (open, close, replace = open) => (input) => {
+		let string = "" + input, index = string.indexOf(close, open.length);
+		return ~index ? open + replaceClose(string, close, replace, index) + close : open + string + close;
+	};
+	let replaceClose = (string, close, replace, index) => {
+		let result = "", cursor = 0;
+		do {
+			result += string.substring(cursor, index) + replace;
+			cursor = index + close.length;
+			index = string.indexOf(close, cursor);
+		} while (~index);
+		return result + string.substring(cursor);
+	};
+	let createColors = (enabled = isColorSupported) => {
+		let f = enabled ? formatter : () => String;
+		return {
+			isColorSupported: enabled,
+			reset: f("\x1B[0m", "\x1B[0m"),
+			bold: f("\x1B[1m", "\x1B[22m", "\x1B[22m\x1B[1m"),
+			dim: f("\x1B[2m", "\x1B[22m", "\x1B[22m\x1B[2m"),
+			italic: f("\x1B[3m", "\x1B[23m"),
+			underline: f("\x1B[4m", "\x1B[24m"),
+			inverse: f("\x1B[7m", "\x1B[27m"),
+			hidden: f("\x1B[8m", "\x1B[28m"),
+			strikethrough: f("\x1B[9m", "\x1B[29m"),
+			black: f("\x1B[30m", "\x1B[39m"),
+			red: f("\x1B[31m", "\x1B[39m"),
+			green: f("\x1B[32m", "\x1B[39m"),
+			yellow: f("\x1B[33m", "\x1B[39m"),
+			blue: f("\x1B[34m", "\x1B[39m"),
+			magenta: f("\x1B[35m", "\x1B[39m"),
+			cyan: f("\x1B[36m", "\x1B[39m"),
+			white: f("\x1B[37m", "\x1B[39m"),
+			gray: f("\x1B[90m", "\x1B[39m"),
+			bgBlack: f("\x1B[40m", "\x1B[49m"),
+			bgRed: f("\x1B[41m", "\x1B[49m"),
+			bgGreen: f("\x1B[42m", "\x1B[49m"),
+			bgYellow: f("\x1B[43m", "\x1B[49m"),
+			bgBlue: f("\x1B[44m", "\x1B[49m"),
+			bgMagenta: f("\x1B[45m", "\x1B[49m"),
+			bgCyan: f("\x1B[46m", "\x1B[49m"),
+			bgWhite: f("\x1B[47m", "\x1B[49m"),
+			blackBright: f("\x1B[90m", "\x1B[39m"),
+			redBright: f("\x1B[91m", "\x1B[39m"),
+			greenBright: f("\x1B[92m", "\x1B[39m"),
+			yellowBright: f("\x1B[93m", "\x1B[39m"),
+			blueBright: f("\x1B[94m", "\x1B[39m"),
+			magentaBright: f("\x1B[95m", "\x1B[39m"),
+			cyanBright: f("\x1B[96m", "\x1B[39m"),
+			whiteBright: f("\x1B[97m", "\x1B[39m"),
+			bgBlackBright: f("\x1B[100m", "\x1B[49m"),
+			bgRedBright: f("\x1B[101m", "\x1B[49m"),
+			bgGreenBright: f("\x1B[102m", "\x1B[49m"),
+			bgYellowBright: f("\x1B[103m", "\x1B[49m"),
+			bgBlueBright: f("\x1B[104m", "\x1B[49m"),
+			bgMagentaBright: f("\x1B[105m", "\x1B[49m"),
+			bgCyanBright: f("\x1B[106m", "\x1B[49m"),
+			bgWhiteBright: f("\x1B[107m", "\x1B[49m")
+		};
+	};
+	module.exports = createColors();
+	module.exports.createColors = createColors;
+})))(), 1);
+/**
+* Creates a JSON scanner on the given text.
+* If ignoreTrivia is set, whitespaces or comments are ignored.
+*/
+function createScanner(text, ignoreTrivia = false) {
+	const len = text.length;
+	let pos = 0, value = "", tokenOffset = 0, token = 16, lineNumber = 0, lineStartOffset = 0, tokenLineStartOffset = 0, prevTokenLineStartOffset = 0, scanError = 0;
+	function scanHexDigits(count, exact) {
+		let digits = 0;
+		let value = 0;
+		while (digits < count || !exact) {
+			let ch = text.charCodeAt(pos);
+			if (ch >= 48 && ch <= 57) value = value * 16 + ch - 48;
+			else if (ch >= 65 && ch <= 70) value = value * 16 + ch - 65 + 10;
+			else if (ch >= 97 && ch <= 102) value = value * 16 + ch - 97 + 10;
+			else break;
+			pos++;
+			digits++;
+		}
+		if (digits < count) value = -1;
+		return value;
+	}
+	function setPosition(newPosition) {
+		pos = newPosition;
+		value = "";
+		tokenOffset = 0;
+		token = 16;
+		scanError = 0;
+	}
+	function scanNumber() {
+		let start = pos;
+		if (text.charCodeAt(pos) === 48) pos++;
+		else {
+			pos++;
+			while (pos < text.length && isDigit(text.charCodeAt(pos))) pos++;
+		}
+		if (pos < text.length && text.charCodeAt(pos) === 46) {
+			pos++;
+			if (pos < text.length && isDigit(text.charCodeAt(pos))) {
+				pos++;
+				while (pos < text.length && isDigit(text.charCodeAt(pos))) pos++;
+			} else {
+				scanError = 3;
+				return text.substring(start, pos);
+			}
+		}
+		let end = pos;
+		if (pos < text.length && (text.charCodeAt(pos) === 69 || text.charCodeAt(pos) === 101)) {
+			pos++;
+			if (pos < text.length && text.charCodeAt(pos) === 43 || text.charCodeAt(pos) === 45) pos++;
+			if (pos < text.length && isDigit(text.charCodeAt(pos))) {
+				pos++;
+				while (pos < text.length && isDigit(text.charCodeAt(pos))) pos++;
+				end = pos;
+			} else scanError = 3;
+		}
+		return text.substring(start, end);
+	}
+	function scanString() {
+		let result = "", start = pos;
+		while (true) {
+			if (pos >= len) {
+				result += text.substring(start, pos);
+				scanError = 2;
+				break;
+			}
+			const ch = text.charCodeAt(pos);
+			if (ch === 34) {
+				result += text.substring(start, pos);
+				pos++;
+				break;
+			}
+			if (ch === 92) {
+				result += text.substring(start, pos);
+				pos++;
+				if (pos >= len) {
+					scanError = 2;
+					break;
+				}
+				switch (text.charCodeAt(pos++)) {
+					case 34:
+						result += "\"";
+						break;
+					case 92:
+						result += "\\";
+						break;
+					case 47:
+						result += "/";
+						break;
+					case 98:
+						result += "\b";
+						break;
+					case 102:
+						result += "\f";
+						break;
+					case 110:
+						result += "\n";
+						break;
+					case 114:
+						result += "\r";
+						break;
+					case 116:
+						result += "	";
+						break;
+					case 117:
+						const ch3 = scanHexDigits(4, true);
+						if (ch3 >= 0) result += String.fromCharCode(ch3);
+						else scanError = 4;
+						break;
+					default: scanError = 5;
+				}
+				start = pos;
+				continue;
+			}
+			if (ch >= 0 && ch <= 31) {
+				if (isLineBreak(ch)) {
+					result += text.substring(start, pos);
+					scanError = 2;
+					break;
+				} else scanError = 6;
+			}
+			pos++;
+		}
+		return result;
+	}
+	function scanNext() {
+		value = "";
+		scanError = 0;
+		tokenOffset = pos;
+		lineStartOffset = lineNumber;
+		prevTokenLineStartOffset = tokenLineStartOffset;
+		if (pos >= len) {
+			tokenOffset = len;
+			return token = 17;
+		}
+		let code = text.charCodeAt(pos);
+		if (isWhiteSpace(code)) {
+			do {
+				pos++;
+				value += String.fromCharCode(code);
+				code = text.charCodeAt(pos);
+			} while (isWhiteSpace(code));
+			return token = 15;
+		}
+		if (isLineBreak(code)) {
+			pos++;
+			value += String.fromCharCode(code);
+			if (code === 13 && text.charCodeAt(pos) === 10) {
+				pos++;
+				value += "\n";
+			}
+			lineNumber++;
+			tokenLineStartOffset = pos;
+			return token = 14;
+		}
+		switch (code) {
+			case 123:
+				pos++;
+				return token = 1;
+			case 125:
+				pos++;
+				return token = 2;
+			case 91:
+				pos++;
+				return token = 3;
+			case 93:
+				pos++;
+				return token = 4;
+			case 58:
+				pos++;
+				return token = 6;
+			case 44:
+				pos++;
+				return token = 5;
+			case 34:
+				pos++;
+				value = scanString();
+				return token = 10;
+			case 47:
+				const start = pos - 1;
+				if (text.charCodeAt(pos + 1) === 47) {
+					pos += 2;
+					while (pos < len) {
+						if (isLineBreak(text.charCodeAt(pos))) break;
+						pos++;
+					}
+					value = text.substring(start, pos);
+					return token = 12;
+				}
+				if (text.charCodeAt(pos + 1) === 42) {
+					pos += 2;
+					const safeLength = len - 1;
+					let commentClosed = false;
+					while (pos < safeLength) {
+						const ch = text.charCodeAt(pos);
+						if (ch === 42 && text.charCodeAt(pos + 1) === 47) {
+							pos += 2;
+							commentClosed = true;
+							break;
+						}
+						pos++;
+						if (isLineBreak(ch)) {
+							if (ch === 13 && text.charCodeAt(pos) === 10) pos++;
+							lineNumber++;
+							tokenLineStartOffset = pos;
+						}
+					}
+					if (!commentClosed) {
+						pos++;
+						scanError = 1;
+					}
+					value = text.substring(start, pos);
+					return token = 13;
+				}
+				value += String.fromCharCode(code);
+				pos++;
+				return token = 16;
+			case 45:
+				value += String.fromCharCode(code);
+				pos++;
+				if (pos === len || !isDigit(text.charCodeAt(pos))) return token = 16;
+			case 48:
+			case 49:
+			case 50:
+			case 51:
+			case 52:
+			case 53:
+			case 54:
+			case 55:
+			case 56:
+			case 57:
+				value += scanNumber();
+				return token = 11;
+			default:
+				while (pos < len && isUnknownContentCharacter(code)) {
+					pos++;
+					code = text.charCodeAt(pos);
+				}
+				if (tokenOffset !== pos) {
+					value = text.substring(tokenOffset, pos);
+					switch (value) {
+						case "true": return token = 8;
+						case "false": return token = 9;
+						case "null": return token = 7;
+					}
+					return token = 16;
+				}
+				value += String.fromCharCode(code);
+				pos++;
+				return token = 16;
+		}
+	}
+	function isUnknownContentCharacter(code) {
+		if (isWhiteSpace(code) || isLineBreak(code)) return false;
+		switch (code) {
+			case 125:
+			case 93:
+			case 123:
+			case 91:
+			case 34:
+			case 58:
+			case 44:
+			case 47: return false;
+		}
+		return true;
+	}
+	function scanNextNonTrivia() {
+		let result;
+		do
+			result = scanNext();
+		while (result >= 12 && result <= 15);
+		return result;
+	}
+	return {
+		setPosition,
+		getPosition: () => pos,
+		scan: ignoreTrivia ? scanNextNonTrivia : scanNext,
+		getToken: () => token,
+		getTokenValue: () => value,
+		getTokenOffset: () => tokenOffset,
+		getTokenLength: () => pos - tokenOffset,
+		getTokenStartLine: () => lineStartOffset,
+		getTokenStartCharacter: () => tokenOffset - prevTokenLineStartOffset,
+		getTokenError: () => scanError
+	};
+}
+function isWhiteSpace(ch) {
+	return ch === 32 || ch === 9;
+}
+function isLineBreak(ch) {
+	return ch === 10 || ch === 13;
+}
+function isDigit(ch) {
+	return ch >= 48 && ch <= 57;
+}
+var CharacterCodes;
+(function(CharacterCodes) {
+	CharacterCodes[CharacterCodes["lineFeed"] = 10] = "lineFeed";
+	CharacterCodes[CharacterCodes["carriageReturn"] = 13] = "carriageReturn";
+	CharacterCodes[CharacterCodes["space"] = 32] = "space";
+	CharacterCodes[CharacterCodes["_0"] = 48] = "_0";
+	CharacterCodes[CharacterCodes["_1"] = 49] = "_1";
+	CharacterCodes[CharacterCodes["_2"] = 50] = "_2";
+	CharacterCodes[CharacterCodes["_3"] = 51] = "_3";
+	CharacterCodes[CharacterCodes["_4"] = 52] = "_4";
+	CharacterCodes[CharacterCodes["_5"] = 53] = "_5";
+	CharacterCodes[CharacterCodes["_6"] = 54] = "_6";
+	CharacterCodes[CharacterCodes["_7"] = 55] = "_7";
+	CharacterCodes[CharacterCodes["_8"] = 56] = "_8";
+	CharacterCodes[CharacterCodes["_9"] = 57] = "_9";
+	CharacterCodes[CharacterCodes["a"] = 97] = "a";
+	CharacterCodes[CharacterCodes["b"] = 98] = "b";
+	CharacterCodes[CharacterCodes["c"] = 99] = "c";
+	CharacterCodes[CharacterCodes["d"] = 100] = "d";
+	CharacterCodes[CharacterCodes["e"] = 101] = "e";
+	CharacterCodes[CharacterCodes["f"] = 102] = "f";
+	CharacterCodes[CharacterCodes["g"] = 103] = "g";
+	CharacterCodes[CharacterCodes["h"] = 104] = "h";
+	CharacterCodes[CharacterCodes["i"] = 105] = "i";
+	CharacterCodes[CharacterCodes["j"] = 106] = "j";
+	CharacterCodes[CharacterCodes["k"] = 107] = "k";
+	CharacterCodes[CharacterCodes["l"] = 108] = "l";
+	CharacterCodes[CharacterCodes["m"] = 109] = "m";
+	CharacterCodes[CharacterCodes["n"] = 110] = "n";
+	CharacterCodes[CharacterCodes["o"] = 111] = "o";
+	CharacterCodes[CharacterCodes["p"] = 112] = "p";
+	CharacterCodes[CharacterCodes["q"] = 113] = "q";
+	CharacterCodes[CharacterCodes["r"] = 114] = "r";
+	CharacterCodes[CharacterCodes["s"] = 115] = "s";
+	CharacterCodes[CharacterCodes["t"] = 116] = "t";
+	CharacterCodes[CharacterCodes["u"] = 117] = "u";
+	CharacterCodes[CharacterCodes["v"] = 118] = "v";
+	CharacterCodes[CharacterCodes["w"] = 119] = "w";
+	CharacterCodes[CharacterCodes["x"] = 120] = "x";
+	CharacterCodes[CharacterCodes["y"] = 121] = "y";
+	CharacterCodes[CharacterCodes["z"] = 122] = "z";
+	CharacterCodes[CharacterCodes["A"] = 65] = "A";
+	CharacterCodes[CharacterCodes["B"] = 66] = "B";
+	CharacterCodes[CharacterCodes["C"] = 67] = "C";
+	CharacterCodes[CharacterCodes["D"] = 68] = "D";
+	CharacterCodes[CharacterCodes["E"] = 69] = "E";
+	CharacterCodes[CharacterCodes["F"] = 70] = "F";
+	CharacterCodes[CharacterCodes["G"] = 71] = "G";
+	CharacterCodes[CharacterCodes["H"] = 72] = "H";
+	CharacterCodes[CharacterCodes["I"] = 73] = "I";
+	CharacterCodes[CharacterCodes["J"] = 74] = "J";
+	CharacterCodes[CharacterCodes["K"] = 75] = "K";
+	CharacterCodes[CharacterCodes["L"] = 76] = "L";
+	CharacterCodes[CharacterCodes["M"] = 77] = "M";
+	CharacterCodes[CharacterCodes["N"] = 78] = "N";
+	CharacterCodes[CharacterCodes["O"] = 79] = "O";
+	CharacterCodes[CharacterCodes["P"] = 80] = "P";
+	CharacterCodes[CharacterCodes["Q"] = 81] = "Q";
+	CharacterCodes[CharacterCodes["R"] = 82] = "R";
+	CharacterCodes[CharacterCodes["S"] = 83] = "S";
+	CharacterCodes[CharacterCodes["T"] = 84] = "T";
+	CharacterCodes[CharacterCodes["U"] = 85] = "U";
+	CharacterCodes[CharacterCodes["V"] = 86] = "V";
+	CharacterCodes[CharacterCodes["W"] = 87] = "W";
+	CharacterCodes[CharacterCodes["X"] = 88] = "X";
+	CharacterCodes[CharacterCodes["Y"] = 89] = "Y";
+	CharacterCodes[CharacterCodes["Z"] = 90] = "Z";
+	CharacterCodes[CharacterCodes["asterisk"] = 42] = "asterisk";
+	CharacterCodes[CharacterCodes["backslash"] = 92] = "backslash";
+	CharacterCodes[CharacterCodes["closeBrace"] = 125] = "closeBrace";
+	CharacterCodes[CharacterCodes["closeBracket"] = 93] = "closeBracket";
+	CharacterCodes[CharacterCodes["colon"] = 58] = "colon";
+	CharacterCodes[CharacterCodes["comma"] = 44] = "comma";
+	CharacterCodes[CharacterCodes["dot"] = 46] = "dot";
+	CharacterCodes[CharacterCodes["doubleQuote"] = 34] = "doubleQuote";
+	CharacterCodes[CharacterCodes["minus"] = 45] = "minus";
+	CharacterCodes[CharacterCodes["openBrace"] = 123] = "openBrace";
+	CharacterCodes[CharacterCodes["openBracket"] = 91] = "openBracket";
+	CharacterCodes[CharacterCodes["plus"] = 43] = "plus";
+	CharacterCodes[CharacterCodes["slash"] = 47] = "slash";
+	CharacterCodes[CharacterCodes["formFeed"] = 12] = "formFeed";
+	CharacterCodes[CharacterCodes["tab"] = 9] = "tab";
+})(CharacterCodes || (CharacterCodes = {}));
+//#endregion
+//#region node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/string-intern.js
+const cachedSpaces = new Array(20).fill(0).map((_, index) => {
+	return " ".repeat(index);
+});
+const maxCachedValues = 200;
+const cachedBreakLinesWithSpaces = {
+	" ": {
+		"\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+			return "\n" + " ".repeat(index);
+		}),
+		"\r": new Array(maxCachedValues).fill(0).map((_, index) => {
+			return "\r" + " ".repeat(index);
+		}),
+		"\r\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+			return "\r\n" + " ".repeat(index);
+		})
+	},
+	"	": {
+		"\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+			return "\n" + "	".repeat(index);
+		}),
+		"\r": new Array(maxCachedValues).fill(0).map((_, index) => {
+			return "\r" + "	".repeat(index);
+		}),
+		"\r\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+			return "\r\n" + "	".repeat(index);
+		})
+	}
+};
+const supportedEols = [
+	"\n",
+	"\r",
+	"\r\n"
+];
+//#endregion
+//#region node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/format.js
+function format(documentText, range, options) {
+	let initialIndentLevel;
+	let formatText;
+	let formatTextStart;
+	let rangeStart;
+	let rangeEnd;
+	if (range) {
+		rangeStart = range.offset;
+		rangeEnd = rangeStart + range.length;
+		formatTextStart = rangeStart;
+		while (formatTextStart > 0 && !isEOL(documentText, formatTextStart - 1)) formatTextStart--;
+		let endOffset = rangeEnd;
+		while (endOffset < documentText.length && !isEOL(documentText, endOffset)) endOffset++;
+		formatText = documentText.substring(formatTextStart, endOffset);
+		initialIndentLevel = computeIndentLevel(formatText, options);
+	} else {
+		formatText = documentText;
+		initialIndentLevel = 0;
+		formatTextStart = 0;
+		rangeStart = 0;
+		rangeEnd = documentText.length;
+	}
+	const eol = getEOL(options, documentText);
+	const eolFastPathSupported = supportedEols.includes(eol);
+	let numberLineBreaks = 0;
+	let indentLevel = 0;
+	let indentValue;
+	if (options.insertSpaces) indentValue = cachedSpaces[options.tabSize || 4] ?? repeat(cachedSpaces[1], options.tabSize || 4);
+	else indentValue = "	";
+	const indentType = indentValue === "	" ? "	" : " ";
+	let scanner = createScanner(formatText, false);
+	let hasError = false;
+	function newLinesAndIndent() {
+		if (numberLineBreaks > 1) return repeat(eol, numberLineBreaks) + repeat(indentValue, initialIndentLevel + indentLevel);
+		const amountOfSpaces = indentValue.length * (initialIndentLevel + indentLevel);
+		if (!eolFastPathSupported || amountOfSpaces > cachedBreakLinesWithSpaces[indentType][eol].length) return eol + repeat(indentValue, initialIndentLevel + indentLevel);
+		if (amountOfSpaces <= 0) return eol;
+		return cachedBreakLinesWithSpaces[indentType][eol][amountOfSpaces];
+	}
+	function scanNext() {
+		let token = scanner.scan();
+		numberLineBreaks = 0;
+		while (token === 15 || token === 14) {
+			if (token === 14 && options.keepLines) numberLineBreaks += 1;
+			else if (token === 14) numberLineBreaks = 1;
+			token = scanner.scan();
+		}
+		hasError = token === 16 || scanner.getTokenError() !== 0;
+		return token;
+	}
+	const editOperations = [];
+	function addEdit(text, startOffset, endOffset) {
+		if (!hasError && (!range || startOffset < rangeEnd && endOffset > rangeStart) && documentText.substring(startOffset, endOffset) !== text) editOperations.push({
+			offset: startOffset,
+			length: endOffset - startOffset,
+			content: text
+		});
+	}
+	let firstToken = scanNext();
+	if (options.keepLines && numberLineBreaks > 0) addEdit(repeat(eol, numberLineBreaks), 0, 0);
+	if (firstToken !== 17) {
+		let firstTokenStart = scanner.getTokenOffset() + formatTextStart;
+		addEdit(indentValue.length * initialIndentLevel < 20 && options.insertSpaces ? cachedSpaces[indentValue.length * initialIndentLevel] : repeat(indentValue, initialIndentLevel), formatTextStart, firstTokenStart);
+	}
+	while (firstToken !== 17) {
+		let firstTokenEnd = scanner.getTokenOffset() + scanner.getTokenLength() + formatTextStart;
+		let secondToken = scanNext();
+		let replaceContent = "";
+		let needsLineBreak = false;
+		while (numberLineBreaks === 0 && (secondToken === 12 || secondToken === 13)) {
+			let commentTokenStart = scanner.getTokenOffset() + formatTextStart;
+			addEdit(cachedSpaces[1], firstTokenEnd, commentTokenStart);
+			firstTokenEnd = scanner.getTokenOffset() + scanner.getTokenLength() + formatTextStart;
+			needsLineBreak = secondToken === 12;
+			replaceContent = needsLineBreak ? newLinesAndIndent() : "";
+			secondToken = scanNext();
+		}
+		if (secondToken === 2) {
+			if (firstToken !== 1) indentLevel--;
+			if (options.keepLines && numberLineBreaks > 0 || !options.keepLines && firstToken !== 1) replaceContent = newLinesAndIndent();
+			else if (options.keepLines) replaceContent = cachedSpaces[1];
+		} else if (secondToken === 4) {
+			if (firstToken !== 3) indentLevel--;
+			if (options.keepLines && numberLineBreaks > 0 || !options.keepLines && firstToken !== 3) replaceContent = newLinesAndIndent();
+			else if (options.keepLines) replaceContent = cachedSpaces[1];
+		} else {
+			switch (firstToken) {
+				case 3:
+				case 1:
+					indentLevel++;
+					if (options.keepLines && numberLineBreaks > 0 || !options.keepLines) replaceContent = newLinesAndIndent();
+					else replaceContent = cachedSpaces[1];
+					break;
+				case 5:
+					if (options.keepLines && numberLineBreaks > 0 || !options.keepLines) replaceContent = newLinesAndIndent();
+					else replaceContent = cachedSpaces[1];
+					break;
+				case 12:
+					replaceContent = newLinesAndIndent();
+					break;
+				case 13:
+					if (numberLineBreaks > 0) replaceContent = newLinesAndIndent();
+					else if (!needsLineBreak) replaceContent = cachedSpaces[1];
+					break;
+				case 6:
+					if (options.keepLines && numberLineBreaks > 0) replaceContent = newLinesAndIndent();
+					else if (!needsLineBreak) replaceContent = cachedSpaces[1];
+					break;
+				case 10:
+					if (options.keepLines && numberLineBreaks > 0) replaceContent = newLinesAndIndent();
+					else if (secondToken === 6 && !needsLineBreak) replaceContent = "";
+					break;
+				case 7:
+				case 8:
+				case 9:
+				case 11:
+				case 2:
+				case 4:
+					if (options.keepLines && numberLineBreaks > 0) replaceContent = newLinesAndIndent();
+					else if ((secondToken === 12 || secondToken === 13) && !needsLineBreak) replaceContent = cachedSpaces[1];
+					else if (secondToken !== 5 && secondToken !== 17) hasError = true;
+					break;
+				case 16: hasError = true;
+			}
+			if (numberLineBreaks > 0 && (secondToken === 12 || secondToken === 13)) replaceContent = newLinesAndIndent();
+		}
+		if (secondToken === 17) {
+			if (options.keepLines && numberLineBreaks > 0) replaceContent = newLinesAndIndent();
+			else replaceContent = options.insertFinalNewline ? eol : "";
+		}
+		const secondTokenStart = scanner.getTokenOffset() + formatTextStart;
+		addEdit(replaceContent, firstTokenEnd, secondTokenStart);
+		firstToken = secondToken;
+	}
+	return editOperations;
+}
+function repeat(s, count) {
+	let result = "";
+	for (let i = 0; i < count; i++) result += s;
+	return result;
+}
+function computeIndentLevel(content, options) {
+	let i = 0;
+	let nChars = 0;
+	const tabSize = options.tabSize || 4;
+	while (i < content.length) {
+		let ch = content.charAt(i);
+		if (ch === cachedSpaces[1]) nChars++;
+		else if (ch === "	") nChars += tabSize;
+		else break;
+		i++;
+	}
+	return Math.floor(nChars / tabSize);
+}
+function getEOL(options, text) {
+	for (let i = 0; i < text.length; i++) {
+		const ch = text.charAt(i);
+		if (ch === "\r") {
+			if (i + 1 < text.length && text.charAt(i + 1) === "\n") return "\r\n";
+			return "\r";
+		} else if (ch === "\n") return "\n";
+	}
+	return options && options.eol || "\n";
+}
+function isEOL(text, offset) {
+	return "\r\n".indexOf(text.charAt(offset)) !== -1;
+}
+//#endregion
+//#region node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/parser.js
+var ParseOptions;
+(function(ParseOptions) {
+	ParseOptions.DEFAULT = { allowTrailingComma: false };
+})(ParseOptions || (ParseOptions = {}));
+/**
+* Parses the given text and returns the object the JSON content represents. On invalid input, the parser tries to be as fault tolerant as possible, but still return a result.
+* Therefore always check the errors list to find out if the input was valid.
+*/
+function parse$1(text, errors = [], options = ParseOptions.DEFAULT) {
+	let currentProperty = null;
+	let currentParent = [];
+	const previousParents = [];
+	function onValue(value) {
+		if (Array.isArray(currentParent)) currentParent.push(value);
+		else if (currentProperty !== null) currentParent[currentProperty] = value;
+	}
+	visit(text, {
+		onObjectBegin: () => {
+			const object = {};
+			onValue(object);
+			previousParents.push(currentParent);
+			currentParent = object;
+			currentProperty = null;
+		},
+		onObjectProperty: (name) => {
+			currentProperty = name;
+		},
+		onObjectEnd: () => {
+			currentParent = previousParents.pop();
+		},
+		onArrayBegin: () => {
+			const array = [];
+			onValue(array);
+			previousParents.push(currentParent);
+			currentParent = array;
+			currentProperty = null;
+		},
+		onArrayEnd: () => {
+			currentParent = previousParents.pop();
+		},
+		onLiteralValue: onValue,
+		onError: (error, offset, length) => {
+			errors.push({
+				error,
+				offset,
+				length
+			});
+		}
+	}, options);
+	return currentParent[0];
+}
+/**
+* Parses the given text and returns a tree representation the JSON content. On invalid input, the parser tries to be as fault tolerant as possible, but still return a result.
+*/
+function parseTree$1(text, errors = [], options = ParseOptions.DEFAULT) {
+	let currentParent = {
+		type: "array",
+		offset: -1,
+		length: -1,
+		children: [],
+		parent: void 0
+	};
+	function ensurePropertyComplete(endOffset) {
+		if (currentParent.type === "property") {
+			currentParent.length = endOffset - currentParent.offset;
+			currentParent = currentParent.parent;
+		}
+	}
+	function onValue(valueNode) {
+		currentParent.children.push(valueNode);
+		return valueNode;
+	}
+	visit(text, {
+		onObjectBegin: (offset) => {
+			currentParent = onValue({
+				type: "object",
+				offset,
+				length: -1,
+				parent: currentParent,
+				children: []
+			});
+		},
+		onObjectProperty: (name, offset, length) => {
+			currentParent = onValue({
+				type: "property",
+				offset,
+				length: -1,
+				parent: currentParent,
+				children: []
+			});
+			currentParent.children.push({
+				type: "string",
+				value: name,
+				offset,
+				length,
+				parent: currentParent
+			});
+		},
+		onObjectEnd: (offset, length) => {
+			ensurePropertyComplete(offset + length);
+			currentParent.length = offset + length - currentParent.offset;
+			currentParent = currentParent.parent;
+			ensurePropertyComplete(offset + length);
+		},
+		onArrayBegin: (offset, length) => {
+			currentParent = onValue({
+				type: "array",
+				offset,
+				length: -1,
+				parent: currentParent,
+				children: []
+			});
+		},
+		onArrayEnd: (offset, length) => {
+			currentParent.length = offset + length - currentParent.offset;
+			currentParent = currentParent.parent;
+			ensurePropertyComplete(offset + length);
+		},
+		onLiteralValue: (value, offset, length) => {
+			onValue({
+				type: getNodeType(value),
+				offset,
+				length,
+				parent: currentParent,
+				value
+			});
+			ensurePropertyComplete(offset + length);
+		},
+		onSeparator: (sep, offset, length) => {
+			if (currentParent.type === "property") {
+				if (sep === ":") currentParent.colonOffset = offset;
+				else if (sep === ",") ensurePropertyComplete(offset);
+			}
+		},
+		onError: (error, offset, length) => {
+			errors.push({
+				error,
+				offset,
+				length
+			});
+		}
+	}, options);
+	const result = currentParent.children[0];
+	if (result) delete result.parent;
+	return result;
+}
+/**
+* Finds the node at the given path in a JSON DOM.
+*/
+function findNodeAtLocation$1(root, path) {
+	if (!root) return;
+	let node = root;
+	for (let segment of path) if (typeof segment === "string") {
+		if (node.type !== "object" || !Array.isArray(node.children)) return;
+		let found = false;
+		for (const propertyNode of node.children) if (Array.isArray(propertyNode.children) && propertyNode.children[0].value === segment && propertyNode.children.length === 2) {
+			node = propertyNode.children[1];
+			found = true;
+			break;
+		}
+		if (!found) return;
+	} else {
+		const index = segment;
+		if (node.type !== "array" || index < 0 || !Array.isArray(node.children) || index >= node.children.length) return;
+		node = node.children[index];
+	}
+	return node;
+}
+/**
+* Parses the given text and invokes the visitor functions for each object, array and literal reached.
+*/
+function visit(text, visitor, options = ParseOptions.DEFAULT) {
+	const _scanner = createScanner(text, false);
+	const _jsonPath = [];
+	let suppressedCallbacks = 0;
+	function toNoArgVisit(visitFunction) {
+		return visitFunction ? () => suppressedCallbacks === 0 && visitFunction(_scanner.getTokenOffset(), _scanner.getTokenLength(), _scanner.getTokenStartLine(), _scanner.getTokenStartCharacter()) : () => true;
+	}
+	function toOneArgVisit(visitFunction) {
+		return visitFunction ? (arg) => suppressedCallbacks === 0 && visitFunction(arg, _scanner.getTokenOffset(), _scanner.getTokenLength(), _scanner.getTokenStartLine(), _scanner.getTokenStartCharacter()) : () => true;
+	}
+	function toOneArgVisitWithPath(visitFunction) {
+		return visitFunction ? (arg) => suppressedCallbacks === 0 && visitFunction(arg, _scanner.getTokenOffset(), _scanner.getTokenLength(), _scanner.getTokenStartLine(), _scanner.getTokenStartCharacter(), () => _jsonPath.slice()) : () => true;
+	}
+	function toBeginVisit(visitFunction) {
+		return visitFunction ? () => {
+			if (suppressedCallbacks > 0) suppressedCallbacks++;
+			else if (visitFunction(_scanner.getTokenOffset(), _scanner.getTokenLength(), _scanner.getTokenStartLine(), _scanner.getTokenStartCharacter(), () => _jsonPath.slice()) === false) suppressedCallbacks = 1;
+		} : () => true;
+	}
+	function toEndVisit(visitFunction) {
+		return visitFunction ? () => {
+			if (suppressedCallbacks > 0) suppressedCallbacks--;
+			if (suppressedCallbacks === 0) visitFunction(_scanner.getTokenOffset(), _scanner.getTokenLength(), _scanner.getTokenStartLine(), _scanner.getTokenStartCharacter());
+		} : () => true;
+	}
+	const onObjectBegin = toBeginVisit(visitor.onObjectBegin), onObjectProperty = toOneArgVisitWithPath(visitor.onObjectProperty), onObjectEnd = toEndVisit(visitor.onObjectEnd), onArrayBegin = toBeginVisit(visitor.onArrayBegin), onArrayEnd = toEndVisit(visitor.onArrayEnd), onLiteralValue = toOneArgVisitWithPath(visitor.onLiteralValue), onSeparator = toOneArgVisit(visitor.onSeparator), onComment = toNoArgVisit(visitor.onComment), onError = toOneArgVisit(visitor.onError);
+	const disallowComments = options && options.disallowComments;
+	const allowTrailingComma = options && options.allowTrailingComma;
+	function scanNext() {
+		while (true) {
+			const token = _scanner.scan();
+			switch (_scanner.getTokenError()) {
+				case 4:
+					handleError(14);
+					break;
+				case 5:
+					handleError(15);
+					break;
+				case 3:
+					handleError(13);
+					break;
+				case 1:
+					if (!disallowComments) handleError(11);
+					break;
+				case 2:
+					handleError(12);
+					break;
+				case 6: handleError(16);
+			}
+			switch (token) {
+				case 12:
+				case 13:
+					if (disallowComments) handleError(10);
+					else onComment();
+					break;
+				case 16:
+					handleError(1);
+					break;
+				case 15:
+				case 14: break;
+				default: return token;
+			}
+		}
+	}
+	function handleError(error, skipUntilAfter = [], skipUntil = []) {
+		onError(error);
+		if (skipUntilAfter.length + skipUntil.length > 0) {
+			let token = _scanner.getToken();
+			while (token !== 17) {
+				if (skipUntilAfter.indexOf(token) !== -1) {
+					scanNext();
+					break;
+				} else if (skipUntil.indexOf(token) !== -1) break;
+				token = scanNext();
+			}
+		}
+	}
+	function parseString(isValue) {
+		const value = _scanner.getTokenValue();
+		if (isValue) onLiteralValue(value);
+		else {
+			onObjectProperty(value);
+			_jsonPath.push(value);
+		}
+		scanNext();
+		return true;
+	}
+	function parseLiteral() {
+		switch (_scanner.getToken()) {
+			case 11:
+				const tokenValue = _scanner.getTokenValue();
+				let value = Number(tokenValue);
+				if (isNaN(value)) {
+					handleError(2);
+					value = 0;
+				}
+				onLiteralValue(value);
+				break;
+			case 7:
+				onLiteralValue(null);
+				break;
+			case 8:
+				onLiteralValue(true);
+				break;
+			case 9:
+				onLiteralValue(false);
+				break;
+			default: return false;
+		}
+		scanNext();
+		return true;
+	}
+	function parseProperty() {
+		if (_scanner.getToken() !== 10) {
+			handleError(3, [], [2, 5]);
+			return false;
+		}
+		parseString(false);
+		if (_scanner.getToken() === 6) {
+			onSeparator(":");
+			scanNext();
+			if (!parseValue()) handleError(4, [], [2, 5]);
+		} else handleError(5, [], [2, 5]);
+		_jsonPath.pop();
+		return true;
+	}
+	function parseObject() {
+		onObjectBegin();
+		scanNext();
+		let needsComma = false;
+		while (_scanner.getToken() !== 2 && _scanner.getToken() !== 17) {
+			if (_scanner.getToken() === 5) {
+				if (!needsComma) handleError(4, [], []);
+				onSeparator(",");
+				scanNext();
+				if (_scanner.getToken() === 2 && allowTrailingComma) break;
+			} else if (needsComma) handleError(6, [], []);
+			if (!parseProperty()) handleError(4, [], [2, 5]);
+			needsComma = true;
+		}
+		onObjectEnd();
+		if (_scanner.getToken() !== 2) handleError(7, [2], []);
+		else scanNext();
+		return true;
+	}
+	function parseArray() {
+		onArrayBegin();
+		scanNext();
+		let isFirstElement = true;
+		let needsComma = false;
+		while (_scanner.getToken() !== 4 && _scanner.getToken() !== 17) {
+			if (_scanner.getToken() === 5) {
+				if (!needsComma) handleError(4, [], []);
+				onSeparator(",");
+				scanNext();
+				if (_scanner.getToken() === 4 && allowTrailingComma) break;
+			} else if (needsComma) handleError(6, [], []);
+			if (isFirstElement) {
+				_jsonPath.push(0);
+				isFirstElement = false;
+			} else _jsonPath[_jsonPath.length - 1]++;
+			if (!parseValue()) handleError(4, [], [4, 5]);
+			needsComma = true;
+		}
+		onArrayEnd();
+		if (!isFirstElement) _jsonPath.pop();
+		if (_scanner.getToken() !== 4) handleError(8, [4], []);
+		else scanNext();
+		return true;
+	}
+	function parseValue() {
+		switch (_scanner.getToken()) {
+			case 3: return parseArray();
+			case 1: return parseObject();
+			case 10: return parseString(true);
+			default: return parseLiteral();
+		}
+	}
+	scanNext();
+	if (_scanner.getToken() === 17) {
+		if (options.allowEmptyContent) return true;
+		handleError(4, [], []);
+		return false;
+	}
+	if (!parseValue()) {
+		handleError(4, [], []);
+		return false;
+	}
+	if (_scanner.getToken() !== 17) handleError(9, [], []);
+	return true;
+}
+function getNodeType(value) {
+	switch (typeof value) {
+		case "boolean": return "boolean";
+		case "number": return "number";
+		case "string": return "string";
+		case "object":
+			if (!value) return "null";
+			else if (Array.isArray(value)) return "array";
+			return "object";
+		default: return "null";
+	}
+}
+//#endregion
+//#region node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/edit.js
+function setProperty(text, originalPath, value, options) {
+	const path = originalPath.slice();
+	const root = parseTree$1(text, []);
+	let parent = void 0;
+	let lastSegment = void 0;
+	while (path.length > 0) {
+		lastSegment = path.pop();
+		parent = findNodeAtLocation$1(root, path);
+		if (parent === void 0 && value !== void 0) {
+			if (typeof lastSegment === "string") value = { [lastSegment]: value };
+			else value = [value];
+		} else break;
+	}
+	if (!parent) {
+		if (value === void 0) throw new Error("Can not delete in empty document");
+		return withFormatting(text, {
+			offset: root ? root.offset : 0,
+			length: root ? root.length : 0,
+			content: JSON.stringify(value)
+		}, options);
+	} else if (parent.type === "object" && typeof lastSegment === "string" && Array.isArray(parent.children)) {
+		const existing = findNodeAtLocation$1(parent, [lastSegment]);
+		if (existing !== void 0) {
+			if (value === void 0) {
+				if (!existing.parent) throw new Error("Malformed AST");
+				const propertyIndex = parent.children.indexOf(existing.parent);
+				let removeBegin;
+				let removeEnd = existing.parent.offset + existing.parent.length;
+				if (propertyIndex > 0) {
+					let previous = parent.children[propertyIndex - 1];
+					removeBegin = previous.offset + previous.length;
+				} else {
+					removeBegin = parent.offset + 1;
+					if (parent.children.length > 1) removeEnd = parent.children[1].offset;
+				}
+				return withFormatting(text, {
+					offset: removeBegin,
+					length: removeEnd - removeBegin,
+					content: ""
+				}, options);
+			} else return withFormatting(text, {
+				offset: existing.offset,
+				length: existing.length,
+				content: JSON.stringify(value)
+			}, options);
+		} else {
+			if (value === void 0) return [];
+			const newProperty = `${JSON.stringify(lastSegment)}: ${JSON.stringify(value)}`;
+			const index = options.getInsertionIndex ? options.getInsertionIndex(parent.children.map((p) => p.children[0].value)) : parent.children.length;
+			let edit;
+			if (index > 0) {
+				let previous = parent.children[index - 1];
+				edit = {
+					offset: previous.offset + previous.length,
+					length: 0,
+					content: "," + newProperty
+				};
+			} else if (parent.children.length === 0) edit = {
+				offset: parent.offset + 1,
+				length: 0,
+				content: newProperty
+			};
+			else edit = {
+				offset: parent.offset + 1,
+				length: 0,
+				content: newProperty + ","
+			};
+			return withFormatting(text, edit, options);
+		}
+	} else if (parent.type === "array" && typeof lastSegment === "number" && Array.isArray(parent.children)) {
+		const insertIndex = lastSegment;
+		if (insertIndex === -1) {
+			const newProperty = `${JSON.stringify(value)}`;
+			let edit;
+			if (parent.children.length === 0) edit = {
+				offset: parent.offset + 1,
+				length: 0,
+				content: newProperty
+			};
+			else {
+				const previous = parent.children[parent.children.length - 1];
+				edit = {
+					offset: previous.offset + previous.length,
+					length: 0,
+					content: "," + newProperty
+				};
+			}
+			return withFormatting(text, edit, options);
+		} else if (value === void 0 && parent.children.length >= 0) {
+			const removalIndex = lastSegment;
+			const toRemove = parent.children[removalIndex];
+			let edit;
+			if (parent.children.length === 1) edit = {
+				offset: parent.offset + 1,
+				length: parent.length - 2,
+				content: ""
+			};
+			else if (parent.children.length - 1 === removalIndex) {
+				let previous = parent.children[removalIndex - 1];
+				let offset = previous.offset + previous.length;
+				edit = {
+					offset,
+					length: parent.offset + parent.length - 2 - offset,
+					content: ""
+				};
+			} else edit = {
+				offset: toRemove.offset,
+				length: parent.children[removalIndex + 1].offset - toRemove.offset,
+				content: ""
+			};
+			return withFormatting(text, edit, options);
+		} else if (value !== void 0) {
+			let edit;
+			const newProperty = `${JSON.stringify(value)}`;
+			if (!options.isArrayInsertion && parent.children.length > lastSegment) {
+				const toModify = parent.children[lastSegment];
+				edit = {
+					offset: toModify.offset,
+					length: toModify.length,
+					content: newProperty
+				};
+			} else if (parent.children.length === 0 || lastSegment === 0) edit = {
+				offset: parent.offset + 1,
+				length: 0,
+				content: parent.children.length === 0 ? newProperty : newProperty + ","
+			};
+			else {
+				const index = lastSegment > parent.children.length ? parent.children.length : lastSegment;
+				const previous = parent.children[index - 1];
+				edit = {
+					offset: previous.offset + previous.length,
+					length: 0,
+					content: "," + newProperty
+				};
+			}
+			return withFormatting(text, edit, options);
+		} else throw new Error(`Can not ${value === void 0 ? "remove" : options.isArrayInsertion ? "insert" : "modify"} Array index ${insertIndex} as length is not sufficient`);
+	} else throw new Error(`Can not add ${typeof lastSegment !== "number" ? "index" : "property"} to parent of type ${parent.type}`);
+}
+function withFormatting(text, edit, options) {
+	if (!options.formattingOptions) return [edit];
+	let newText = applyEdit(text, edit);
+	let begin = edit.offset;
+	let end = edit.offset + edit.content.length;
+	if (edit.length === 0 || edit.content.length === 0) {
+		while (begin > 0 && !isEOL(newText, begin - 1)) begin--;
+		while (end < newText.length && !isEOL(newText, end)) end++;
+	}
+	const edits = format(newText, {
+		offset: begin,
+		length: end - begin
+	}, {
+		...options.formattingOptions,
+		keepLines: false
+	});
+	for (let i = edits.length - 1; i >= 0; i--) {
+		const edit = edits[i];
+		newText = applyEdit(newText, edit);
+		begin = Math.min(begin, edit.offset);
+		end = Math.max(end, edit.offset + edit.length);
+		end += edit.content.length - edit.length;
+	}
+	const editLength = text.length - (newText.length - end) - begin;
+	return [{
+		offset: begin,
+		length: editLength,
+		content: newText.substring(begin, end)
+	}];
+}
+function applyEdit(text, edit) {
+	return text.substring(0, edit.offset) + edit.content + text.substring(edit.offset + edit.length);
+}
+//#endregion
+//#region node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/main.js
+var ScanError;
+(function(ScanError) {
+	ScanError[ScanError["None"] = 0] = "None";
+	ScanError[ScanError["UnexpectedEndOfComment"] = 1] = "UnexpectedEndOfComment";
+	ScanError[ScanError["UnexpectedEndOfString"] = 2] = "UnexpectedEndOfString";
+	ScanError[ScanError["UnexpectedEndOfNumber"] = 3] = "UnexpectedEndOfNumber";
+	ScanError[ScanError["InvalidUnicode"] = 4] = "InvalidUnicode";
+	ScanError[ScanError["InvalidEscapeCharacter"] = 5] = "InvalidEscapeCharacter";
+	ScanError[ScanError["InvalidCharacter"] = 6] = "InvalidCharacter";
+})(ScanError || (ScanError = {}));
+var SyntaxKind;
+(function(SyntaxKind) {
+	SyntaxKind[SyntaxKind["OpenBraceToken"] = 1] = "OpenBraceToken";
+	SyntaxKind[SyntaxKind["CloseBraceToken"] = 2] = "CloseBraceToken";
+	SyntaxKind[SyntaxKind["OpenBracketToken"] = 3] = "OpenBracketToken";
+	SyntaxKind[SyntaxKind["CloseBracketToken"] = 4] = "CloseBracketToken";
+	SyntaxKind[SyntaxKind["CommaToken"] = 5] = "CommaToken";
+	SyntaxKind[SyntaxKind["ColonToken"] = 6] = "ColonToken";
+	SyntaxKind[SyntaxKind["NullKeyword"] = 7] = "NullKeyword";
+	SyntaxKind[SyntaxKind["TrueKeyword"] = 8] = "TrueKeyword";
+	SyntaxKind[SyntaxKind["FalseKeyword"] = 9] = "FalseKeyword";
+	SyntaxKind[SyntaxKind["StringLiteral"] = 10] = "StringLiteral";
+	SyntaxKind[SyntaxKind["NumericLiteral"] = 11] = "NumericLiteral";
+	SyntaxKind[SyntaxKind["LineCommentTrivia"] = 12] = "LineCommentTrivia";
+	SyntaxKind[SyntaxKind["BlockCommentTrivia"] = 13] = "BlockCommentTrivia";
+	SyntaxKind[SyntaxKind["LineBreakTrivia"] = 14] = "LineBreakTrivia";
+	SyntaxKind[SyntaxKind["Trivia"] = 15] = "Trivia";
+	SyntaxKind[SyntaxKind["Unknown"] = 16] = "Unknown";
+	SyntaxKind[SyntaxKind["EOF"] = 17] = "EOF";
+})(SyntaxKind || (SyntaxKind = {}));
+/**
+* Parses the given text and returns the object the JSON content represents. On invalid input, the parser tries to be as fault tolerant as possible, but still return a result.
+* Therefore, always check the errors list to find out if the input was valid.
+*/
+const parse = parse$1;
+/**
+* Parses the given text and returns a tree representation the JSON content. On invalid input, the parser tries to be as fault tolerant as possible, but still return a result.
+*/
+const parseTree = parseTree$1;
+/**
+* Finds the node at the given path in a JSON DOM.
+*/
+const findNodeAtLocation = findNodeAtLocation$1;
+var ParseErrorCode;
+(function(ParseErrorCode) {
+	ParseErrorCode[ParseErrorCode["InvalidSymbol"] = 1] = "InvalidSymbol";
+	ParseErrorCode[ParseErrorCode["InvalidNumberFormat"] = 2] = "InvalidNumberFormat";
+	ParseErrorCode[ParseErrorCode["PropertyNameExpected"] = 3] = "PropertyNameExpected";
+	ParseErrorCode[ParseErrorCode["ValueExpected"] = 4] = "ValueExpected";
+	ParseErrorCode[ParseErrorCode["ColonExpected"] = 5] = "ColonExpected";
+	ParseErrorCode[ParseErrorCode["CommaExpected"] = 6] = "CommaExpected";
+	ParseErrorCode[ParseErrorCode["CloseBraceExpected"] = 7] = "CloseBraceExpected";
+	ParseErrorCode[ParseErrorCode["CloseBracketExpected"] = 8] = "CloseBracketExpected";
+	ParseErrorCode[ParseErrorCode["EndOfFileExpected"] = 9] = "EndOfFileExpected";
+	ParseErrorCode[ParseErrorCode["InvalidCommentToken"] = 10] = "InvalidCommentToken";
+	ParseErrorCode[ParseErrorCode["UnexpectedEndOfComment"] = 11] = "UnexpectedEndOfComment";
+	ParseErrorCode[ParseErrorCode["UnexpectedEndOfString"] = 12] = "UnexpectedEndOfString";
+	ParseErrorCode[ParseErrorCode["UnexpectedEndOfNumber"] = 13] = "UnexpectedEndOfNumber";
+	ParseErrorCode[ParseErrorCode["InvalidUnicode"] = 14] = "InvalidUnicode";
+	ParseErrorCode[ParseErrorCode["InvalidEscapeCharacter"] = 15] = "InvalidEscapeCharacter";
+	ParseErrorCode[ParseErrorCode["InvalidCharacter"] = 16] = "InvalidCharacter";
+})(ParseErrorCode || (ParseErrorCode = {}));
+/**
+* Computes the edit operations needed to modify a value in the JSON document.
+*
+* @param documentText The input text
+* @param path The path of the value to change. The path represents either to the document root, a property or an array item.
+* If the path points to an non-existing property or item, it will be created.
+* @param value The new value for the specified property or item. If the value is undefined,
+* the property or item will be removed.
+* @param options Options
+* @returns The edit operations describing the changes to the original document, following the format described in {@linkcode EditResult}.
+* To apply the edit operations to the input, use {@linkcode applyEdits}.
+*/
+function modify(text, path, value, options) {
+	return setProperty(text, path, value, options);
+}
+/**
+* Applies edits to an input string.
+* @param text The input text
+* @param edits Edit operations following the format described in {@linkcode EditResult}.
+* @returns The text with the applied edits.
+* @throws An error if the edit operations are not well-formed as described in {@linkcode EditResult}.
+*/
+function applyEdits(text, edits) {
+	let sortedEdits = edits.slice(0).sort((a, b) => {
+		const diff = a.offset - b.offset;
+		if (diff === 0) return a.length - b.length;
+		return diff;
+	});
+	let lastModifiedOffset = text.length;
+	for (let i = sortedEdits.length - 1; i >= 0; i--) {
+		let e = sortedEdits[i];
+		if (e.offset + e.length <= lastModifiedOffset) text = applyEdit(text, e);
+		else throw new Error("Overlapping edit");
+		lastModifiedOffset = e.offset;
+	}
+	return text;
+}
+//#endregion
+//#region src/paths.ts
+function home() {
+	return process.env.HOME || homedir();
+}
+function statePaths() {
+	const dir = join(process.env.XDG_STATE_HOME || join(home(), ".local", "state"), "model-ladder");
+	return {
+		dir,
+		manifest: join(dir, "manifest.json"),
+		backups: join(dir, "backups")
+	};
+}
+function configPath() {
+	return join(process.env.XDG_CONFIG_HOME || join(home(), ".config"), "model-ladder", "config.json");
+}
+function claudeDir() {
+	return process.env.CLAUDE_CONFIG_DIR || join(home(), ".claude");
+}
+function opencodeDir() {
+	return join(process.env.XDG_CONFIG_HOME || join(home(), ".config"), "opencode");
+}
+function codexDir() {
+	return process.env.CODEX_HOME || join(home(), ".codex");
+}
+function piDir() {
+	return process.env.PI_CODING_AGENT_DIR || join(home(), ".pi", "agent");
+}
+/** The directory whose presence means the runtime is set up on this machine. */
+function runtimeDir(runtime) {
+	switch (runtime) {
+		case "claude": return claudeDir();
+		case "opencode": return opencodeDir();
+		case "codex": return codexDir();
+		case "pi": return piDir();
+	}
+}
+/** The runtime's CLI binary, used only to report whether it is installed. */
+const RUNTIME_BIN = {
+	claude: "claude",
+	opencode: "opencode",
+	codex: "codex",
+	pi: "pi"
+};
+//#endregion
+//#region src/ops.ts
+const COMPONENTS = [
+	"agents",
+	"skill",
+	"instructions",
+	"read-guard",
+	"review-models"
+];
+const COMPONENT_LABELS = {
+	agents: "Ladder agents (read + edit on fast, balanced, deep)",
+	skill: "Routing skill (when to delegate, how to climb)",
+	instructions: "Always-on instructions block (CLAUDE.md / AGENTS.md)",
+	"read-guard": "Read guard hook: blocks full reads of large files (Claude Code)",
+	"review-models": "Gentle AI review agents on ladder models"
+};
+const BLOCK_BEGIN = "<!-- BEGIN model-ladder: managed by model-ladder, edits inside this block are overwritten -->";
+const BLOCK_END = "<!-- END model-ladder -->";
+/** Matches the file's own indentation so edits do not reformat what they did not touch. */
+function formatFor(text) {
+	const indent = /^([ \t]+)\S/m.exec(text)?.[1] ?? "  ";
+	const tabs = indent.startsWith("	");
+	return {
+		insertSpaces: !tabs,
+		tabSize: tabs ? 1 : indent.length,
+		eol: "\n"
+	};
+}
+function sha256(text) {
+	return createHash("sha256").update(text).digest("hex");
+}
+function readText(path) {
+	try {
+		return readFileSync(path, "utf8");
+	} catch {
+		return;
+	}
+}
+/**
+* Writes through symlinks (dotfile managers link these files) and keeps the existing
+* file's permissions, so a private settings.json stays private.
+*/
+function writeAtomic(path, text, executable = false) {
+	let target = path;
+	let mode;
+	try {
+		target = realpathSync(path);
+		mode = statSync(target).mode & 4095;
+	} catch {}
+	mkdirSync(dirname(target), { recursive: true });
+	const tmp = `${target}.model-ladder-tmp`;
+	writeFileSync(tmp, text);
+	if (executable) chmodSync(tmp, (mode ?? 420) | 73);
+	else if (mode !== void 0) chmodSync(tmp, mode);
+	renameSync(tmp, target);
+}
+function recordKey(r) {
+	return [
+		r.kind,
+		r.path,
+		r.pointer?.join("/") ?? r.key ?? r.command ?? ""
+	].join("\0");
+}
+function opKey(op) {
+	switch (op.kind) {
+		case "json-set": return recordKey({
+			kind: op.kind,
+			path: op.path,
+			pointer: op.pointer
+		});
+		case "frontmatter": return recordKey({
+			kind: op.kind,
+			path: op.path,
+			key: op.key
+		});
+		case "json-hook": return recordKey({
+			kind: op.kind,
+			path: op.path,
+			command: op.command
+		});
+		default: return recordKey({
+			kind: op.kind,
+			path: op.path
+		});
+	}
+}
+function loadManifest() {
+	const text = readText(statePaths().manifest);
+	if (!text) return {
+		version: 1,
+		records: []
+	};
+	const data = JSON.parse(text);
+	return {
+		version: 1,
+		records: Array.isArray(data.records) ? data.records : []
+	};
+}
+function saveManifest(manifest) {
+	writeAtomic(statePaths().manifest, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+function parseJson(path, text) {
+	const errors = [];
+	const value = parse(text, errors, {
+		allowTrailingComma: true,
+		disallowComments: false
+	});
+	if (errors.length > 0) throw new Error(`${path} is not valid JSON; fix it and re-run.`);
+	return value;
+}
+function getAt(root, pointer) {
+	let node = root;
+	for (const seg of pointer) {
+		if (node === null || typeof node !== "object" || !(seg in node)) return { present: false };
+		node = node[seg];
+	}
+	return {
+		present: true,
+		value: node
+	};
+}
+function existingPrefix(root, pointer) {
+	let depth = 0;
+	while (depth < pointer.length - 1 && getAt(root, pointer.slice(0, depth + 1)).present) depth++;
+	return depth;
+}
+/** Removes the now-empty parent objects model-ladder created for a key. */
+function pruneParents(text, pointer, keepDepth) {
+	let out = text;
+	for (let depth = pointer.length - 1; depth > keepDepth; depth--) {
+		const parent = pointer.slice(0, depth);
+		const got = getAt(parseJson("json", out), parent);
+		if (!got.present || got.value === null || typeof got.value !== "object" || Object.keys(got.value).length > 0) break;
+		out = setJson(out, parent, void 0);
+	}
+	return out;
+}
+function setJson(text, pointer, value) {
+	return applyEdits(text, modify(text, pointer, value, { formattingOptions: formatFor(text) }));
+}
+function deepEqual(a, b) {
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+function splitFrontmatter(text) {
+	const lines = text.split("\n");
+	if (lines[0] !== "---") return void 0;
+	const end = lines.indexOf("---", 1);
+	if (end < 0) return void 0;
+	return {
+		lines,
+		start: 1,
+		end
+	};
+}
+function frontmatterLine(fm, key) {
+	for (let i = fm.start; i < fm.end; i++) if (fm.lines[i]?.startsWith(`${key}:`)) return i;
+	return -1;
+}
+function unquote(raw) {
+	const v = raw.trim();
+	if (v.length >= 2 && (v[0] === "\"" || v[0] === "'") && v.at(-1) === v[0]) return v.slice(1, -1);
+	return v;
+}
+/** `value` is unquoted for comparison; `raw` is the text as written, used to restore it exactly. */
+function getFrontmatter(text, key) {
+	const fm = splitFrontmatter(text);
+	if (!fm) return { present: false };
+	const i = frontmatterLine(fm, key);
+	if (i < 0) return { present: false };
+	const raw = (fm.lines[i] ?? "").slice(key.length + 1).trim();
+	return {
+		present: true,
+		value: unquote(raw),
+		raw
+	};
+}
+function setFrontmatter(text, key, value) {
+	const fm = splitFrontmatter(text);
+	if (!fm) throw new Error("file has no frontmatter");
+	const i = frontmatterLine(fm, key);
+	const lines = [...fm.lines];
+	if (value === void 0) {
+		if (i >= 0) lines.splice(i, 1);
+	} else if (i >= 0) lines[i] = `${key}: ${value}`;
+	else lines.splice(fm.end, 0, `${key}: ${value}`);
+	return lines.join("\n");
+}
+function stripBlock(text) {
+	const begin = text.indexOf(BLOCK_BEGIN);
+	if (begin < 0) return text;
+	const endIdx = text.indexOf(BLOCK_END, begin);
+	if (endIdx < 0) return text;
+	const before = text.slice(0, begin).replace(/\n+$/, "");
+	const after = text.slice(endIdx + 25).replace(/^\n+/, "");
+	if (!before) return after;
+	return after ? `${before}\n\n${after}` : `${before}\n`;
+}
+function withBlock(text, content) {
+	const block = `${BLOCK_BEGIN}\n${content.trim()}\n${BLOCK_END}\n`;
+	const begin = text.indexOf(BLOCK_BEGIN);
+	const endIdx = begin >= 0 ? text.indexOf(BLOCK_END, begin) : -1;
+	if (begin >= 0 && endIdx >= 0) {
+		const tail = text.slice(endIdx + 25).replace(/^\n/, "");
+		return `${text.slice(0, begin)}${block}${tail}`;
+	}
+	if (!text.trim()) return block;
+	return `${text.replace(/\n*$/, "")}\n\n${block}`;
+}
+function hookGroups(root, event) {
+	const got = getAt(root, ["hooks", event]);
+	return got.present && Array.isArray(got.value) ? got.value : [];
+}
+function hasHook(root, event, matcher, command) {
+	return hookGroups(root, event).some((g) => g.matcher === matcher && (g.hooks ?? []).some((h) => h.command === command));
+}
+function lineIndent(text, offset) {
+	const start = text.lastIndexOf("\n", offset - 1) + 1;
+	return /^[ \t]*/.exec(text.slice(start))?.[0] ?? "";
+}
+/** Appends a compact value to an existing array, leaving every other byte as it was. */
+function appendToArray(text, pointer, value) {
+	const node = findNodeAtLocation(parseTree(text) ?? {
+		type: "null",
+		offset: 0,
+		length: 0
+	}, pointer);
+	if (!node || node.type !== "array") throw new Error("expected an array");
+	const json = JSON.stringify(value);
+	const last = (node.children ?? []).at(-1);
+	if (!last) {
+		const indent = lineIndent(text, node.offset);
+		const unit = formatFor(text).insertSpaces ? " ".repeat(formatFor(text).tabSize) : "	";
+		const at = node.offset + 1;
+		return `${text.slice(0, at)}\n${indent}${unit}${json}\n${indent}${text.slice(node.offset + node.length - 1)}`;
+	}
+	const end = last.offset + last.length;
+	const sep = !text.slice(node.offset, last.offset).includes("\n") ? ", " : `,\n${lineIndent(text, last.offset)}`;
+	return `${text.slice(0, end)}${sep}${json}${text.slice(end)}`;
+}
+/** Removes one array element and its separating comma, leaving every other byte as it was. */
+function removeFromArray(text, pointer, index) {
+	const node = findNodeAtLocation(parseTree(text) ?? {
+		type: "null",
+		offset: 0,
+		length: 0
+	}, pointer);
+	const items = node?.children ?? [];
+	const item = items[index];
+	if (!node || !item) return text;
+	if (items.length === 1) return `${text.slice(0, node.offset + 1)}${text.slice(node.offset + node.length - 1)}`;
+	if (index > 0) {
+		const prev = items[index - 1];
+		const from = (prev?.offset ?? 0) + (prev?.length ?? 0);
+		return `${text.slice(0, from)}${text.slice(item.offset + item.length)}`;
+	}
+	const next = items[1];
+	return `${text.slice(0, item.offset)}${text.slice(next?.offset ?? item.offset + item.length)}`;
+}
+/** Adds one hook entry in place, touching nothing else in the file. */
+function addHook(text, event, matcher, command) {
+	const root = parseJson("settings", text);
+	const entry = {
+		type: "command",
+		command
+	};
+	const group = {
+		matcher,
+		hooks: [entry]
+	};
+	if (!getAt(root, ["hooks"]).present) return {
+		text: setJson(text, ["hooks"], { [event]: [group] }),
+		created: "hooks"
+	};
+	if (!getAt(root, ["hooks", event]).present) return {
+		text: setJson(text, ["hooks", event], [group]),
+		created: "event"
+	};
+	const idx = hookGroups(root, event).findIndex((g) => g.matcher === matcher && Array.isArray(g.hooks));
+	if (idx < 0) return {
+		text: appendToArray(text, ["hooks", event], group),
+		created: "group"
+	};
+	return {
+		text: appendToArray(text, [
+			"hooks",
+			event,
+			idx,
+			"hooks"
+		], entry),
+		created: "entry"
+	};
+}
+/** Removes the hook entry and only the containers model-ladder created for it. */
+function removeHook(text, event, command, created) {
+	const groups = hookGroups(parseJson("settings", text), event);
+	const gi = groups.findIndex((g) => (g.hooks ?? []).some((h) => h.command === command));
+	if (gi < 0) return text;
+	const hooks = groups[gi]?.hooks ?? [];
+	const hi = hooks.findIndex((h) => h.command === command);
+	let out = created !== "entry" && hooks.length === 1 ? removeFromArray(text, ["hooks", event], gi) : removeFromArray(text, [
+		"hooks",
+		event,
+		gi,
+		"hooks"
+	], hi);
+	const isEmpty = (pointer) => {
+		const got = getAt(parseJson("settings", out), pointer);
+		return got.present && !!got.value && typeof got.value === "object" && Object.keys(got.value).length === 0;
+	};
+	if ((created === "event" || created === "hooks") && isEmpty(["hooks", event])) out = setJson(out, ["hooks", event], void 0);
+	if (created === "hooks" && isEmpty(["hooks"])) out = setJson(out, ["hooks"], void 0);
+	return out;
+}
+function planOp(op, recorded) {
+	const current = readText(op.path);
+	switch (op.kind) {
+		case "file":
+			if (current === void 0) return {
+				op,
+				action: "create"
+			};
+			if (current === op.content) return {
+				op,
+				action: "unchanged"
+			};
+			if (recorded?.sha && sha256(current) !== recorded.sha) return {
+				op,
+				action: "update",
+				reason: "edited since install; your copy will be backed up"
+			};
+			return {
+				op,
+				action: "update"
+			};
+		case "block":
+			if (current === void 0) return {
+				op,
+				action: "create"
+			};
+			return {
+				op,
+				action: withBlock(current, op.content) === current ? "unchanged" : "update"
+			};
+		case "json-set": {
+			if (current === void 0) {
+				if (op.requireParent) return {
+					op,
+					action: "skip",
+					reason: "not installed"
+				};
+				return {
+					op,
+					action: "create"
+				};
+			}
+			const root = parseJson(op.path, current);
+			if (op.requireParent && !getAt(root, op.pointer.slice(0, -1)).present) return {
+				op,
+				action: "skip",
+				reason: "not installed"
+			};
+			const got = getAt(root, op.pointer);
+			if (got.present && deepEqual(got.value, op.value)) return {
+				op,
+				action: "unchanged"
+			};
+			return {
+				op,
+				action: got.present ? "update" : "create"
+			};
+		}
+		case "json-hook":
+			if (current === void 0) return {
+				op,
+				action: "create"
+			};
+			return {
+				op,
+				action: hasHook(parseJson(op.path, current), op.event, op.matcher, op.command) ? "unchanged" : "update"
+			};
+		case "frontmatter": {
+			if (current === void 0) return {
+				op,
+				action: "skip",
+				reason: "not installed"
+			};
+			if (!splitFrontmatter(current)) return {
+				op,
+				action: "skip",
+				reason: "no frontmatter"
+			};
+			const got = getFrontmatter(current, op.key);
+			return {
+				op,
+				action: got.present && got.value === op.value ? "unchanged" : "update"
+			};
+		}
+	}
+}
+function missingDirs(dir) {
+	const dirs = [];
+	for (let d = dir; !existsSync(d) && dirname(d) !== d; d = dirname(d)) dirs.push(d);
+	return dirs;
+}
+/** Deletes a JSON file model-ladder created once nothing but `{}` is left in it. */
+function writeOrDropJson(r, text) {
+	const value = parseJson(r.path, text);
+	if (r.createdFile && value && typeof value === "object" && Object.keys(value).length === 0) rmSync(r.path, { force: true });
+	else writeAtomic(r.path, text);
+}
+function backupFile(path) {
+	const { backups } = statePaths();
+	const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+	const dest = join(backups, stamp, path.replace(/^\/+/, ""));
+	mkdirSync(dirname(dest), { recursive: true });
+	copyFileSync(path, dest);
+	return dest;
+}
+/** Applies one planned op and returns the manifest record to keep for it. */
+function applyOp(planned, existing, notes = []) {
+	const { op, action } = planned;
+	if (action === "skip") return existing;
+	const base = {
+		kind: op.kind,
+		runtime: op.runtime,
+		component: op.component,
+		path: op.path,
+		label: op.label
+	};
+	const current = readText(op.path);
+	base.createdDirs = existing?.createdDirs ?? missingDirs(dirname(op.path));
+	const createdFile = existing?.createdFile ?? current === void 0;
+	switch (op.kind) {
+		case "file": {
+			let backup = existing?.backup;
+			if (current !== void 0 && !existing) backup = backupFile(op.path);
+			if (current !== void 0 && existing?.sha && sha256(current) !== existing.sha && current !== op.content) notes.push(`${op.path} was edited since install; your copy was saved to ${backupFile(op.path)}`);
+			if (action !== "unchanged") writeAtomic(op.path, op.content, op.executable);
+			else if (op.executable) chmodSync(op.path, 493);
+			return {
+				...base,
+				sha: sha256(op.content),
+				...backup ? { backup } : {}
+			};
+		}
+		case "block": {
+			if (action !== "unchanged") writeAtomic(op.path, withBlock(current ?? "", op.content));
+			const trailingNewline = existing?.trailingNewline ?? (current === void 0 || current === "" || current.endsWith("\n"));
+			return {
+				...base,
+				createdFile,
+				trailingNewline
+			};
+		}
+		case "json-set": {
+			const text = current ?? "{}\n";
+			const root = parseJson(op.path, text);
+			const prev = existing?.prev ?? getAt(root, op.pointer);
+			const existingDepth = existing?.existingDepth ?? existingPrefix(root, op.pointer);
+			if (action !== "unchanged") writeAtomic(op.path, setJson(text, op.pointer, op.value));
+			return {
+				...base,
+				pointer: op.pointer,
+				value: op.value,
+				prev,
+				existingDepth,
+				createdFile
+			};
+		}
+		case "json-hook": {
+			let hookCreated = existing?.hookCreated;
+			if (action !== "unchanged") {
+				const added = addHook(current ?? "{}\n", op.event, op.matcher, op.command);
+				writeAtomic(op.path, added.text);
+				hookCreated ??= added.created;
+			}
+			return {
+				...base,
+				event: op.event,
+				command: op.command,
+				createdFile,
+				hookCreated
+			};
+		}
+		case "frontmatter": {
+			const text = current ?? "";
+			const got = getFrontmatter(text, op.key);
+			const prev = existing?.prev ?? {
+				present: got.present,
+				value: got.raw
+			};
+			if (action !== "unchanged") writeAtomic(op.path, setFrontmatter(text, op.key, op.value));
+			return {
+				...base,
+				key: op.key,
+				value: op.value,
+				prev
+			};
+		}
+	}
+}
+function applyPlan(plan) {
+	const manifest = loadManifest();
+	const byKey = new Map(manifest.records.map((r) => [recordKey(r), r]));
+	const result = {
+		applied: [],
+		notes: [],
+		errors: []
+	};
+	for (const planned of plan) {
+		const key = opKey(planned.op);
+		try {
+			const record = applyOp(planned, byKey.get(key), result.notes);
+			if (record) byKey.set(key, record);
+			result.applied.push(planned);
+		} catch (error) {
+			result.errors.push({
+				op: planned.op,
+				error: error instanceof Error ? error.message : String(error)
+			});
+		}
+		saveManifest({
+			version: 1,
+			records: [...byKey.values()]
+		});
+	}
+	return result;
+}
+function recordState(r) {
+	const current = readText(r.path);
+	if (current === void 0) return "missing";
+	switch (r.kind) {
+		case "file": return sha256(current) === r.sha ? "ok" : "drifted";
+		case "block": return current.includes("<!-- BEGIN model-ladder: managed by model-ladder, edits inside this block are overwritten -->") ? "ok" : "missing";
+		case "json-set": {
+			const got = getAt(parseJson(r.path, current), r.pointer ?? []);
+			return got.present && deepEqual(got.value, r.value) ? "ok" : "drifted";
+		}
+		case "json-hook": return hookGroups(parseJson(r.path, current), r.event ?? "").some((g) => (g.hooks ?? []).some((h) => h.command === r.command)) ? "ok" : "missing";
+		case "frontmatter": {
+			const got = getFrontmatter(current, r.key ?? "");
+			return got.present && got.value === r.value ? "ok" : "drifted";
+		}
+	}
+}
+function undoRecord(r, force = false) {
+	const current = readText(r.path);
+	if (current === void 0) return {
+		record: r,
+		outcome: "already-gone"
+	};
+	switch (r.kind) {
+		case "file":
+			if (sha256(current) !== r.sha && !force) return {
+				record: r,
+				outcome: "kept-modified",
+				note: "changed since install; re-run with --force to remove"
+			};
+			if (r.backup && existsSync(r.backup)) {
+				writeAtomic(r.path, readFileSync(r.backup, "utf8"));
+				return {
+					record: r,
+					outcome: "restored",
+					note: `restored from ${r.backup}`
+				};
+			}
+			rmSync(r.path, { force: true });
+			return {
+				record: r,
+				outcome: "removed"
+			};
+		case "block": {
+			let next = stripBlock(current);
+			if (next === current) return {
+				record: r,
+				outcome: "already-gone"
+			};
+			if (r.trailingNewline === false) next = next.replace(/\n$/, "");
+			if (r.createdFile && !next.trim()) {
+				rmSync(r.path, { force: true });
+				return {
+					record: r,
+					outcome: "removed"
+				};
+			}
+			writeAtomic(r.path, next);
+			return {
+				record: r,
+				outcome: "removed"
+			};
+		}
+		case "json-set": {
+			const got = getAt(parseJson(r.path, current), r.pointer ?? []);
+			if (!(got.present && deepEqual(got.value, r.value)) && !force) return {
+				record: r,
+				outcome: "kept-modified",
+				note: "value changed since install; left as is"
+			};
+			const pointer = r.pointer ?? [];
+			let next = setJson(current, pointer, r.prev?.present ? r.prev.value : void 0);
+			if (!r.prev?.present) next = pruneParents(next, pointer, r.existingDepth ?? pointer.length - 1);
+			writeOrDropJson(r, next);
+			return {
+				record: r,
+				outcome: r.prev?.present ? "restored" : "removed"
+			};
+		}
+		case "json-hook": {
+			const next = removeHook(current, r.event ?? "", r.command ?? "", r.hookCreated ?? "group");
+			if (next === current) return {
+				record: r,
+				outcome: "already-gone"
+			};
+			writeOrDropJson(r, next);
+			return {
+				record: r,
+				outcome: "removed"
+			};
+		}
+		case "frontmatter": {
+			const got = getFrontmatter(current, r.key ?? "");
+			if (!(got.present && got.value === r.value) && !force) return {
+				record: r,
+				outcome: "kept-modified",
+				note: "value changed since install (gentle-ai sync?); left as is"
+			};
+			const prev = r.prev?.present ? String(r.prev.value) : void 0;
+			writeAtomic(r.path, setFrontmatter(current, r.key ?? "", prev));
+			return {
+				record: r,
+				outcome: r.prev?.present ? "restored" : "removed"
+			};
+		}
+	}
+}
+function uninstall(filter, force = false) {
+	const manifest = loadManifest();
+	const results = [];
+	const keep = [];
+	for (const r of [...manifest.records].reverse()) {
+		if (!filter(r)) {
+			keep.unshift(r);
+			continue;
+		}
+		const res = undoRecord(r, force);
+		results.push(res);
+		if (res.outcome === "kept-modified") keep.unshift(r);
+	}
+	const dirs = new Set(results.filter((r) => r.outcome !== "kept-modified").flatMap((r) => r.record.createdDirs ?? []));
+	for (const dir of [...dirs].sort((a, b) => b.length - a.length)) try {
+		if (readdirSync(dir).length === 0) rmdirSync(dir);
+	} catch {}
+	saveManifest({
+		version: 1,
+		records: keep
+	});
+	return results;
+}
+//#endregion
+//#region src/tiers.ts
+const RUNTIMES = [
+	"claude",
+	"opencode",
+	"codex",
+	"pi"
+];
+const TIERS = [
+	"fast",
+	"balanced",
+	"deep"
+];
+const ROLES = ["read", "edit"];
+const EFFORTS = [
+	"low",
+	"medium",
+	"high"
+];
+/** Gentle AI review agents whose model this tool can set. */
+const REVIEW_LENSES = [
+	"review-risk",
+	"review-resilience",
+	"review-readability",
+	"review-reliability",
+	"review-refuter"
+];
+const RUNTIME_LABELS = {
+	claude: "Claude Code",
+	opencode: "OpenCode",
+	codex: "Codex",
+	pi: "Pi"
+};
+const TIER_LABELS = {
+	fast: "fast (first try, mechanical work)",
+	balanced: "balanced (multi-step work, first escalation)",
+	deep: "deep (last resort before the parent takes over)"
+};
+const CLAUDE_IDS = {
+	fast: "claude-haiku-5-5",
+	balanced: "claude-sonnet-5-5",
+	deep: "claude-opus-5-5"
+};
+function defaultTierMap(runtime) {
+	const effort = {
+		fast: "low",
+		balanced: "medium",
+		deep: "high"
+	};
+	const model = (tier) => {
+		switch (runtime) {
+			case "claude": return CLAUDE_IDS[tier];
+			case "opencode":
+			case "pi": return `anthropic/${CLAUDE_IDS[tier]}`;
+			case "codex": return "";
+		}
+	};
+	return {
+		fast: {
+			model: model("fast"),
+			effort: effort.fast
+		},
+		balanced: {
+			model: model("balanced"),
+			effort: effort.balanced
+		},
+		deep: {
+			model: model("deep"),
+			effort: effort.deep
+		}
+	};
+}
+/** Which rung each Gentle AI review agent runs on. Readability is pattern work; the rest need judgment. */
+const DEFAULT_REVIEW_TIERS = {
+	"review-risk": "balanced",
+	"review-resilience": "balanced",
+	"review-readability": "fast",
+	"review-reliability": "balanced",
+	"review-refuter": "balanced"
+};
+function agentName(role, tier) {
+	return `ladder-${role}-${tier}`;
+}
+function isTier(value) {
+	return TIERS.includes(value);
+}
+function isRuntime(value) {
+	return RUNTIMES.includes(value);
+}
+function isReviewLens(value) {
+	return REVIEW_LENSES.includes(value);
+}
+//#endregion
+//#region src/content.ts
+const SKILL_NAME = "model-ladder";
+const HOW_TO_CALL = {
+	claude: "the Agent tool with `subagent_type: \"ladder-read-fast\"` (or another ladder agent)",
+	opencode: "the task tool with the ladder agent name (for example `ladder-read-fast`)",
+	codex: "a spawned sub-agent with the ladder agent name as its role (for example `ladder-read-fast`)",
+	pi: "the subagent tool with the ladder agent name (for example `ladder-read-fast`)"
+};
+function agentTable(models) {
+	return [
+		"| Rung | Reads | Edits | Model |",
+		"|------|-------|-------|-------|",
+		`| fast | \`${agentName("read", "fast")}\` | \`${agentName("edit", "fast")}\` | ${models.fast} |`,
+		`| balanced | \`${agentName("read", "balanced")}\` | \`${agentName("edit", "balanced")}\` | ${models.balanced} |`,
+		`| deep | \`${agentName("read", "deep")}\` | \`${agentName("edit", "deep")}\` | ${models.deep} |`
+	].join("\n");
+}
+function skillMarkdown(runtime, models, minLines) {
+	return `---
+name: ${SKILL_NAME}
+description: Route reads and edits to the cheapest capable model (fast → balanced → deep) so file contents never fill the main session. Use before reading large or many files, scanning logs or test output, or writing boilerplate, tests, config or mechanical multi-file edits.
+---
+
+# Model ladder
+
+The main session is the expensive model. Its job is reasoning: deciding, designing, debugging, verifying. Most other work is I/O: reading many files to answer one question, or writing code that follows an existing pattern. Send that I/O to a ladder agent and keep only its short answer.
+
+Call ladder agents with ${HOW_TO_CALL[runtime]}.
+
+${agentTable(models)}
+
+## Reads
+
+Delegate a read when it would put more into your context than the answer needs:
+
+- a multi-file question ("where is X configured", "which callers pass Y", "what does this module do");
+- any file over about ${minLines} lines that you need only to understand, not to edit;
+- logs, test output, generated files, lockfiles, large diffs.
+
+Start at **fast**. Start at **balanced** only when the question needs tracing a flow across several modules.
+
+Keep reads inline when:
+
+- you are about to edit the file: read the exact range you will change (search for the line numbers first, then read with offset/limit). Worker summaries are not reliable enough for line-exact edits;
+- the file is short and you need it once;
+- the question *is* the reasoning (root cause of a bug, design trade-off, security or concurrency review). Delegate the gathering; keep the judgment.
+
+## Edits
+
+Delegate an edit when you can state the spec in a few lines and point at a reference file to copy:
+
+- **fast**: tests that mirror an existing test, config stubs, renames, doc updates, mechanical multi-file changes;
+- **balanced**: new logic inside one module with a clear spec, a multi-file change with its tests, a fast attempt that failed;
+- **deep**: only after balanced failed verification.
+
+Keep in the main session: design decisions, debugging, anything touching auth, permissions, data migrations or concurrency, and the final verification of every delegated edit.
+
+## Handoff
+
+Reads:
+
+\`\`\`
+Question: <one question>
+Scope: <paths or globs>
+Answer shape: <bullets with path:line | list of symbols | yes/no with evidence>
+Budget: <= 300 words
+\`\`\`
+
+Edits:
+
+\`\`\`
+Spec: <what must be true afterwards>
+Allowed edit surfaces: <exact paths or narrow globs>
+Reference: <existing file whose pattern to follow>
+Verify: <one focused command>
+Previous attempt: <only when escalating: the lower rung's STATUS and failure excerpt>
+\`\`\`
+
+Every ladder agent replies with \`STATUS: done | partial | escalate\`. Edit agents never paste the code they wrote; check \`git diff --stat\` and run the verify command yourself.
+
+## Climbing
+
+1. One attempt per rung.
+2. Climb one rung when the reply is \`partial\` or \`escalate\`, when verification fails, or when the answer contradicts evidence you already hold. Pass the previous reply's summary, never file contents.
+3. When **deep** fails, stop delegating and do it yourself with what the attempts taught you.
+4. Do not climb for speed. A wrong cheap answer that you then verify still costs less than starting high.
+
+## Gentle AI reviews
+
+Gentle AI review agents (\`review-risk\`, \`review-resilience\`, \`review-readability\`, \`review-reliability\`, \`review-refuter\`) run on the rungs model-ladder assigned them. The review lifecycle stays Gentle AI's: never relaunch a lens on another model yourself, and follow only the transitions the review returns. A bounded review correction is an edit like any other: hand the frozen finding as the spec to a ladder edit agent and verify it yourself before capturing the result.
+`;
+}
+function instructionsBlock(runtime, minLines) {
+	return `## Model ladder
+
+Reads and edits go to the cheapest capable model; this session keeps the reasoning. Use the \`${SKILL_NAME}\` skill before reading many files, any file over about ${minLines} lines that you will not edit, logs or test output, and before writing boilerplate, tests or mechanical edits. Call ladder agents with ${HOW_TO_CALL[runtime]}.
+
+- Reads start at \`ladder-read-fast\`; edits start at \`ladder-edit-fast\` for pattern work and \`ladder-edit-balanced\` for new logic. Context offload is a named delegation reason.
+- Climb one rung (fast → balanced → deep) only when a reply is \`partial\` or \`escalate\` or fails verification; after deep fails, do it yourself.
+- Before editing, read the exact lines yourself with offset/limit. Keep debugging, design and security, data or concurrency changes in this session, and verify every delegated edit.`;
+}
+const ROLE_BODY = {
+	read: `You are a read-only worker on the model ladder. The parent session delegated a question so that file contents stay out of its context. Answer that question and nothing else.
+
+Rules:
+- Read, search and summarize only. Never edit files, never run commands that change anything.
+- Cite evidence as \`path:line\` using the line numbers your read tool shows. Never estimate a line number.
+- Quote at most 5 lines per excerpt, and only when the exact text matters. Never paste whole files.
+- Keep the whole reply under 300 words unless the parent set another budget.
+- If answering needs judgment beyond locating and summarizing (root cause, design trade-offs, security), stop and say so in STATUS instead of guessing.
+
+Reply in exactly this shape:
+
+STATUS: done | partial | escalate
+ANSWER:
+- <terse bullet with path:line>
+GAPS: <what you could not determine, or "none">`,
+	edit: `You are an edit worker on the model ladder. The parent session gives you a spec, the allowed edit surfaces, a reference file whose pattern to follow, and a verify command.
+
+Rules:
+- Read the reference file and the targets, then make the change. Match the reference's naming, structure and comment density.
+- Write only inside the allowed edit surfaces. If the change needs another file, stop and say so in STATUS.
+- Run the verify command once after the change. If it fails, fix and run it once more. If it still fails, stop.
+- Never commit, push, install dependencies, or run repository-wide formatters or generators.
+- Never paste the code you wrote into your reply. The parent reads the diff.
+
+Reply in exactly this shape:
+
+STATUS: done | partial | escalate
+CHANGED:
+- <path> (+added/-removed lines)
+VERIFY: <command>: <pass | fail, with a one-line excerpt>
+NOTES: <deviations from the spec or assumptions, or "none">`
+};
+const TIER_NOTE = {
+	fast: "You are the fast rung. If the task turns out to need multi-step reasoning, reply STATUS: escalate early: that costs less than a wrong answer.",
+	balanced: "You are the balanced rung. When the parent includes a previous attempt, avoid repeating its failure.",
+	deep: "You are the deep rung: cheaper rungs already failed this task. Read the previous attempt the parent included, be thorough, and still keep the reply short."
+};
+function agentDescription(role, tier, model) {
+	return `Model ladder ${role} agent (${model || "session model"}). ${role === "read" ? "Read-only: answers questions about many or large files, logs and test output with terse path:line bullets, so their contents stay out of the main context." : "Writes code from a short spec and a reference file (tests, boilerplate, config, mechanical edits) and runs one verify command."} ${{
+		fast: "First rung.",
+		balanced: "Second rung: use after the fast rung replies partial/escalate or for multi-step work.",
+		deep: "Last rung: use only after the balanced rung failed."
+	}[tier]}`;
+}
+function agentBody(role, tier) {
+	return `${ROLE_BODY[role]}\n\n${TIER_NOTE[tier]}\n`;
+}
+//#endregion
+//#region src/runtimes.ts
+/** Which components mean something for each runtime. */
+const RUNTIME_COMPONENTS = {
+	claude: [
+		"agents",
+		"skill",
+		"instructions",
+		"read-guard",
+		"review-models"
+	],
+	opencode: [
+		"agents",
+		"skill",
+		"instructions",
+		"review-models"
+	],
+	codex: [
+		"agents",
+		"skill",
+		"instructions"
+	],
+	pi: [
+		"agents",
+		"skill",
+		"instructions",
+		"review-models"
+	]
+};
+const READ_GUARD_FILE = "read-guard.mjs";
+function readGuardSource() {
+	const here = dirname(fileURLToPath(import.meta.url));
+	return readFileSync(join(here, "..", "assets", READ_GUARD_FILE), "utf8");
+}
+function modelNames(runtime, tiers) {
+	const name = (tier) => {
+		const t = tiers[tier];
+		if (runtime === "codex" || !t.model) return `${t.model || "session model"}, ${t.effort} effort`;
+		return t.model;
+	};
+	return {
+		fast: name("fast"),
+		balanced: name("balanced"),
+		deep: name("deep")
+	};
+}
+function yamlString(value) {
+	return JSON.stringify(value);
+}
+/** A TOML multi-line basic string: escapes backslashes, quote runs and control characters. */
+function tomlMultiline(text) {
+	return `"""\n${text.replace(/\\/g, "\\\\").replace(/"""/g, "\"\"\\\"").replace(/\r/g, "\\r").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}"""`;
+}
+const PI_THINKING = {
+	low: "low",
+	medium: "medium",
+	high: "high"
+};
+function agentFile(runtime, role, tier, tiers) {
+	const name = agentName(role, tier);
+	const { model, effort } = tiers[tier];
+	const description = agentDescription(role, tier, model);
+	const body = agentBody(role, tier);
+	switch (runtime) {
+		case "claude": {
+			const tools = role === "read" ? "Read, Grep, Glob" : "Read, Edit, Write, Grep, Glob, Bash";
+			const lines = [
+				"---",
+				`name: ${name}`,
+				`description: ${yamlString(description)}`
+			];
+			if (model) lines.push(`model: ${model}`);
+			lines.push(`tools: ${tools}`, "---", "", body);
+			return {
+				path: join(claudeDir(), "agents", `${name}.md`),
+				content: lines.join("\n")
+			};
+		}
+		case "opencode": {
+			const lines = [
+				"---",
+				`description: ${yamlString(description)}`,
+				"mode: subagent"
+			];
+			if (model) lines.push(`model: ${model}`);
+			lines.push("permission:");
+			if (role === "read") lines.push("  edit: deny", "  bash: deny");
+			lines.push("  task: deny", "---", "", body);
+			return {
+				path: join(opencodeDir(), "agents", `${name}.md`),
+				content: lines.join("\n")
+			};
+		}
+		case "codex": {
+			const lines = [`name = ${JSON.stringify(name)}`, `description = ${JSON.stringify(description)}`];
+			if (model) lines.push(`model = ${JSON.stringify(model)}`);
+			lines.push(`model_reasoning_effort = ${JSON.stringify(effort)}`, `sandbox_mode = ${JSON.stringify(role === "read" ? "read-only" : "workspace-write")}`, `developer_instructions = ${tomlMultiline(body)}`, "");
+			return {
+				path: join(codexDir(), "agents", `${name}.toml`),
+				content: lines.join("\n")
+			};
+		}
+		case "pi": {
+			const tools = role === "read" ? [
+				"read",
+				"grep",
+				"find",
+				"ls"
+			] : [
+				"read",
+				"grep",
+				"find",
+				"ls",
+				"edit",
+				"write",
+				"bash"
+			];
+			const lines = [
+				"---",
+				`name: ${name}`,
+				`description: ${yamlString(description)}`
+			];
+			if (model) lines.push(`model: ${model}`);
+			lines.push(`thinking: ${PI_THINKING[effort]}`, "tools:", ...tools.map((t) => `  - ${t}`), "---", "", body);
+			return {
+				path: join(piDir(), "agents", `${name}.md`),
+				content: lines.join("\n")
+			};
+		}
+	}
+}
+function skillPath(runtime) {
+	const root = {
+		claude: claudeDir(),
+		opencode: opencodeDir(),
+		codex: codexDir(),
+		pi: piDir()
+	}[runtime];
+	return join(root, "skills", SKILL_NAME, "SKILL.md");
+}
+function instructionsPath(runtime) {
+	switch (runtime) {
+		case "claude": return join(claudeDir(), "CLAUDE.md");
+		case "opencode": return join(opencodeDir(), "AGENTS.md");
+		case "codex": return join(codexDir(), "AGENTS.md");
+		case "pi": return join(piDir(), "AGENTS.md");
+	}
+}
+function opencodeConfigPath() {
+	const jsonc = join(opencodeDir(), "opencode.jsonc");
+	return existsSync(jsonc) ? jsonc : join(opencodeDir(), "opencode.json");
+}
+function reviewOps(runtime, config) {
+	const tiers = config.tiers[runtime];
+	const ops = [];
+	const base = {
+		runtime,
+		component: "review-models"
+	};
+	for (const lens of REVIEW_LENSES) {
+		const { model, effort } = tiers[config.reviewTiers[lens]];
+		const label = `${lens} → ${config.reviewTiers[lens]} (${model || "session model"})`;
+		switch (runtime) {
+			case "claude":
+				if (model) ops.push({
+					...base,
+					kind: "frontmatter",
+					path: join(claudeDir(), "agents", `${lens}.md`),
+					key: "model",
+					value: model,
+					label
+				});
+				break;
+			case "opencode":
+				if (model) ops.push({
+					...base,
+					kind: "json-set",
+					path: opencodeConfigPath(),
+					pointer: [
+						"agent",
+						lens,
+						"model"
+					],
+					value: model,
+					requireParent: true,
+					label
+				});
+				break;
+			case "pi": {
+				const agentPath = join(piDir(), "agents", `${lens}.md`);
+				const modelsPath = join(dirname(piDir()), "gentle-ai", "models.json");
+				const profilesPath = join(piDir(), "subagents.json");
+				if (model) ops.push({
+					...base,
+					kind: "frontmatter",
+					path: agentPath,
+					key: "model",
+					value: model,
+					label
+				}, {
+					...base,
+					kind: "json-set",
+					path: modelsPath,
+					pointer: [lens, "model"],
+					value: model,
+					requireParent: true,
+					label: `${label} [models.json]`
+				}, {
+					...base,
+					kind: "json-set",
+					path: profilesPath,
+					pointer: [
+						"model_profiles",
+						lens,
+						"model"
+					],
+					value: model,
+					requireParent: true,
+					label: `${label} [subagents.json]`
+				});
+				ops.push({
+					...base,
+					kind: "frontmatter",
+					path: agentPath,
+					key: "thinking",
+					value: PI_THINKING[effort],
+					label: `${lens} thinking → ${effort}`
+				}, {
+					...base,
+					kind: "json-set",
+					path: modelsPath,
+					pointer: [lens, "thinking"],
+					value: PI_THINKING[effort],
+					requireParent: true,
+					label: `${lens} thinking → ${effort} [models.json]`
+				}, {
+					...base,
+					kind: "json-set",
+					path: profilesPath,
+					pointer: [
+						"model_profiles",
+						lens,
+						"effort"
+					],
+					value: effort,
+					requireParent: true,
+					label: `${lens} effort → ${effort} [subagents.json]`
+				});
+				break;
+			}
+		}
+	}
+	return ops;
+}
+/** All operations for one runtime and the selected components, in apply order. */
+function runtimeOps(runtime, config) {
+	const wanted = config.components.filter((c) => RUNTIME_COMPONENTS[runtime].includes(c));
+	const tiers = config.tiers[runtime];
+	const ops = [];
+	if (wanted.includes("agents")) for (const role of ROLES) for (const tier of TIERS) {
+		const { path, content } = agentFile(runtime, role, tier, tiers);
+		ops.push({
+			runtime,
+			component: "agents",
+			kind: "file",
+			path,
+			content,
+			label: `${agentName(role, tier)} (${tiers[tier].model || `session model, ${tiers[tier].effort}`})`
+		});
+	}
+	if (wanted.includes("skill")) ops.push({
+		runtime,
+		component: "skill",
+		kind: "file",
+		path: skillPath(runtime),
+		content: skillMarkdown(runtime, modelNames(runtime, tiers), config.minLines),
+		label: `skill ${SKILL_NAME}`
+	});
+	if (wanted.includes("instructions")) ops.push({
+		runtime,
+		component: "instructions",
+		kind: "block",
+		path: instructionsPath(runtime),
+		content: instructionsBlock(runtime, config.minLines),
+		label: "instructions block"
+	});
+	if (wanted.includes("read-guard") && runtime === "claude") {
+		const script = join(claudeDir(), "hooks", "model-ladder", READ_GUARD_FILE);
+		const settings = join(claudeDir(), "settings.json");
+		ops.push({
+			runtime,
+			component: "read-guard",
+			kind: "file",
+			path: script,
+			content: readGuardSource(),
+			executable: true,
+			label: "read-guard hook script"
+		}, {
+			runtime,
+			component: "read-guard",
+			kind: "json-hook",
+			path: settings,
+			event: "PreToolUse",
+			matcher: "Read|Bash",
+			command: `node "${script}"`,
+			label: "PreToolUse hook (Read|Bash)"
+		}, {
+			runtime,
+			component: "read-guard",
+			kind: "json-set",
+			path: settings,
+			pointer: ["env", "MODEL_LADDER_MIN_LINES"],
+			value: String(config.minLines),
+			label: `env MODEL_LADDER_MIN_LINES=${config.minLines}`
+		});
+	}
+	if (wanted.includes("review-models")) ops.push(...reviewOps(runtime, config));
+	return ops;
+}
+function allOps(config) {
+	return config.runtimes.flatMap((r) => runtimeOps(r, config));
+}
+//#endregion
+//#region src/commands.ts
+function onPath(bin) {
+	try {
+		execFileSync("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+function detect() {
+	return RUNTIMES.map((runtime) => ({
+		runtime,
+		bin: onPath(RUNTIME_BIN[runtime]),
+		dir: existsSync(runtimeDir(runtime))
+	}));
+}
+function detectedRuntimes() {
+	return detect().filter((d) => d.bin || d.dir).map((d) => d.runtime);
+}
+function buildPlan(config) {
+	const records = new Map(loadManifest().records.map((r) => [recordKey(r), r]));
+	return allOps(config).map((op) => planOp(op, records.get(opKey(op))));
+}
+function tildify(path) {
+	const h = home();
+	return path.startsWith(`${h}/`) ? `~${path.slice(h.length)}` : path;
+}
+function status() {
+	return loadManifest().records.map((record) => ({
+		record,
+		state: recordState(record)
+	}));
+}
+function doctor() {
+	const checks = [];
+	checks.push({
+		name: "node",
+		ok: Number(process.versions.node.split(".")[0]) >= 22,
+		detail: process.version
+	});
+	for (const d of detect()) checks.push({
+		name: d.runtime,
+		ok: d.bin || d.dir,
+		detail: d.bin || d.dir ? `${d.bin ? "cli on PATH" : "cli not on PATH"}, ${tildify(runtimeDir(d.runtime))}` : "not installed"
+	});
+	const codexConfig = join(codexDir(), "config.toml");
+	if (existsSync(codexConfig)) {
+		const text = readFileSync(codexConfig, "utf8");
+		const enabled = /^\s*multi_agent\s*=\s*true/m.test(text);
+		checks.push({
+			name: "codex multi_agent",
+			ok: enabled,
+			detail: enabled ? "enabled" : "add `multi_agent = true` under [features] in ~/.codex/config.toml so Codex can spawn ladder agents"
+		});
+	}
+	if (existsSync(piDir())) {
+		const settings = join(piDir(), "settings.json");
+		const text = existsSync(settings) ? readFileSync(settings, "utf8") : "";
+		const subagents = /subagent|gentle-pi/.test(text) || existsSync(join(piDir(), "subagents.json"));
+		checks.push({
+			name: "pi subagents",
+			ok: subagents,
+			detail: subagents ? "subagent support found" : "install a Pi subagent extension (for example gentle-pi) so Pi can call ladder agents"
+		});
+	}
+	const gentle = onPath("gentle-ai");
+	checks.push({
+		name: "gentle-ai",
+		ok: true,
+		detail: gentle ? "installed (review-models applies)" : "not installed (review-models skips)"
+	});
+	const drifted = status().filter((s) => s.state !== "ok");
+	checks.push({
+		name: "managed files",
+		ok: drifted.length === 0,
+		detail: drifted.length === 0 ? "all as installed" : `${drifted.length} changed or missing (often \`gentle-ai sync\` resetting review models); run \`model-ladder install\` to reapply`
+	});
+	return checks;
+}
+function defaultConfig() {
+	return {
+		version: 1,
+		runtimes: [],
+		components: [...COMPONENTS],
+		tiers: {
+			claude: defaultTierMap("claude"),
+			opencode: defaultTierMap("opencode"),
+			codex: defaultTierMap("codex"),
+			pi: defaultTierMap("pi")
+		},
+		reviewTiers: { ...DEFAULT_REVIEW_TIERS },
+		minLines: 350
+	};
+}
+/** Loads the saved config over the defaults, dropping anything unrecognized. */
+function loadConfig() {
+	const config = defaultConfig();
+	let raw;
+	try {
+		raw = JSON.parse(readFileSync(configPath(), "utf8"));
+	} catch {
+		return config;
+	}
+	if (Array.isArray(raw.runtimes)) config.runtimes = raw.runtimes.filter(isRuntime);
+	if (Array.isArray(raw.components)) config.components = raw.components.filter((c) => COMPONENTS.includes(c));
+	for (const runtime of RUNTIMES) for (const tier of TIERS) {
+		const saved = raw.tiers?.[runtime]?.[tier];
+		if (!saved) continue;
+		if (typeof saved.model === "string") config.tiers[runtime][tier].model = saved.model;
+		if (EFFORTS.includes(saved.effort)) config.tiers[runtime][tier].effort = saved.effort;
+	}
+	for (const [lens, tier] of Object.entries(raw.reviewTiers ?? {})) if (isReviewLens(lens) && typeof tier === "string" && isTier(tier)) config.reviewTiers[lens] = tier;
+	if (typeof raw.minLines === "number" && raw.minLines > 0) config.minLines = Math.floor(raw.minLines);
+	return config;
+}
+function saveConfig(config) {
+	const path = configPath();
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+}
+//#endregion
+//#region src/version.ts
+const VERSION = "0.1.0";
+//#endregion
+//#region src/tui.ts
+var Cancelled = class extends Error {};
+function ask(value) {
+	if (isCancel(value)) throw new Cancelled();
+	return value;
+}
+const ACTION_COLOR = {
+	create: import_picocolors.default.green,
+	update: import_picocolors.default.yellow,
+	unchanged: import_picocolors.default.dim,
+	skip: import_picocolors.default.dim
+};
+function formatPlan(plan) {
+	const lines = [];
+	let lastRuntime = "";
+	for (const { op, action, reason } of plan) {
+		if (op.runtime !== lastRuntime) {
+			lines.push(import_picocolors.default.bold(RUNTIME_LABELS[op.runtime]));
+			lastRuntime = op.runtime;
+		}
+		const tag = ACTION_COLOR[action](action.padEnd(9));
+		const why = reason ? import_picocolors.default.dim(` (${reason})`) : "";
+		lines.push(`  ${tag} ${op.label}${why} ${import_picocolors.default.dim(tildify(op.path))}`);
+	}
+	return lines.join("\n");
+}
+function ladderSummary(config, runtime) {
+	return TIERS.map((t) => {
+		const { model, effort } = config.tiers[runtime][t];
+		return `${t}: ${model || "session model"} (${effort})`;
+	}).join(" · ");
+}
+async function chooseModels(config, runtimes) {
+	const mode = ask(await select({
+		message: "Models for each rung",
+		options: [
+			{
+				value: "keep",
+				label: "Keep current",
+				hint: runtimes.map((r) => `${r}: ${ladderSummary(config, r)}`).join(" | ")
+			},
+			{
+				value: "recommended",
+				label: "Recommended ladder",
+				hint: "Haiku 5.5 → Sonnet 5.5 → Opus 5.5 (Codex: effort low → high)"
+			},
+			{
+				value: "custom",
+				label: "Customize per runtime"
+			}
+		]
+	}));
+	if (mode === "recommended") {
+		for (const r of runtimes) config.tiers[r] = defaultTierMap(r);
+		return;
+	}
+	if (mode !== "custom") return;
+	for (const runtime of runtimes) {
+		log.step(import_picocolors.default.bold(RUNTIME_LABELS[runtime]));
+		for (const tier of TIERS) {
+			const current = config.tiers[runtime][tier];
+			const model = ask(await text({
+				message: `${tier} — ${TIER_LABELS[tier]}`,
+				placeholder: runtime === "codex" ? "empty = session model" : defaultTierMap(runtime)[tier].model,
+				initialValue: current.model
+			}));
+			const effort = ask(await select({
+				message: `${tier} reasoning effort`,
+				initialValue: current.effort,
+				options: EFFORTS.map((e) => ({
+					value: e,
+					label: e
+				}))
+			}));
+			config.tiers[runtime][tier] = {
+				model: (model ?? "").trim(),
+				effort
+			};
+		}
+	}
+}
+async function chooseReviewTiers(config) {
+	const summary = REVIEW_LENSES.map((l) => `${l.replace("review-", "")}: ${config.reviewTiers[l]}`).join(", ");
+	if (ask(await select({
+		message: "Gentle AI review agents: which rung runs each lens?",
+		options: [{
+			value: "keep",
+			label: "Keep",
+			hint: summary
+		}, {
+			value: "custom",
+			label: "Customize per lens"
+		}]
+	})) !== "custom") return;
+	for (const lens of REVIEW_LENSES) config.reviewTiers[lens] = ask(await select({
+		message: lens,
+		initialValue: config.reviewTiers[lens],
+		options: TIERS.map((t) => ({
+			value: t,
+			label: t,
+			hint: TIER_LABELS[t]
+		}))
+	}));
+}
+async function installFlow() {
+	const config = loadConfig();
+	const found = detect();
+	const detected = found.filter((d) => d.bin || d.dir).map((d) => d.runtime);
+	config.runtimes = ask(await multiselect({
+		message: "Configure which agents?",
+		options: found.map((d) => ({
+			value: d.runtime,
+			label: RUNTIME_LABELS[d.runtime],
+			hint: d.bin || d.dir ? "detected" : "not found"
+		})),
+		initialValues: config.runtimes.length > 0 ? config.runtimes : detected,
+		required: true
+	}));
+	const offered = COMPONENTS.filter((c) => config.runtimes.some((r) => RUNTIME_COMPONENTS[r].includes(c)));
+	config.components = ask(await multiselect({
+		message: "Install which parts?",
+		options: offered.map((c) => ({
+			value: c,
+			label: COMPONENT_LABELS[c]
+		})),
+		initialValues: config.components.filter((c) => offered.includes(c)),
+		required: true
+	}));
+	await chooseModels(config, config.runtimes);
+	if (config.components.includes("review-models")) await chooseReviewTiers(config);
+	if (config.components.includes("read-guard") && config.runtimes.includes("claude")) {
+		const value = ask(await text({
+			message: "Read guard: block whole reads of files with at least how many lines?",
+			initialValue: String(config.minLines),
+			validate: (v) => /^\d+$/.test(v ?? "") && Number(v) > 0 ? void 0 : "Enter a positive whole number"
+		}));
+		config.minLines = Number(value);
+	}
+	const plan = buildPlan(config);
+	note(formatPlan(plan), "Plan");
+	const changes = plan.filter((x) => x.action === "create" || x.action === "update").length;
+	if (changes === 0) {
+		saveConfig(config);
+		log.success("Everything is already up to date.");
+		return;
+	}
+	if (!ask(await confirm({ message: `Apply ${changes} change(s)?` }))) {
+		log.info("Nothing changed.");
+		return;
+	}
+	const spin = spinner();
+	spin.start("Applying");
+	const result = applyPlan(plan);
+	saveConfig(config);
+	if (result.errors.length > 0) {
+		spin.stop(import_picocolors.default.red(`${result.errors.length} step(s) failed`));
+		for (const e of result.errors) log.error(`${e.op.label} (${tildify(e.op.path)}): ${e.error}`);
+		return;
+	}
+	spin.stop("Applied");
+	for (const note of result.notes) log.warn(note);
+	log.info("Restart running agent sessions to pick up the new agents. Run `model-ladder status` any time; `model-ladder uninstall` undoes everything.");
+}
+function statusFlow() {
+	const entries = status();
+	if (entries.length === 0) {
+		log.info("Nothing installed yet.");
+		return;
+	}
+	const color = {
+		ok: import_picocolors.default.green,
+		drifted: import_picocolors.default.yellow,
+		missing: import_picocolors.default.red
+	};
+	const lines = entries.map(({ record, state }) => `${color[state](state.padEnd(8))} ${import_picocolors.default.bold(record.runtime.padEnd(9))} ${record.label} ${import_picocolors.default.dim(tildify(record.path))}`);
+	note(lines.join("\n"), "Installed by model-ladder");
+}
+function doctorFlow() {
+	const lines = doctor().map((c) => `${c.ok ? import_picocolors.default.green("✔") : import_picocolors.default.yellow("!")} ${c.name.padEnd(18)} ${import_picocolors.default.dim(c.detail)}`);
+	note(lines.join("\n"), "Doctor");
+}
+async function uninstallFlow() {
+	const entries = status();
+	const installed = [...new Set(entries.map((e) => e.record.runtime))];
+	if (installed.length === 0) {
+		log.info("Nothing to uninstall.");
+		return;
+	}
+	const runtimes = ask(await multiselect({
+		message: "Uninstall from which agents?",
+		options: installed.map((r) => ({
+			value: r,
+			label: RUNTIME_LABELS[r]
+		})),
+		initialValues: installed,
+		required: true
+	}));
+	if (!ask(await confirm({ message: "Remove model-ladder files and restore what they replaced?" }))) return;
+	const results = uninstall((r) => runtimes.includes(r.runtime));
+	const kept = results.filter((r) => r.outcome === "kept-modified");
+	log.success(`Undid ${results.length - kept.length} change(s).`);
+	for (const k of kept) log.warn(`Kept ${tildify(k.record.path)}: ${k.note}`);
+	const config = loadConfig();
+	config.runtimes = config.runtimes.filter((r) => !runtimes.includes(r));
+	saveConfig(config);
+}
+async function runTui() {
+	intro(`${import_picocolors.default.bgCyan(import_picocolors.default.black(" model-ladder "))} ${import_picocolors.default.dim(`v${VERSION}`)}`);
+	log.message(import_picocolors.default.dim("Route reads and edits to the cheapest capable model: fast → balanced → deep. The main session keeps the reasoning."));
+	try {
+		for (;;) {
+			const hasInstall = status().length > 0;
+			const choice = ask(await select({
+				message: "What do you want to do?",
+				options: [
+					{
+						value: "install",
+						label: hasInstall ? "Update configuration" : "Install",
+						hint: "agents, skill, hooks, models"
+					},
+					{
+						value: "status",
+						label: "Status",
+						hint: "what is installed and whether it changed"
+					},
+					{
+						value: "doctor",
+						label: "Doctor",
+						hint: "check runtimes and prerequisites"
+					},
+					{
+						value: "uninstall",
+						label: "Uninstall",
+						hint: "remove and restore"
+					},
+					{
+						value: "reset",
+						label: "Reset saved choices",
+						hint: "back to the recommended ladder"
+					},
+					{
+						value: "exit",
+						label: "Exit"
+					}
+				]
+			}));
+			if (choice === "exit") break;
+			if (choice === "install") await installFlow();
+			if (choice === "status") statusFlow();
+			if (choice === "doctor") doctorFlow();
+			if (choice === "uninstall") await uninstallFlow();
+			if (choice === "reset") {
+				saveConfig({
+					...defaultConfig(),
+					runtimes: loadConfig().runtimes
+				});
+				log.success("Saved choices reset. Run Update to apply them.");
+			}
+		}
+	} catch (error) {
+		if (error instanceof Cancelled) {
+			cancel("Cancelled.");
+			return 130;
+		}
+		throw error;
+	}
+	outro("Done.");
+	return 0;
+}
+//#endregion
+//#region src/cli.ts
+const HELP = `model-ladder ${VERSION}
+Route reads and edits to the cheapest capable model (fast → balanced → deep)
+for Claude Code, OpenCode, Codex and Pi.
+
+Usage:
+  model-ladder                     open the TUI (in a terminal)
+  model-ladder install [flags]     apply the saved (or flagged) configuration
+  model-ladder status              list what model-ladder installed and whether it changed
+  model-ladder uninstall [flags]   remove it and restore what it replaced
+  model-ladder doctor              check runtimes and prerequisites
+  model-ladder config              print the saved configuration and its path
+
+Flags:
+  --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
+  --component <id>               ${COMPONENTS.join(" | ")} (repeatable; default: saved, else all)
+  --model <runtime>:<tier>=<id>  model for a rung, e.g. claude:fast=claude-haiku-5-5 (repeatable)
+  --effort <runtime>:<tier>=<l>  low | medium | high, e.g. codex:deep=high (repeatable)
+  --review <lens>=<tier>         rung for a Gentle AI review agent, e.g. review-risk=deep (repeatable)
+  --min-lines <n>                read guard threshold (default 350)
+  --yes                          apply or uninstall without asking
+  --dry-run                      show the plan, write nothing
+  --force                        uninstall files even if they changed since install
+  --json                         print one JSON document to stdout
+  -v, --version / -h, --help
+
+Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
+3 uninstall kept files you edited (re-run with --force), 130 cancelled.`;
+var UsageError = class extends Error {};
+function parseAssign(raw, flag) {
+	const m = /^([a-z-]+)(?::([a-z]+))?=(.*)$/.exec(raw);
+	if (!m) throw new UsageError(`${flag} expects <name>[:<tier>]=<value>, got "${raw}"`);
+	return {
+		left: m[1] ?? "",
+		tier: m[2] ?? "",
+		value: m[3] ?? ""
+	};
+}
+function applyFlags(config, values) {
+	const list = (k) => values[k] ?? [];
+	if (list("runtime").length > 0) {
+		for (const r of list("runtime")) if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
+		config.runtimes = list("runtime");
+	} else if (config.runtimes.length === 0) config.runtimes = detectedRuntimes();
+	if (list("component").length > 0) {
+		for (const c of list("component")) if (!COMPONENTS.includes(c)) throw new UsageError(`unknown component "${c}"`);
+		config.components = list("component");
+	}
+	for (const raw of list("model")) {
+		const { left, tier, value } = parseAssign(raw, "--model");
+		if (!isRuntime(left) || !isTier(tier)) throw new UsageError(`--model expects <runtime>:<tier>=<id>, got "${raw}"`);
+		config.tiers[left][tier].model = value.trim();
+	}
+	for (const raw of list("effort")) {
+		const { left, tier, value } = parseAssign(raw, "--effort");
+		if (!isRuntime(left) || !isTier(tier) || !EFFORTS.includes(value)) throw new UsageError(`--effort expects <runtime>:<tier>=low|medium|high, got "${raw}"`);
+		config.tiers[left][tier].effort = value;
+	}
+	for (const raw of list("review")) {
+		const { left, value } = parseAssign(raw, "--review");
+		if (!isReviewLens(left) || !isTier(value)) throw new UsageError(`--review expects <review-lens>=<tier>, got "${raw}"`);
+		config.reviewTiers[left] = value;
+	}
+	if (values["min-lines"] !== void 0) {
+		const n = Number(values["min-lines"]);
+		if (!Number.isInteger(n) || n <= 0) throw new UsageError("--min-lines expects a positive whole number");
+		config.minLines = n;
+	}
+}
+function out(json, data, text) {
+	process.stdout.write(json ? `${JSON.stringify(data, null, 2)}\n` : `${text}\n`);
+}
+async function main(argv) {
+	const { values, positionals } = parseArgs({
+		args: argv,
+		allowPositionals: true,
+		options: {
+			runtime: {
+				type: "string",
+				multiple: true
+			},
+			component: {
+				type: "string",
+				multiple: true
+			},
+			model: {
+				type: "string",
+				multiple: true
+			},
+			effort: {
+				type: "string",
+				multiple: true
+			},
+			review: {
+				type: "string",
+				multiple: true
+			},
+			"min-lines": { type: "string" },
+			yes: {
+				type: "boolean",
+				short: "y"
+			},
+			"dry-run": { type: "boolean" },
+			force: { type: "boolean" },
+			json: { type: "boolean" },
+			version: {
+				type: "boolean",
+				short: "v"
+			},
+			help: {
+				type: "boolean",
+				short: "h"
+			}
+		}
+	});
+	const json = values.json === true;
+	if (values.version) return out(json, { version: VERSION }, VERSION), 0;
+	if (values.help) return out(false, null, HELP), 0;
+	const command = positionals[0] ?? "";
+	switch (command) {
+		case "":
+			if (!process.stdin.isTTY || !process.stdout.isTTY) {
+				process.stderr.write(`${HELP}\n\nerror: no terminal for the TUI; pass a command.\n`);
+				return 2;
+			}
+			return runTui();
+		case "install":
+		case "apply": {
+			const config = loadConfig();
+			applyFlags(config, values);
+			if (config.runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
+			const plan = buildPlan(config);
+			const changes = plan.filter((x) => x.action === "create" || x.action === "update");
+			const planJson = plan.map(({ op, action, reason }) => ({
+				runtime: op.runtime,
+				component: op.component,
+				label: op.label,
+				path: op.path,
+				action,
+				reason
+			}));
+			if (values["dry-run"] || changes.length === 0) {
+				if (changes.length === 0 && !values["dry-run"]) saveConfig(config);
+				out(json, {
+					plan: planJson,
+					applied: false
+				}, `${formatPlan(plan)}\n\n${changes.length} change(s)${values["dry-run"] ? " (dry run)" : ""}.`);
+				return 0;
+			}
+			if (!values.yes) {
+				if (!process.stdin.isTTY) {
+					process.stderr.write(`${formatPlan(plan)}\n\nerror: refusing to apply without --yes outside a terminal.\n`);
+					return 2;
+				}
+				process.stdout.write(`${formatPlan(plan)}\n\n`);
+				const ok = await confirm({ message: `Apply ${changes.length} change(s)?` });
+				if (isCancel(ok) || !ok) return 130;
+			}
+			const result = applyPlan(plan);
+			saveConfig(config);
+			const failed = result.errors.map((e) => `${import_picocolors.default.red("failed")} ${e.op.label}: ${e.error}`).join("\n");
+			out(json, {
+				plan: planJson,
+				applied: true,
+				notes: result.notes,
+				errors: result.errors.map((e) => ({
+					label: e.op.label,
+					path: e.op.path,
+					error: e.error
+				}))
+			}, [
+				formatPlan(plan),
+				"",
+				...result.notes.map((n) => `${import_picocolors.default.yellow("note")} ${n}`),
+				failed || `${import_picocolors.default.green("Applied")} ${changes.length} change(s). Restart running agent sessions to load them.`
+			].join("\n"));
+			return result.errors.length > 0 ? 1 : 0;
+		}
+		case "status": {
+			const entries = status();
+			const text = entries.length === 0 ? "Nothing installed." : entries.map((e) => `${e.state.padEnd(8)} ${e.record.runtime.padEnd(9)} ${e.record.label}  ${tildify(e.record.path)}`).join("\n");
+			out(json, { entries: entries.map((e) => ({
+				...e.record,
+				state: e.state
+			})) }, text);
+			return 0;
+		}
+		case "uninstall": {
+			const runtimes = values.runtime ?? [];
+			for (const r of runtimes) if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
+			const entries = status().filter((e) => runtimes.length === 0 || runtimes.includes(e.record.runtime));
+			if (entries.length === 0) return out(json, { results: [] }, "Nothing to uninstall."), 0;
+			if (values["dry-run"]) {
+				out(json, { entries: entries.map((e) => e.record) }, entries.map((e) => `remove  ${e.record.label}  ${tildify(e.record.path)}`).join("\n"));
+				return 0;
+			}
+			if (!values.yes) {
+				if (!process.stdin.isTTY) {
+					process.stderr.write("error: refusing to uninstall without --yes outside a terminal.\n");
+					return 2;
+				}
+				const ok = await confirm({ message: `Undo ${entries.length} change(s)?` });
+				if (isCancel(ok) || !ok) return 130;
+			}
+			const results = uninstall((r) => runtimes.length === 0 || runtimes.includes(r.runtime), values.force === true);
+			const config = loadConfig();
+			config.runtimes = runtimes.length === 0 ? [] : config.runtimes.filter((r) => !runtimes.includes(r));
+			saveConfig(config);
+			out(json, { results: results.map((r) => ({
+				path: r.record.path,
+				label: r.record.label,
+				outcome: r.outcome,
+				note: r.note
+			})) }, results.map((r) => `${r.outcome.padEnd(13)} ${r.record.label}  ${tildify(r.record.path)}${r.note ? `  (${r.note})` : ""}`).join("\n"));
+			return results.some((r) => r.outcome === "kept-modified") ? 3 : 0;
+		}
+		case "doctor": {
+			const checks = doctor();
+			out(json, { checks }, checks.map((c) => `${c.ok ? "ok  " : "warn"} ${c.name.padEnd(18)} ${c.detail}`).join("\n"));
+			return 0;
+		}
+		case "config": {
+			const config = loadConfig();
+			out(json, {
+				path: configPath(),
+				config
+			}, `${configPath()}\n${JSON.stringify(config, null, 2)}`);
+			return 0;
+		}
+		default: throw new UsageError(`unknown command "${command}"`);
+	}
+}
+main(process.argv.slice(2)).then((code) => process.exit(code), (error) => {
+	if (error instanceof UsageError || error?.code?.startsWith("ERR_PARSE_ARGS")) {
+		process.stderr.write(`error: ${error.message}\nRun model-ladder --help for usage.\n`);
+		process.exit(2);
+	}
+	process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+	process.exit(1);
+});
+//#endregion
+export {};
