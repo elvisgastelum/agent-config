@@ -4843,6 +4843,13 @@ function buildPlan(config, only) {
 	const planned = new Set(only ?? config.catalog.map(entryKey));
 	return [...manifest.filter((r) => r.component === "catalog" ? r.item !== void 0 && planned.has(r.item) && !wanted.has(recordKey(r)) : !only && config.runtimes.includes(r.runtime) && config.components.includes(r.component) && !wanted.has(recordKey(r))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
 }
+/**
+* After uninstalling some runtimes, puts back catalog files the remaining runtimes still use: a
+* project's AGENTS.md block is shared by OpenCode, Codex and Pi but recorded under one of them.
+*/
+function restoreShared(config) {
+	applyPlan(buildPlan(config, config.catalog.map(entryKey)).filter((x) => x.action === "create"));
+}
 function tildify(path) {
 	const h = home();
 	return path.startsWith(`${h}/`) ? `~${path.slice(h.length)}` : path;
@@ -5270,6 +5277,7 @@ async function uninstallFlow() {
 	config.runtimes = config.runtimes.filter((r) => !runtimes.includes(r));
 	forgetCatalog(config, () => true, runtimes);
 	saveConfig(config);
+	restoreShared(config);
 }
 /** Returns true when a new version was installed and the TUI should exit. */
 async function selfUpdateFlow() {
@@ -5943,9 +5951,13 @@ async function main(argv) {
 	const given = Object.keys(values).filter((k) => values[k] !== void 0);
 	const misplaced = command === "delegate" ? given.find((k) => NOT_FOR_DELEGATE.includes(k)) : given.find((k) => DELEGATE_ONLY.includes(k));
 	if (misplaced) throw new UsageError(command === "delegate" ? `--${misplaced} does not apply to delegate` : `--${misplaced} only applies to delegate`);
-	const itemId = command === "install" || command === "uninstall" ? positionals[1] : void 0;
+	const itemId = [
+		"install",
+		"apply",
+		"uninstall"
+	].includes(command) ? positionals[1] : void 0;
 	const catalogFlag = given.find((k) => CATALOG_ONLY.includes(k));
-	if (catalogFlag && (!itemId || catalogFlag === "url" && command !== "install")) throw new UsageError(`--${catalogFlag} only applies to ${catalogFlag === "url" ? "install" : "install or uninstall"} <item>`);
+	if (catalogFlag && (!itemId || catalogFlag === "url" && command === "uninstall")) throw new UsageError(`--${catalogFlag} only applies to ${catalogFlag === "url" ? "install" : "install or uninstall"} <item>`);
 	const ladderFlag = itemId ? given.find((k) => LADDER_ONLY.includes(k)) : void 0;
 	if (ladderFlag) throw new UsageError(`--${ladderFlag} configures the ladder; run it with \`agent-config install\` without an item`);
 	switch (command) {
@@ -6016,7 +6028,7 @@ async function main(argv) {
 				forgetCatalog(config, () => true, runtimes);
 			};
 			const entries = status().filter((e) => match(e.record));
-			if (entries.length === 0 && key) {
+			if (entries.length === 0 && key && !values["dry-run"]) {
 				const config = loadConfig();
 				forget(config);
 				saveConfig(config);
@@ -6038,6 +6050,7 @@ async function main(argv) {
 			const config = loadConfig();
 			forget(config);
 			saveConfig(config);
+			if (runtimes.length > 0) restoreShared(config);
 			out(json, { results: results.map((r) => ({
 				path: r.record.path,
 				label: r.record.label,

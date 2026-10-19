@@ -217,6 +217,22 @@ describe("kaneo catalog item", () => {
   });
 });
 
+test("a whole-config plan re-applies saved catalog entries and leaves deselected ladder parts alone", () => {
+  const entry = kaneoEntry(["claude"]);
+  const config = withEntry(entry);
+  config.runtimes = ["claude"];
+  config.components = ["skill", "instructions"];
+  expect(applyPlan(buildPlan(config)).errors).toEqual([]);
+  expect(existsSync(join(box.home, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);
+  expect(buildPlan(config).every((p) => p.action === "unchanged")).toBe(true);
+
+  config.components = ["instructions"];
+  const plan = buildPlan(config);
+  expect(plan.filter((p) => p.action !== "unchanged")).toEqual([]);
+  expect(plan.some((p) => p.op.label === "skill model-ladder")).toBe(false);
+  expect(plan.filter((p) => p.op.item === "kaneo@user")).toHaveLength(4);
+});
+
 describe("kaneoBaseUrl", () => {
   test("strips the MCP path and rejects non-http input", () => {
     expect(kaneoBaseUrl("https://k.example.com/api/mcp/")).toBe("https://k.example.com");

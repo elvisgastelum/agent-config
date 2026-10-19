@@ -157,3 +157,37 @@ test("catalog usage errors exit 2", () => {
       .code,
   ).toBe(2);
 });
+
+test("uninstall <item> --dry-run keeps the saved entry; apply <item> installs the item", () => {
+  const cfg = join(home, ".config/agent-config/config.json");
+  const applied = run(
+    "apply",
+    "kaneo",
+    "--runtime",
+    "claude",
+    "--url",
+    "https://k.example.com",
+    "--yes",
+  );
+  expect(applied.code).toBe(0);
+  expect(existsSync(join(home, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);
+  rmSync(join(home, ".local/state/agent-config/manifest.json"));
+  expect(run("uninstall", "kaneo", "--dry-run").code).toBe(0);
+  expect(JSON.parse(read(cfg)).catalog).toHaveLength(1);
+});
+
+test("a partial runtime uninstall at project scope keeps the shared AGENTS.md block", () => {
+  const repo = mkdtempSync(join(tmpdir(), "model-ladder-repo-"));
+  try {
+    const url = ["--url", "https://k.example.com"];
+    const rt = ["--runtime", "opencode", "--runtime", "codex"];
+    expect(run("install", "kaneo", "--project", repo, ...rt, ...url, "--yes").code).toBe(0);
+    const res = run("uninstall", "kaneo", "--project", repo, "--runtime", "opencode", "--yes");
+    expect(res.code).toBe(0);
+    expect(read(join(repo, "AGENTS.md"))).toContain("<!-- BEGIN agent-config:kaneo");
+    expect(existsSync(join(repo, ".opencode/skills/kaneo-work-tracking/SKILL.md"))).toBe(false);
+    expect(existsSync(join(repo, ".agents/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
