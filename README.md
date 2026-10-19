@@ -47,15 +47,16 @@ Also: **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (
 
 ## Commands
 
-| Command                    | What it does                                                                                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model-ladder`             | Opens the TUI.                                                                                                                                          |
-| `model-ladder install`     | Applies the saved choices (or detected runtimes on first run). Asks to confirm.                                                                         |
-| `model-ladder status`      | Lists what model-ladder installed and whether it still matches.                                                                                         |
-| `model-ladder uninstall`   | Undoes it. `--runtime` limits it to some agents.                                                                                                        |
-| `model-ladder doctor`      | Checks runtimes and prerequisites.                                                                                                                      |
-| `model-ladder config`      | Prints the saved choices and their path.                                                                                                                |
-| `model-ladder self-update` | Updates model-ladder itself from GitHub (`--dry-run` only checks). Then run `model-ladder install` to re-apply your configuration with the new version. |
+| Command                                       | What it does                                                                                                                                            |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model-ladder`                                | Opens the TUI.                                                                                                                                          |
+| `model-ladder install`                        | Applies the saved choices (or detected runtimes on first run). Asks to confirm.                                                                         |
+| `model-ladder status`                         | Lists what model-ladder installed and whether it still matches.                                                                                         |
+| `model-ladder uninstall`                      | Undoes it. `--runtime` limits it to some agents.                                                                                                        |
+| `model-ladder doctor`                         | Checks runtimes and prerequisites.                                                                                                                      |
+| `model-ladder config`                         | Prints the saved choices and their path.                                                                                                                |
+| `model-ladder self-update`                    | Updates model-ladder itself from GitHub (`--dry-run` only checks). Then run `model-ladder install` to re-apply your configuration with the new version. |
+| `model-ladder delegate <read\|edit> "<task>"` | Runs a ladder agent headlessly and prints only its reply. For agents that cannot spawn subagents. See below.                                            |
 
 | Flag                                            | Meaning                                                                        |
 | ----------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -103,6 +104,24 @@ The skill (and the short instruction block that points to it) tells the main ses
 - **Never delegated**: line-exact reads before an edit (read the range with offset/limit), debugging, design, and changes to auth, data or concurrency.
 
 The **read guard** (Claude Code) makes the read rule stick: a `PreToolUse` hook denies whole-file `Read`s and plain `cat`/`less`/large `head`/`tail` of files over the threshold in the main session, with a message pointing at `ladder-read-fast` or a ranged read. Quoted paths, `~`, `$HOME` and `VAR=value` prefixes are understood; subagents, ranged reads (including `bat -r`), pipes, other substitutions, images and PDFs pass. `MODEL_LADDER_GUARD=off` disables it for a session.
+
+## Delegating from agents that cannot spawn agents
+
+Subagents and parallel workers usually cannot start subagents of their own, but they can run shell commands. `model-ladder delegate` gives them the same ladder:
+
+```sh
+model-ladder delegate read --runtime claude "Question: where is retry configured? Scope: src/. Answer shape: bullets with path:line. Budget: <= 300 words"
+model-ladder delegate edit --tier balanced "Spec: ... Allowed edit surfaces: ... Reference: ... Verify: ..."
+echo "<long handoff>" | model-ladder delegate read
+```
+
+- Runs the matching ladder agent through the runtime's own headless mode: `claude -p --agent`, `opencode run --agent`, `codex exec` (agent instructions inlined, `read-only` or `workspace-write` sandbox) or `pi -p`. Read agents only get read tools.
+- Climbs by itself: fast → balanced → deep when a reply is `partial` or `escalate` or the agent fails, passing the previous reply to the next rung. `--tier` picks the first rung; `--no-climb` stays on it.
+- Prints only the final reply on stdout. Rung, model and timing go to stderr, and `--json` gives structured output. Exit codes: `0` done, `3` still partial after the last rung, `1` failed, `4` refused.
+- **No nested delegation.** Every agent it starts gets `MODEL_LADDER_DELEGATED=1`, and `delegate` refuses to run (exit `4`) when it sees that marker. Ladder agents are also told never to delegate further.
+- The runtime is `--runtime`, else `$MODEL_LADDER_RUNTIME`, else Claude Code when it runs inside it, else your first configured runtime.
+
+The skill and the instruction block tell agents to use it when they have no agent tool.
 
 ## Background: the Spotify Portal post
 

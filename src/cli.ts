@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // model-ladder: the TUI for humans, plain commands (and --json) for scripts and agents.
 
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
@@ -10,6 +11,7 @@ import { configPath } from "./paths.ts";
 import { applyPlan, COMPONENTS, uninstall, type Component } from "./ops.ts";
 import { EFFORTS, isReviewLens, isRuntime, isTier, type Effort, type Runtime } from "./tiers.ts";
 import { formatPlan, runTui } from "./tui.ts";
+import { DELEGATED_ENV, delegate } from "./delegate.ts";
 import { checkForUpdate, runUpdate } from "./selfupdate.ts";
 import { VERSION } from "./version.ts";
 
@@ -25,6 +27,9 @@ Usage:
   model-ladder doctor              check runtimes and prerequisites
   model-ladder config              print the saved configuration and its path
   model-ladder self-update         update model-ladder itself (--dry-run only checks)
+  model-ladder delegate <read|edit> [--tier t] [--runtime r] "<task>"
+                                   run a ladder read or edit headlessly and print only its reply;
+                                   for agents that cannot spawn subagents (task from stdin if omitted)
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -39,8 +44,15 @@ Flags:
   --json                         print one JSON document to stdout
   -v, --version / -h, --help
 
+Delegate flags:
+  --tier <fast|balanced|deep>    first rung (default: fast)
+  --no-climb                     do not climb to the next rung on partial/escalate/failure
+  --cwd <dir>                    working directory for the agent (default: current)
+  --timeout <seconds>            per-rung limit (default 600)
+
 Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
-3 uninstall kept files you edited (re-run with --force), 130 cancelled.`;
+3 uninstall kept files you edited (re-run with --force) / delegate ended partial or escalate,
+4 delegate refused: already running inside a model-ladder delegated agent, 130 cancelled.`;
 
 class UsageError extends Error {}
 
@@ -93,6 +105,13 @@ function applyFlags(config: Config, values: Record<string, unknown>): void {
   }
 }
 
+/** The runtime a delegating agent most likely runs in, else the first configured one. */
+function delegateRuntime(configured: Runtime[]): string | undefined {
+  if (process.env.MODEL_LADDER_RUNTIME) return process.env.MODEL_LADDER_RUNTIME;
+  if (process.env.CLAUDECODE) return "claude";
+  return configured[0] ?? detectedRuntimes()[0];
+}
+
 function out(json: boolean, data: unknown, text: string): void {
   process.stdout.write(json ? `${JSON.stringify(data, null, 2)}\n` : `${text}\n`);
 }
@@ -108,6 +127,10 @@ async function main(argv: string[]): Promise<number> {
       effort: { type: "string", multiple: true },
       review: { type: "string", multiple: true },
       "min-lines": { type: "string" },
+      tier: { type: "string" },
+      cwd: { type: "string" },
+      "no-climb": { type: "boolean" },
+      timeout: { type: "string" },
       yes: { type: "boolean", short: "y" },
       "dry-run": { type: "boolean" },
       force: { type: "boolean" },
@@ -264,6 +287,66 @@ async function main(argv: string[]): Promise<number> {
         checks.map((c) => `${c.ok ? "ok  " : "warn"} ${c.name.padEnd(18)} ${c.detail}`).join("\n"),
       );
       return 0;
+    }
+    case "delegate": {
+      if (process.env[DELEGATED_ENV]) {
+        process.stderr.write(
+          "error: model-ladder delegate cannot run inside an agent it started (no nested delegation).\n" +
+            "  fix: answer with what you have, or reply STATUS: escalate so the caller climbs a rung.\n",
+        );
+        return 4;
+      }
+      const role = positionals[1];
+      if (role !== "read" && role !== "edit") throw new UsageError("delegate expects read or edit");
+      const tier = (values.tier as string | undefined) ?? "fast";
+      if (!isTier(tier)) throw new UsageError(`unknown tier "${tier}"`);
+      const config = loadConfig();
+      const flagged = (values.runtime as string[] | undefined)?.at(-1);
+      const runtime = flagged ?? delegateRuntime(config.runtimes);
+      if (!runtime || !isRuntime(runtime)) {
+        throw new UsageError(
+          runtime ? `unknown runtime "${runtime}"` : "no runtime found; pass --runtime",
+        );
+      }
+      let prompt = positionals.slice(2).join(" ").trim();
+      if (!prompt || prompt === "-")
+        prompt = process.stdin.isTTY ? "" : readFileSync(0, "utf8").trim();
+      if (!prompt)
+        throw new UsageError("delegate needs a task: pass it as an argument or on stdin");
+      const seconds = values.timeout === undefined ? 600 : Number(values.timeout);
+      if (!Number.isFinite(seconds) || seconds <= 0)
+        throw new UsageError("--timeout expects seconds");
+      const attempts = delegate(
+        {
+          role,
+          tier,
+          runtime,
+          prompt,
+          cwd: (values.cwd as string | undefined) ?? process.cwd(),
+          climb: values["no-climb"] !== true,
+          timeoutMs: seconds * 1000,
+        },
+        config.tiers[runtime],
+      );
+      const last = attempts.at(-1);
+      for (const a of attempts) {
+        process.stderr.write(
+          `model-ladder: ${role} ${a.tier} (${a.model}) → ${a.status} in ${(a.durationMs / 1000).toFixed(1)}s${a.error ? `: ${a.error}` : ""}\n`,
+        );
+      }
+      out(
+        json,
+        {
+          runtime,
+          role,
+          status: last?.status,
+          reply: last?.reply ?? "",
+          attempts: attempts.map(({ reply: _reply, ...a }) => a),
+        },
+        last?.reply ?? "",
+      );
+      if (!last || last.status === "error") return 1;
+      return last.status === "done" ? 0 : 3;
     }
     case "self-update": {
       const check = checkForUpdate();
