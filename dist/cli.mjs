@@ -4219,7 +4219,7 @@ function agentTable(models) {
 function skillMarkdown(runtime, models, minLines) {
 	return `---
 name: ${SKILL_NAME}
-description: Route reads and edits to the cheapest capable model (fast → balanced → deep) so file contents never fill the main session. Use before reading large or many files, scanning logs or test output, or writing boilerplate, tests, config or mechanical multi-file edits.
+description: ALWAYS use this before delegating work to a subagent or choosing which agent or model runs it, before reading large or many files, scanning logs, test output or diffs, and before editing boilerplate, tests, config or mechanical multi-file changes. Routes reads and edits to the cheapest capable ladder agent (fast → balanced → deep) so file contents never fill the main session, which keeps the reasoning.
 ---
 
 # Model ladder
