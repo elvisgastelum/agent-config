@@ -4847,8 +4847,9 @@ function buildPlan(config, only) {
 * After uninstalling some runtimes, puts back catalog files the remaining runtimes still use: a
 * project's AGENTS.md block is shared by OpenCode, Codex and Pi but recorded under one of them.
 */
-function restoreShared(config) {
-	applyPlan(buildPlan(config, config.catalog.map(entryKey)).filter((x) => x.action === "create"));
+function restoreShared(config, removed) {
+	const paths = new Set(removed);
+	return applyPlan(buildPlan(config, config.catalog.map(entryKey)).filter((x) => x.action === "create" && paths.has(x.op.path))).errors;
 }
 function tildify(path) {
 	const h = home();
@@ -5277,7 +5278,8 @@ async function uninstallFlow() {
 	config.runtimes = config.runtimes.filter((r) => !runtimes.includes(r));
 	forgetCatalog(config, () => true, runtimes);
 	saveConfig(config);
-	restoreShared(config);
+	const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
+	for (const e of restoreShared(config, removed)) log.error(`Could not restore ${e.op.label} (${tildify(e.op.path)}): ${e.error}`);
 }
 /** Returns true when a new version was installed and the TUI should exit. */
 async function selfUpdateFlow() {
@@ -5957,7 +5959,7 @@ async function main(argv) {
 		"uninstall"
 	].includes(command) ? positionals[1] : void 0;
 	const catalogFlag = given.find((k) => CATALOG_ONLY.includes(k));
-	if (catalogFlag && (!itemId || catalogFlag === "url" && command === "uninstall")) throw new UsageError(`--${catalogFlag} only applies to ${catalogFlag === "url" ? "install" : "install or uninstall"} <item>`);
+	if (catalogFlag && (!itemId || catalogFlag === "url" && command === "uninstall")) throw new UsageError(`--${catalogFlag} only applies to ${catalogFlag === "url" ? "install (or apply)" : "install or uninstall"} <item>`);
 	const ladderFlag = itemId ? given.find((k) => LADDER_ONLY.includes(k)) : void 0;
 	if (ladderFlag) throw new UsageError(`--${ladderFlag} configures the ladder; run it with \`agent-config install\` without an item`);
 	switch (command) {
@@ -6050,7 +6052,9 @@ async function main(argv) {
 			const config = loadConfig();
 			forget(config);
 			saveConfig(config);
-			if (runtimes.length > 0) restoreShared(config);
+			const restoreErrors = restoreShared(config, results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path));
+			for (const e of restoreErrors) process.stderr.write(`error: could not restore ${e.op.label} (${e.op.path}): ${e.error}\n`);
+			if (restoreErrors.length > 0) return 1;
 			out(json, { results: results.map((r) => ({
 				path: r.record.path,
 				label: r.record.label,

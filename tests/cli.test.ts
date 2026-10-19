@@ -182,11 +182,14 @@ test("a partial runtime uninstall at project scope keeps the shared AGENTS.md bl
     const url = ["--url", "https://k.example.com"];
     const rt = ["--runtime", "opencode", "--runtime", "codex"];
     expect(run("install", "kaneo", "--project", repo, ...rt, ...url, "--yes").code).toBe(0);
+    // A file the user removed by hand is not brought back by the partial uninstall.
+    rmSync(join(repo, ".codex/agents/kaneo-scribe.toml"));
     const res = run("uninstall", "kaneo", "--project", repo, "--runtime", "opencode", "--yes");
     expect(res.code).toBe(0);
     expect(read(join(repo, "AGENTS.md"))).toContain("<!-- BEGIN agent-config:kaneo");
     expect(existsSync(join(repo, ".opencode/skills/kaneo-work-tracking/SKILL.md"))).toBe(false);
     expect(existsSync(join(repo, ".agents/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);
+    expect(existsSync(join(repo, ".codex/agents/kaneo-scribe.toml"))).toBe(false);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

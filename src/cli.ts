@@ -362,7 +362,7 @@ async function main(argv: string[]): Promise<number> {
   const catalogFlag = given.find((k) => CATALOG_ONLY.includes(k));
   if (catalogFlag && (!itemId || (catalogFlag === "url" && command === "uninstall"))) {
     throw new UsageError(
-      `--${catalogFlag} only applies to ${catalogFlag === "url" ? "install" : "install or uninstall"} <item>`,
+      `--${catalogFlag} only applies to ${catalogFlag === "url" ? "install (or apply)" : "install or uninstall"} <item>`,
     );
   }
   const ladderFlag = itemId ? given.find((k) => LADDER_ONLY.includes(k)) : undefined;
@@ -484,7 +484,14 @@ async function main(argv: string[]): Promise<number> {
       const config = loadConfig();
       forget(config);
       saveConfig(config);
-      if (runtimes.length > 0) restoreShared(config);
+      const removed = results.filter((r) => r.outcome !== "kept-modified");
+      const restoreErrors = restoreShared(
+        config,
+        removed.map((r) => r.record.path),
+      );
+      for (const e of restoreErrors)
+        process.stderr.write(`error: could not restore ${e.op.label} (${e.op.path}): ${e.error}\n`);
+      if (restoreErrors.length > 0) return 1;
       out(
         json,
         {
