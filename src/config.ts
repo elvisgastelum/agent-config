@@ -1,8 +1,9 @@
 // The user's choices, saved so re-running (or `install` from a script) reproduces them.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { COMPONENTS, type Component } from "./ops.ts";
+import { dirname, isAbsolute } from "node:path";
+import { catalogItem, type CatalogEntry } from "./catalog.ts";
+import { COMPONENTS, type LadderComponent } from "./ops.ts";
 import { configPath } from "./paths.ts";
 import {
   DEFAULT_REVIEW_TIERS,
@@ -24,10 +25,12 @@ export const DEFAULT_MIN_LINES = 350;
 export interface Config {
   version: 1;
   runtimes: Runtime[];
-  components: Component[];
+  components: LadderComponent[];
   tiers: Record<Runtime, TierMap>;
   reviewTiers: Record<ReviewLens, Tier>;
   minLines: number;
+  /** Catalog items to install, each at user scope or in one project. */
+  catalog: CatalogEntry[];
 }
 
 export function defaultConfig(): Config {
@@ -43,6 +46,7 @@ export function defaultConfig(): Config {
     },
     reviewTiers: { ...DEFAULT_REVIEW_TIERS },
     minLines: DEFAULT_MIN_LINES,
+    catalog: [],
   };
 }
 
@@ -57,7 +61,7 @@ export function loadConfig(): Config {
   }
   if (Array.isArray(raw.runtimes)) config.runtimes = raw.runtimes.filter(isRuntime);
   if (Array.isArray(raw.components)) {
-    config.components = raw.components.filter((c): c is Component =>
+    config.components = raw.components.filter((c): c is LadderComponent =>
       (COMPONENTS as readonly string[]).includes(c),
     );
   }
@@ -76,7 +80,27 @@ export function loadConfig(): Config {
   }
   if (typeof raw.minLines === "number" && raw.minLines > 0)
     config.minLines = Math.floor(raw.minLines);
+  if (Array.isArray(raw.catalog)) config.catalog = raw.catalog.flatMap(catalogEntry);
   return config;
+}
+
+/** A saved catalog entry, or nothing when it names an unknown item or is malformed. */
+function catalogEntry(raw: unknown): CatalogEntry[] {
+  if (!raw || typeof raw !== "object") return [];
+  const e = raw as Partial<CatalogEntry>;
+  if (typeof e.item !== "string" || !catalogItem(e.item)) return [];
+  if (e.project !== undefined && (typeof e.project !== "string" || !isAbsolute(e.project)))
+    return [];
+  const settings: Record<string, string> = {};
+  for (const [k, v] of Object.entries(e.settings ?? {})) if (typeof v === "string") settings[k] = v;
+  return [
+    {
+      item: e.item,
+      ...(e.project ? { project: e.project } : {}),
+      runtimes: Array.isArray(e.runtimes) ? e.runtimes.filter(isRuntime) : [],
+      settings,
+    },
+  ];
 }
 
 export function saveConfig(config: Config): void {

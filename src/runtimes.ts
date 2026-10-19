@@ -151,9 +151,10 @@ function instructionsPath(runtime: Runtime): string {
   }
 }
 
-function opencodeConfigPath(): string {
-  const jsonc = join(opencodeDir(), "opencode.jsonc");
-  return existsSync(jsonc) ? jsonc : join(opencodeDir(), "opencode.json");
+/** opencode.jsonc when the directory has one, else opencode.json. */
+export function opencodeConfigPath(dir = opencodeDir()): string {
+  const jsonc = join(dir, "opencode.jsonc");
+  return existsSync(jsonc) ? jsonc : join(dir, "opencode.json");
 }
 
 function reviewOps(runtime: Runtime, config: Config): Op[] {

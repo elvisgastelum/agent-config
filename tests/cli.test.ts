@@ -81,3 +81,79 @@ test("uninstall exits 3 when it keeps a file you edited", () => {
   expect(run("uninstall", "--yes", "--force").code).toBe(0);
   expect(existsSync(agent)).toBe(false);
 });
+
+test("install kaneo adds only the catalog item; catalog lists it; uninstall kaneo removes it", () => {
+  const args = ["install", "kaneo", "--runtime", "claude", "--url", "https://k.example.com/"];
+  const dry = run(...args, "--dry-run");
+  expect(dry.code).toBe(0);
+  expect(dry.stdout).toContain("kaneo skill kaneo-work-tracking");
+  expect(existsSync(join(home, ".claude"))).toBe(false);
+
+  const installed = run(...args, "--yes", "--json");
+  expect(installed.code).toBe(0);
+  expect(JSON.parse(installed.stdout).applied).toBe(true);
+  expect(read(join(home, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toContain("kaneo-scribe");
+  expect(JSON.parse(read(join(home, ".claude.json"))).mcpServers.kaneo.url).toBe(
+    "https://k.example.com/api/mcp",
+  );
+  // The ladder was not installed along with it.
+  expect(existsSync(join(home, ".claude/agents/ladder-read-fast.md"))).toBe(false);
+
+  const listed = JSON.parse(run("catalog", "--json").stdout);
+  const kaneo = listed.items.find((i: { id: string }) => i.id === "kaneo");
+  expect(kaneo.entries).toMatchObject([
+    { scope: "user", runtimes: ["claude"], settings: { url: "https://k.example.com" } },
+  ]);
+
+  // Re-running reuses the saved URL and changes nothing.
+  const again = run("install", "kaneo", "--yes", "--json");
+  expect(again.code).toBe(0);
+  expect(JSON.parse(again.stdout).applied).toBe(false);
+
+  const removed = run("uninstall", "kaneo", "--yes", "--json");
+  expect(removed.code).toBe(0);
+  expect(existsSync(join(home, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toBe(false);
+  expect(existsSync(join(home, ".claude.json"))).toBe(false);
+  expect(JSON.parse(run("catalog", "--json").stdout).items[0].entries).toEqual([]);
+});
+
+test("install kaneo --project writes into the repository and reuses the user's Kaneo URL", () => {
+  writeFileSync(
+    join(home, ".claude.json"),
+    JSON.stringify({
+      mcpServers: { kaneo: { type: "http", url: "https://k.example.com/api/mcp" } },
+    }),
+  );
+  const repo = mkdtempSync(join(tmpdir(), "model-ladder-repo-"));
+  try {
+    const res = run("install", "kaneo", "--project", repo, "--runtime", "claude", "--yes");
+    expect(res.code).toBe(0);
+    expect(JSON.parse(read(join(repo, ".mcp.json"))).mcpServers.kaneo.url).toBe(
+      "https://k.example.com/api/mcp",
+    );
+    expect(existsSync(join(repo, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, ".claude/skills"))).toBe(false);
+    expect(run("uninstall", "kaneo", "--project", repo, "--yes").code).toBe(0);
+    expect(existsSync(join(repo, ".mcp.json"))).toBe(false);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("catalog usage errors exit 2", () => {
+  const noUrl = run("install", "kaneo", "--runtime", "claude", "--yes");
+  expect(noUrl.code).toBe(2);
+  expect(noUrl.stderr).toContain("kaneo needs --url");
+  expect(run("install", "nope", "--runtime", "claude").code).toBe(2);
+  expect(run("install", "--url", "https://k.example.com", "--runtime", "claude").code).toBe(2);
+  expect(run("uninstall", "kaneo", "--url", "https://k.example.com").code).toBe(2);
+  const badUrl = run("install", "kaneo", "--runtime", "claude", "--url", "ftp://x");
+  expect(badUrl.code).toBe(2);
+  const ladderFlag = run("install", "kaneo", "--url", "https://k.example.com", "--min-lines", "9");
+  expect(ladderFlag.stderr).toContain("configures the ladder");
+  expect(ladderFlag.code).toBe(2);
+  expect(
+    run("install", "kaneo", "--project", join(home, "missing"), "--url", "https://k.example.com")
+      .code,
+  ).toBe(2);
+});
