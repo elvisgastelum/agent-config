@@ -5,6 +5,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "jsonc-parser";
+import {
+  COMMIT_GUARD_FILE,
+  COMMIT_SKILL,
+  COMMIT_WRITER,
+  WRITER_BODY,
+  WRITER_DESCRIPTION,
+  commitInstructionsBlock,
+  commitSkillMarkdown,
+} from "./commit.ts";
 import type { Config } from "./config.ts";
 import {
   KANEO_MCP,
@@ -21,8 +30,8 @@ import {
 } from "./kaneo.ts";
 import { LADDER_ITEM, opKey, type Op } from "./ops.ts";
 import { claudeDir, claudeJsonPath, codexDir, opencodeDir, piDir } from "./paths.ts";
-import { opencodeConfigPath, runtimeOps, tomlMultiline } from "./runtimes.ts";
-import type { Runtime, TierMap } from "./tiers.ts";
+import { assetSource, opencodeConfigPath, runtimeOps, tomlMultiline } from "./runtimes.ts";
+import type { Effort, Runtime, TierMap } from "./tiers.ts";
 
 export type Scope = "user" | "project";
 
@@ -140,10 +149,74 @@ function at(root: unknown, pointer: string[]): unknown {
   return node;
 }
 
-function modelName(runtime: Runtime, tiers: TierMap): string {
-  const { model, effort } = tiers.fast;
+function modelName(runtime: Runtime, tiers: TierMap, effort: Effort = tiers.fast.effort): string {
+  const { model } = tiers.fast;
   if (runtime === "codex" || !model) return `${model || "session model"}, ${effort} effort`;
   return model;
+}
+
+/** A catalog agent on the fast rung, and what it may do in each runtime. */
+interface CheapAgent {
+  name: string;
+  description: string;
+  body: string;
+  /** Thinking effort; defaults to the fast rung's. */
+  effort?: Effort;
+  claudeTools: string[];
+  /** OpenCode permissions, each denied. */
+  opencodeDeny: string[];
+  codexSandbox: "read-only" | "workspace-write";
+  piTools: string[];
+}
+
+function cheapAgent(
+  runtime: Runtime,
+  dir: string,
+  tiers: TierMap,
+  agent: CheapAgent,
+): { path: string; content: string } {
+  const { model } = tiers.fast;
+  const effort = agent.effort ?? tiers.fast.effort;
+  const { name, body } = agent;
+  const description = JSON.stringify(agent.description);
+  switch (runtime) {
+    case "claude": {
+      const lines = ["---", `name: ${name}`, `description: ${description}`];
+      if (model) lines.push(`model: ${model}`);
+      lines.push(`tools: ${agent.claudeTools.join(", ")}`, "---", "", body);
+      return { path: join(dir, `${name}.md`), content: lines.join("\n") };
+    }
+    case "opencode": {
+      const lines = ["---", `description: ${description}`, "mode: subagent"];
+      if (model) lines.push(`model: ${model}`);
+      lines.push("permission:", ...agent.opencodeDeny.map((p) => `  ${p}: deny`), "---", "", body);
+      return { path: join(dir, `${name}.md`), content: lines.join("\n") };
+    }
+    case "codex": {
+      const lines = [`name = ${JSON.stringify(name)}`, `description = ${description}`];
+      if (model) lines.push(`model = ${JSON.stringify(model)}`);
+      lines.push(
+        `model_reasoning_effort = ${JSON.stringify(effort)}`,
+        `sandbox_mode = ${JSON.stringify(agent.codexSandbox)}`,
+        `developer_instructions = ${tomlMultiline(body)}`,
+        "",
+      );
+      return { path: join(dir, `${name}.toml`), content: lines.join("\n") };
+    }
+    case "pi": {
+      const lines = ["---", `name: ${name}`, `description: ${description}`];
+      if (model) lines.push(`model: ${model}`);
+      lines.push(
+        `thinking: ${effort}`,
+        "tools:",
+        ...agent.piTools.map((t) => `  - ${t}`),
+        "---",
+        "",
+        body,
+      );
+      return { path: join(dir, `${name}.md`), content: lines.join("\n") };
+    }
+  }
 }
 
 // ---------------------------------------------------------------- kaneo
@@ -154,55 +227,17 @@ const KANEO_LEGACY_BLOCK: [string, string] = [
   "<!-- END kaneo-work-tracking-skill -->",
 ];
 
-function scribeAgent(
-  runtime: Runtime,
-  dir: string,
-  tiers: TierMap,
-): { path: string; content: string } {
-  const { model, effort } = tiers.fast;
-  const description = JSON.stringify(SCRIBE_DESCRIPTION);
-  switch (runtime) {
-    case "claude": {
-      const lines = ["---", `name: ${SCRIBE}`, `description: ${description}`];
-      if (model) lines.push(`model: ${model}`);
-      lines.push(`tools: ${KANEO_TOOLS.join(", ")}`, "---", "", SCRIBE_BODY);
-      return { path: join(dir, `${SCRIBE}.md`), content: lines.join("\n") };
-    }
-    case "opencode": {
-      const lines = ["---", `description: ${description}`, "mode: subagent"];
-      if (model) lines.push(`model: ${model}`);
-      lines.push(
-        "permission:",
-        "  edit: deny",
-        "  bash: deny",
-        "  task: deny",
-        "---",
-        "",
-        SCRIBE_BODY,
-      );
-      return { path: join(dir, `${SCRIBE}.md`), content: lines.join("\n") };
-    }
-    case "codex": {
-      const lines = [`name = ${JSON.stringify(SCRIBE)}`, `description = ${description}`];
-      if (model) lines.push(`model = ${JSON.stringify(model)}`);
-      lines.push(
-        `model_reasoning_effort = ${JSON.stringify(effort)}`,
-        `sandbox_mode = "read-only"`,
-        `developer_instructions = ${tomlMultiline(SCRIBE_BODY)}`,
-        "",
-      );
-      return { path: join(dir, `${SCRIBE}.toml`), content: lines.join("\n") };
-    }
-    case "pi": {
-      // Pi keeps MCP tools undeclared (codemode exposure); tool_search loads only those, so the
-      // scribe reaches Kaneo without read, edit, bash or codemode (whose scripts can run bash).
-      const lines = ["---", `name: ${SCRIBE}`, `description: ${description}`];
-      if (model) lines.push(`model: ${model}`);
-      lines.push(`thinking: ${effort}`, "tools:", "  - tool_search", "---", "", SCRIBE_BODY);
-      return { path: join(dir, `${SCRIBE}.md`), content: lines.join("\n") };
-    }
-  }
-}
+const SCRIBE_AGENT: CheapAgent = {
+  name: SCRIBE,
+  description: SCRIBE_DESCRIPTION,
+  body: SCRIBE_BODY,
+  claudeTools: KANEO_TOOLS,
+  opencodeDeny: ["edit", "bash", "task"],
+  codexSandbox: "read-only",
+  // Pi keeps MCP tools undeclared (codemode exposure); tool_search loads only those, so the
+  // scribe reaches Kaneo without read, edit, bash or codemode (whose scripts can run bash).
+  piTools: ["tool_search"],
+};
 
 function kaneoMcpOp(runtime: Runtime, project: string | undefined, url: string): Op {
   const base = { runtime, component: "catalog" as const, label: `kaneo MCP server ${url}` };
@@ -287,7 +322,7 @@ const kaneo: CatalogItem = {
   ops: (entry, runtime, config) => {
     const tiers = config.tiers[runtime];
     const where = layout(runtime, entry.project);
-    const scribe = scribeAgent(runtime, where.agents, tiers);
+    const scribe = cheapAgent(runtime, where.agents, tiers, SCRIBE_AGENT);
     const ops: Op[] = [
       {
         runtime,
@@ -327,7 +362,132 @@ const kaneo: CatalogItem = {
   },
 };
 
-export const CATALOG: CatalogItem[] = [modelLadder, kaneo];
+// ---------------------------------------------------------------- commit
+
+/** The block that the standalone claude-commit-skill installer wrote; replaced in place. */
+const COMMIT_LEGACY_BLOCK: [string, string] = [
+  "<!-- BEGIN claude-commit-skill: managed by install.sh, edits inside this block are overwritten -->",
+  "<!-- END claude-commit-skill -->",
+];
+
+/** Commit titles are short pattern work: the fast model, always at low effort. */
+const WRITER_EFFORT: Effort = "low";
+
+const WRITER_AGENT: CheapAgent = {
+  name: COMMIT_WRITER,
+  description: WRITER_DESCRIPTION,
+  body: WRITER_BODY,
+  effort: WRITER_EFFORT,
+  claudeTools: ["Bash", "Read", "Grep", "Glob"],
+  opencodeDeny: ["edit", "task"],
+  codexSandbox: "read-only",
+  piTools: ["read", "grep", "find", "ls", "bash"],
+};
+
+/** Claude only: the commit guard hook and the settings that drop commit and PR attribution. */
+function commitGuardOps(project: string | undefined): Op[] {
+  const base = { runtime: "claude" as const, component: "catalog" as const };
+  const dir = project ? join(project, ".claude") : claudeDir();
+  const script = join(dir, "hooks", "agent-config", COMMIT_GUARD_FILE);
+  const settings = join(dir, "settings.json");
+  // A project's settings are committed, so its hook finds the script from the project root.
+  const command = project
+    ? `node "$CLAUDE_PROJECT_DIR/.claude/hooks/agent-config/${COMMIT_GUARD_FILE}"`
+    : `node "${script}"`;
+  return [
+    {
+      ...base,
+      kind: "file",
+      path: script,
+      content: assetSource(COMMIT_GUARD_FILE),
+      executable: true,
+      label: "commit-guard hook script",
+    },
+    {
+      ...base,
+      kind: "json-hook",
+      path: settings,
+      event: "PreToolUse",
+      matcher: "Bash",
+      command,
+      label: "PreToolUse hook (Bash) commit guard",
+    },
+    {
+      ...base,
+      kind: "json-set",
+      path: settings,
+      pointer: ["attribution", "commit"],
+      value: "",
+      label: 'attribution.commit = ""',
+    },
+    {
+      ...base,
+      kind: "json-set",
+      path: settings,
+      pointer: ["attribution", "pr"],
+      value: "",
+      label: 'attribution.pr = ""',
+    },
+    {
+      ...base,
+      kind: "json-set",
+      path: settings,
+      pointer: ["includeCoAuthoredBy"],
+      value: false,
+      label: "includeCoAuthoredBy = false",
+    },
+  ];
+}
+
+const commit: CatalogItem = {
+  id: "commit",
+  title: "Commit titles",
+  description:
+    "title-only commit skill, no-AI-attribution rules, a cheap low-thinking commit-writer agent that drafts the title, and a Claude commit guard",
+  settings: [],
+  discover: () => ({}),
+  ops: (entry, runtime, config) => {
+    const tiers = config.tiers[runtime];
+    const where = layout(runtime, entry.project);
+    const writer = cheapAgent(runtime, where.agents, tiers, WRITER_AGENT);
+    const model = modelName(runtime, tiers, WRITER_EFFORT);
+    const ops: Op[] = [
+      {
+        runtime,
+        component: "catalog",
+        kind: "file",
+        path: join(where.skills, COMMIT_SKILL, "SKILL.md"),
+        content: commitSkillMarkdown(runtime, model),
+        label: `commit skill ${COMMIT_SKILL}`,
+      },
+      {
+        runtime,
+        component: "catalog",
+        kind: "file",
+        path: writer.path,
+        content: writer.content,
+        label: `commit agent ${COMMIT_WRITER} (${model})`,
+      },
+      {
+        runtime,
+        component: "catalog",
+        kind: "block",
+        path: where.instructions,
+        content: commitInstructionsBlock(
+          entry.runtimes.filter(
+            (r) => layout(r, entry.project).instructions === where.instructions,
+          ),
+        ),
+        markers: [blockMarkers("commit", "html"), COMMIT_LEGACY_BLOCK],
+        label: "commit instructions block",
+      },
+    ];
+    if (runtime === "claude") ops.push(...commitGuardOps(entry.project));
+    return ops;
+  },
+};
+
+export const CATALOG: CatalogItem[] = [modelLadder, kaneo, commit];
 
 export function catalogItem(id: string): CatalogItem | undefined {
   return CATALOG.find((i) => i.id === id);

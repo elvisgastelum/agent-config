@@ -56,7 +56,7 @@ const SHORT_COMMANDS: Record<string, string> = { i: "install", u: "self-update" 
 const HELP = `agent-config ${VERSION}
 Configure Claude Code, OpenCode, Codex and Pi from a catalog of abilities, such as
 the model ladder (route reads and edits to the cheapest capable model: fast → balanced
-→ deep) and Kaneo work tracking.
+→ deep), Kaneo work tracking and title-only commits.
 Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.3.0).
 
 Usage:
@@ -64,7 +64,7 @@ Usage:
   agent-config install             re-apply the saved catalog items (\`agi i\` for short)
   agent-config install <item>      add a catalog item, e.g. \`agi install model-ladder\` or
                                    \`agi install kaneo\` (--project <dir> for one repository
-                                   instead of your user config; kaneo only)
+                                   instead of your user config; not model-ladder)
   agent-config catalog             list catalog items and where they are installed
   agent-config status              list what agent-config installed and whether it changed
   agent-config uninstall [flags]   remove it and restore what it replaced
