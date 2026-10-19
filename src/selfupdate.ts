@@ -138,7 +138,8 @@ export function runUpdate(check: UpdateCheck, root = checkoutRoot()): UpdateResu
   // A copy still in the pre-rename location moves to the new one as part of the update.
   const moving = samePath(root, legacyInstallHome()) && !existsSync(defaultInstallHome());
   const target = moving ? defaultInstallHome() : installHome();
-  const finalRoot = moving ? target : root;
+  // Decided after the run: install.sh moves the copy only once the update works.
+  let finalRoot = root;
   const res = spawnSync("bash", [join(root, "install.sh")], {
     encoding: "utf8",
     stdio: ["ignore", "ignore", "pipe"],
@@ -154,6 +155,7 @@ export function runUpdate(check: UpdateCheck, root = checkoutRoot()): UpdateResu
     },
   });
   const log = res.stderr ?? "";
+  if (moving && !existsSync(root) && existsSync(target)) finalRoot = target;
   let after = "";
   try {
     after = git(finalRoot, "rev-parse", "--short", "HEAD");
@@ -161,7 +163,7 @@ export function runUpdate(check: UpdateCheck, root = checkoutRoot()): UpdateResu
     // Reported below as an inconsistent install.
   }
   if (res.status === 0) {
-    const moved = moving ? `, moved to ${target}` : "";
+    const moved = finalRoot === target && moving ? `, moved to ${target}` : "";
     return {
       ok: true,
       message: `Updated to v${check.latest?.version} (${after})${moved}`,

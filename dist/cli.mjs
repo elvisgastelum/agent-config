@@ -4047,7 +4047,7 @@ function runUpdate(check, root = checkoutRoot()) {
 	const before = check.current.commit;
 	const moving = samePath(root, legacyInstallHome()) && !existsSync(defaultInstallHome());
 	const target = moving ? defaultInstallHome() : installHome();
-	const finalRoot = moving ? target : root;
+	let finalRoot = root;
 	const res = spawnSync("bash", [join(root, "install.sh")], {
 		encoding: "utf8",
 		stdio: [
@@ -4065,12 +4065,13 @@ function runUpdate(check, root = checkoutRoot()) {
 		}
 	});
 	const log = res.stderr ?? "";
+	if (moving && !existsSync(root) && existsSync(target)) finalRoot = target;
 	let after = "";
 	try {
 		after = git(finalRoot, "rev-parse", "--short", "HEAD");
 	} catch {}
 	if (res.status === 0) {
-		const moved = moving ? `, moved to ${target}` : "";
+		const moved = finalRoot === target && moving ? `, moved to ${target}` : "";
 		return {
 			ok: true,
 			message: `Updated to v${check.latest?.version} (${after})${moved}`,
