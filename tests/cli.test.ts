@@ -173,6 +173,7 @@ test("a bare install plans the ladder first, even when it was added after anothe
   const plan = JSON.parse(run("install", "--dry-run", "--json").stdout).plan as { item: string }[];
   const firstKaneo = plan.findIndex((x) => x.item === "kaneo@user");
   expect(plan[0]?.item).toBe("model-ladder@user");
+  expect(firstKaneo).toBeGreaterThan(0);
   expect(plan.slice(firstKaneo).every((x) => x.item === "kaneo@user")).toBe(true);
 });
 
