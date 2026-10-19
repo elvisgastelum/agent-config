@@ -331,7 +331,3 @@ export function runtimeOps(runtime: Runtime, config: Config): Op[] {
   if (wanted.includes("review-models")) ops.push(...reviewOps(runtime, config));
   return ops;
 }
-
-export function allOps(config: Config): Op[] {
-  return config.runtimes.flatMap((r) => runtimeOps(r, config));
-}

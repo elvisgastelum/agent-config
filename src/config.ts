@@ -3,7 +3,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { catalogItem, type CatalogEntry } from "./catalog.ts";
-import { COMPONENTS, type LadderComponent } from "./ops.ts";
+import { COMPONENTS, LADDER_ITEM, type LadderComponent } from "./ops.ts";
 import { configPath } from "./paths.ts";
 import {
   DEFAULT_REVIEW_TIERS,
@@ -22,9 +22,9 @@ import {
 
 export const DEFAULT_MIN_LINES = 350;
 
+/** The ladder's settings live here; which runtimes get it is its `model-ladder` catalog entry. */
 export interface Config {
   version: 1;
-  runtimes: Runtime[];
   components: LadderComponent[];
   tiers: Record<Runtime, TierMap>;
   reviewTiers: Record<ReviewLens, Tier>;
@@ -36,7 +36,6 @@ export interface Config {
 export function defaultConfig(): Config {
   return {
     version: 1,
-    runtimes: [],
     components: [...COMPONENTS],
     tiers: {
       claude: defaultTierMap("claude"),
@@ -53,13 +52,12 @@ export function defaultConfig(): Config {
 /** Loads the saved config over the defaults, dropping anything unrecognized. */
 export function loadConfig(): Config {
   const config = defaultConfig();
-  let raw: Partial<Config>;
+  let raw: Partial<Config> & { runtimes?: unknown };
   try {
     raw = JSON.parse(readFileSync(configPath(), "utf8")) as Partial<Config>;
   } catch {
     return config;
   }
-  if (Array.isArray(raw.runtimes)) config.runtimes = raw.runtimes.filter(isRuntime);
   if (Array.isArray(raw.components)) {
     config.components = raw.components.filter((c): c is LadderComponent =>
       (COMPONENTS as readonly string[]).includes(c),
@@ -81,6 +79,10 @@ export function loadConfig(): Config {
   if (typeof raw.minLines === "number" && raw.minLines > 0)
     config.minLines = Math.floor(raw.minLines);
   if (Array.isArray(raw.catalog)) config.catalog = raw.catalog.flatMap(catalogEntry);
+  // Before 0.5.0 the ladder's runtimes were saved on their own; they become its catalog entry.
+  const legacy = Array.isArray(raw.runtimes) ? raw.runtimes.filter(isRuntime) : [];
+  if (legacy.length > 0 && !config.catalog.some((e) => e.item === LADDER_ITEM))
+    config.catalog.unshift({ item: LADDER_ITEM, runtimes: legacy, settings: {} });
   return config;
 }
 
@@ -88,14 +90,18 @@ export function loadConfig(): Config {
 function catalogEntry(raw: unknown): CatalogEntry[] {
   if (!raw || typeof raw !== "object") return [];
   const e = raw as Partial<CatalogEntry>;
-  if (typeof e.item !== "string" || !catalogItem(e.item)) return [];
-  if (e.project !== undefined && (typeof e.project !== "string" || !isAbsolute(e.project)))
+  const item = typeof e.item === "string" ? catalogItem(e.item) : undefined;
+  if (!item) return [];
+  if (
+    e.project !== undefined &&
+    (typeof e.project !== "string" || !isAbsolute(e.project) || item.userOnly)
+  )
     return [];
   const settings: Record<string, string> = {};
   for (const [k, v] of Object.entries(e.settings ?? {})) if (typeof v === "string") settings[k] = v;
   return [
     {
-      item: e.item,
+      item: item.id,
       ...(e.project ? { project: e.project } : {}),
       runtimes: Array.isArray(e.runtimes) ? e.runtimes.filter(isRuntime) : [],
       settings,

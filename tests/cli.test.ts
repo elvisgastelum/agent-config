@@ -45,8 +45,8 @@ test("install, status and uninstall round-trip with --json", () => {
   expect(read(join(home, ".claude/agents/ladder-read-deep.md"))).toContain(
     "model: claude-opus-5-5",
   );
-  expect(JSON.parse(read(join(home, ".config/agent-config/config.json"))).runtimes).toEqual([
-    "claude",
+  expect(JSON.parse(read(join(home, ".config/agent-config/config.json"))).catalog).toEqual([
+    { item: "model-ladder", runtimes: ["claude"], settings: {} },
   ]);
 
   const status = JSON.parse(run("status", "--json").stdout);
@@ -123,7 +123,84 @@ test("install kaneo adds only the catalog item; catalog lists it; uninstall kane
   expect(removed.code).toBe(0);
   expect(existsSync(join(home, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toBe(false);
   expect(existsSync(join(home, ".claude.json"))).toBe(false);
-  expect(JSON.parse(run("catalog", "--json").stdout).items[0].entries).toEqual([]);
+  const after = JSON.parse(run("catalog", "--json").stdout).items;
+  expect(after.find((i: { id: string }) => i.id === "kaneo").entries).toEqual([]);
+});
+
+test("install model-ladder installs only the ladder; uninstall model-ladder keeps kaneo", () => {
+  const kaneo = ["install", "kaneo", "--runtime", "claude", "--url", "https://k.example.com"];
+  expect(run(...kaneo, "--yes").code).toBe(0);
+  const installed = run(
+    "install",
+    "model-ladder",
+    "--runtime",
+    "claude",
+    "--model",
+    "claude:deep=claude-opus-5-5",
+    "--yes",
+    "--json",
+  );
+  expect(installed.code).toBe(0);
+  const plan = JSON.parse(installed.stdout).plan as { item: string }[];
+  expect(plan.length).toBeGreaterThan(0);
+  expect(plan.every((x) => x.item === "model-ladder@user")).toBe(true);
+  expect(read(join(home, ".claude/agents/ladder-read-deep.md"))).toContain(
+    "model: claude-opus-5-5",
+  );
+
+  const listed = JSON.parse(run("catalog", "--json").stdout);
+  expect(listed.items.map((i: { id: string }) => i.id)).toEqual(["model-ladder", "kaneo"]);
+  expect(listed.items[0].entries).toMatchObject([{ scope: "user", runtimes: ["claude"] }]);
+  expect(run("catalog").stdout).toContain("install: agent-config install model-ladder\n");
+
+  // A bare install re-applies both saved items and changes nothing.
+  const again = run("install", "--yes", "--json");
+  expect(again.code).toBe(0);
+  expect(JSON.parse(again.stdout).applied).toBe(false);
+
+  expect(run("uninstall", "model-ladder", "--yes").code).toBe(0);
+  expect(existsSync(join(home, ".claude/agents/ladder-read-deep.md"))).toBe(false);
+  expect(existsSync(join(home, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);
+  const saved = JSON.parse(read(join(home, ".config/agent-config/config.json"))).catalog;
+  expect(saved.map((e: { item: string }) => e.item)).toEqual(["kaneo"]);
+});
+
+test("a bare install with nothing saved asks for a catalog item instead of installing the ladder", () => {
+  const res = run("install", "--yes");
+  expect(res.code).toBe(2);
+  expect(res.stderr).toContain("agent-config install model-ladder");
+  expect(existsSync(join(home, ".claude"))).toBe(false);
+});
+
+test("install model-ladder refuses --project", () => {
+  const res = run("install", "model-ladder", "--project", home, "--runtime", "claude");
+  expect(res.code).toBe(2);
+  expect(res.stderr).toContain("user scope only");
+});
+
+test("a 0.4.0 ladder install migrates to the model-ladder entry without reinstalling", () => {
+  expect(run("install", "--runtime", "claude", "--yes").code).toBe(0);
+  // Rewrite the state as 0.4.0 left it: runtimes saved on their own, records without an item.
+  const cfg = join(home, ".config/agent-config/config.json");
+  const manifest = join(home, ".local/state/agent-config/manifest.json");
+  const config = JSON.parse(read(cfg));
+  writeFileSync(cfg, JSON.stringify({ ...config, runtimes: ["claude"], catalog: [] }));
+  const state = JSON.parse(read(manifest));
+  for (const r of state.records) delete r.item;
+  writeFileSync(manifest, JSON.stringify(state));
+
+  const plan = JSON.parse(run("install", "--dry-run", "--json").stdout).plan;
+  expect(plan.length).toBeGreaterThan(0);
+  // Review models skip without Gentle AI agents; everything installed stays as it is.
+  expect(plan.filter((x: { action: string }) => !["unchanged", "skip"].includes(x.action))).toEqual(
+    [],
+  );
+  const listed = JSON.parse(run("catalog", "--json").stdout).items[0];
+  expect(listed.entries).toMatchObject([{ runtimes: ["claude"], files: state.records.length }]);
+
+  expect(run("uninstall", "model-ladder", "--yes").code).toBe(0);
+  expect(existsSync(join(home, ".claude/agents/ladder-read-fast.md"))).toBe(false);
+  expect(JSON.parse(run("status", "--json").stdout).entries).toEqual([]);
 });
 
 test("install kaneo --project writes into the repository and reuses the user's Kaneo URL", () => {
@@ -161,7 +238,7 @@ test("catalog usage errors exit 2", () => {
   const badUrl = run("install", "kaneo", "--runtime", "claude", "--url", "ftp://x");
   expect(badUrl.code).toBe(2);
   const ladderFlag = run("install", "kaneo", "--url", "https://k.example.com", "--min-lines", "9");
-  expect(ladderFlag.stderr).toContain("configures the ladder");
+  expect(ladderFlag.stderr).toContain("configures the model ladder");
   expect(ladderFlag.code).toBe(2);
   expect(
     run("install", "kaneo", "--project", join(home, "missing"), "--url", "https://k.example.com")

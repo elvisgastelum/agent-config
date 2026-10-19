@@ -69,7 +69,9 @@ test("moves the pre-rename state and configuration on first run", () => {
   expect(res.stderr).toContain("renamed from model-ladder");
   expect(existsSync(p(".local/state/model-ladder"))).toBe(false);
   expect(existsSync(p(".config/model-ladder"))).toBe(false);
-  expect(JSON.parse(read(p(".config/agent-config/config.json"))).runtimes).toEqual(["claude"]);
+  expect(JSON.parse(read(p(".config/agent-config/config.json"))).catalog).toMatchObject([
+    { item: "model-ladder", runtimes: ["claude"] },
+  ]);
   const backups = JSON.parse(read(p(".local/state/agent-config/manifest.json")))
     .records.map((r: { backup?: string }) => r.backup)
     .filter(Boolean);

@@ -47,6 +47,11 @@ export type LadderComponent = (typeof COMPONENTS)[number];
 /** Ladder parts, plus "catalog" for items installed from the catalog (see `item`). */
 export type Component = LadderComponent | "catalog";
 
+/** The ladder's catalog item; its parts keep their own components instead of "catalog". */
+export const LADDER_ITEM = "model-ladder";
+/** The ladder's entry key: it installs at user scope only. */
+export const LADDER_KEY = `${LADDER_ITEM}@user`;
+
 export const COMPONENT_LABELS: Record<Component, string> = {
   agents: "Ladder agents (read + edit on fast, balanced, deep)",
   skill: "Routing skill (when to delegate, how to climb)",
@@ -219,7 +224,14 @@ export function loadManifest(): Manifest {
   const text = readText(statePaths().manifest);
   if (!text) return { version: 1, records: [] };
   const data = JSON.parse(text) as Manifest;
-  return { version: 1, records: Array.isArray(data.records) ? data.records : [] };
+  const records = Array.isArray(data.records) ? data.records : [];
+  // Before 0.5.0 the ladder was not a catalog item, so its records carry no item.
+  return {
+    version: 1,
+    records: records.map((r) =>
+      r.item === undefined && r.component !== "catalog" ? { ...r, item: LADDER_KEY } : r,
+    ),
+  };
 }
 
 export function saveManifest(manifest: Manifest): void {

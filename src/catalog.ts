@@ -1,6 +1,6 @@
-// The catalog: optional abilities installed on demand (`agent-config install kaneo`), either at
-// user scope (each runtime's home config) or at project scope (one repository). An item is
-// rendered into ordinary ops, so status, updates and uninstall treat it like the ladder.
+// The catalog: abilities installed on demand (`agent-config install model-ladder`, `... kaneo`),
+// either at user scope (each runtime's home config) or at project scope (one repository). An
+// item is rendered into ordinary ops, so status, updates and uninstall treat every item alike.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -19,9 +19,9 @@ import {
   kaneoSkillMarkdown,
   kaneoUrlWarning,
 } from "./kaneo.ts";
-import { opKey, type Op } from "./ops.ts";
+import { LADDER_ITEM, opKey, type Op } from "./ops.ts";
 import { claudeDir, claudeJsonPath, codexDir, opencodeDir, piDir } from "./paths.ts";
-import { opencodeConfigPath, tomlMultiline } from "./runtimes.ts";
+import { opencodeConfigPath, runtimeOps, tomlMultiline } from "./runtimes.ts";
 import type { Runtime, TierMap } from "./tiers.ts";
 
 export type Scope = "user" | "project";
@@ -52,9 +52,11 @@ export interface CatalogItem {
   title: string;
   description: string;
   settings: CatalogSetting[];
+  /** Installs into each runtime's home config only; `--project` is refused. */
+  userOnly?: boolean;
   /** Setting values already configured on this machine, offered as defaults. */
   discover: () => Record<string, string>;
-  ops: (entry: CatalogEntry, runtime: Runtime, tiers: TierMap) => Op[];
+  ops: (entry: CatalogEntry, runtime: Runtime, config: Config) => Op[];
 }
 
 /** Identifies an entry in the config and its ops in the manifest: "kaneo@user" or "kaneo@/repo". */
@@ -243,6 +245,21 @@ function kaneoMcpOp(runtime: Runtime, project: string | undefined, url: string):
   }
 }
 
+/**
+ * The model ladder: ladder agents, routing skill, instructions, read guard and review models.
+ * Its parts, rungs and models are the top-level ladder settings of the saved configuration.
+ */
+const modelLadder: CatalogItem = {
+  id: LADDER_ITEM,
+  title: "Model ladder",
+  description:
+    "Route reads and edits to the cheapest capable model (fast → balanced → deep): ladder agents, skill, instructions, read guard, review models.",
+  settings: [],
+  userOnly: true,
+  discover: () => ({}),
+  ops: (_entry, runtime, config) => runtimeOps(runtime, config),
+};
+
 const kaneo: CatalogItem = {
   id: "kaneo",
   title: "Kaneo work tracking",
@@ -267,7 +284,8 @@ const kaneo: CatalogItem = {
     const url = found && kaneoBaseUrl(found);
     return url ? { url } : {};
   },
-  ops: (entry, runtime, tiers) => {
+  ops: (entry, runtime, config) => {
+    const tiers = config.tiers[runtime];
     const where = layout(runtime, entry.project);
     const scribe = scribeAgent(runtime, where.agents, tiers);
     const ops: Op[] = [
@@ -309,10 +327,15 @@ const kaneo: CatalogItem = {
   },
 };
 
-export const CATALOG: CatalogItem[] = [kaneo];
+export const CATALOG: CatalogItem[] = [modelLadder, kaneo];
 
 export function catalogItem(id: string): CatalogItem | undefined {
   return CATALOG.find((i) => i.id === id);
+}
+
+/** The runtimes the model ladder is installed for; empty when it is not installed. */
+export function ladderRuntimes(config: Config): Runtime[] {
+  return config.catalog.find((e) => e.item === LADDER_ITEM)?.runtimes ?? [];
 }
 
 /** One line per skipped project entry, telling how to forget it. */
@@ -340,7 +363,7 @@ export function catalogOps(config: Config, keys?: string[]): Op[] {
     const item = catalogItem(entry.item);
     if (!item || (keys && !keys.includes(key)) || missing.has(key)) continue;
     for (const runtime of entry.runtimes) {
-      for (const op of item.ops(entry, runtime, config.tiers[runtime])) {
+      for (const op of item.ops(entry, runtime, config)) {
         const tagged = { ...op, item: key } as Op;
         if (!ops.has(opKey(tagged))) ops.set(opKey(tagged), tagged);
       }
@@ -358,7 +381,7 @@ export interface EntryDefaults {
 
 /**
  * Defaults for installing an item at a scope, shared by the CLI and the TUI: runtimes come from
- * the saved entry, else the configured runtimes, else detection; settings from the saved entry,
+ * the saved entry, else the ladder's runtimes, else detection; settings from the saved entry,
  * else what this machine already has configured.
  */
 export function entryDefaults(
@@ -368,10 +391,11 @@ export function entryDefaults(
   detected: () => Runtime[],
 ): EntryDefaults {
   const saved = config.catalog.find((e) => entryKey(e) === entryKey({ item: item.id, project }));
+  const ladder = ladderRuntimes(config);
   const runtimes = saved?.runtimes.length
     ? saved.runtimes
-    : config.runtimes.length > 0
-      ? config.runtimes
+    : ladder.length > 0
+      ? ladder
       : detected();
   const discovered = item.discover();
   const settings: EntryDefaults["settings"] = {};
