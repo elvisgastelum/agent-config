@@ -138,6 +138,27 @@ test("install.sh links agi to agent-config and uninstall removes it", () => {
   }
 });
 
+// Updating runs the old checkout's install.sh, so the new CLI adds a missing agi link itself.
+test("the installed command adds agi when an older installer left it out", () => {
+  const h = join(root, "agi-upgrade");
+  const bin = join(h, ".local", "bin");
+  expect(runInstaller(h).status).toBe(0);
+  rmSync(join(bin, "agi"));
+  const entry = join(h, ".local", "share", "agent-config", "dist", "cli.mjs");
+  const res = cliIn({ HOME: h, AGENT_CONFIG_BIN_DIR: bin }, entry, "config", "--json");
+  expect(res.code).toBe(0);
+  expect(() => JSON.parse(res.stdout)).not.toThrow();
+  expect(readlinkSync(join(bin, "agi"))).toBe("agent-config");
+  // A foreign agi stays, and without a wrapper-set bin dir nothing is linked.
+  rmSync(join(bin, "agi"));
+  writeFileSync(join(bin, "agi"), "other");
+  expect(cliIn({ HOME: h, AGENT_CONFIG_BIN_DIR: bin }, entry, "config").code).toBe(0);
+  expect(readFileSync(join(bin, "agi"), "utf8")).toBe("other");
+  rmSync(join(bin, "agi"));
+  expect(cliIn({ HOME: h }, entry, "config").code).toBe(0);
+  expect(existsSync(join(bin, "agi"))).toBe(false);
+});
+
 test("install.sh leaves an agi command it did not create alone", () => {
   const h = join(root, "agi-foreign");
   const bin = join(h, ".local", "bin");

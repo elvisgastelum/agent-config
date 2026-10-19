@@ -14,7 +14,13 @@ import { applyPlan, COMPONENTS, uninstall, type Component } from "./ops.ts";
 import { EFFORTS, isReviewLens, isRuntime, isTier, type Effort, type Runtime } from "./tiers.ts";
 import { formatPlan, runTui } from "./tui.ts";
 import { DELEGATED_ENV, LEGACY_DELEGATED_ENV, delegate } from "./delegate.ts";
-import { checkForUpdate, defaultInstallHome, legacyInstallHome, runUpdate } from "./selfupdate.ts";
+import {
+  checkForUpdate,
+  defaultInstallHome,
+  ensureAgiAlias,
+  legacyInstallHome,
+  runUpdate,
+} from "./selfupdate.ts";
 import { VERSION } from "./version.ts";
 
 const HELP = `agent-config ${VERSION}
@@ -167,6 +173,7 @@ async function main(argv: string[]): Promise<number> {
 
   const command = positionals[0] ?? "";
   const migration = migrateLegacyLayout();
+  ensureAgiAlias();
   for (const dir of migration.moved) {
     process.stderr.write(
       `agent-config: moved ${dir} to its agent-config location (renamed from model-ladder)\n`,
