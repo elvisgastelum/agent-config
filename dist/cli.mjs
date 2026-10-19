@@ -5747,7 +5747,8 @@ Usage:
   agent-config uninstall <item>    remove only that catalog item (--project <dir> for its project copy)
   agent-config doctor              check runtimes and prerequisites
   agent-config config              print the saved configuration and its path
-  agent-config self-update         update agent-config itself (--dry-run only checks)
+  agent-config self-update         update agent-config itself (--dry-run only checks);
+                                   \`agent-config update\` is the same command
   agent-config delegate <read|edit> [--tier t] [--runtime r] "<task>"
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
@@ -6195,6 +6196,7 @@ async function main(argv) {
 			if (!last || last.status === "error") return 1;
 			return last.status === "done" ? 0 : 3;
 		}
+		case "update":
 		case "self-update": {
 			const check = checkForUpdate();
 			const summary = !check.updatable ? `cannot update: ${check.reason}` : (check.behind === 0 || !check.latest) && !check.relocate ? `up to date: v${check.current.version} (${check.current.commit})` : check.behind === 0 ? `up to date, but still in the pre-rename location ${legacyInstallHome()}: updating moves it to ${defaultInstallHome()}` : `update available: v${check.current.version} (${check.current.commit}) -> v${check.latest?.version} (${check.latest?.commit}), ${check.behind} commit(s)`;

@@ -75,6 +75,12 @@ test("reports up to date when origin has nothing new", () => {
   expect(JSON.parse(res.stdout).check).toMatchObject({ updatable: true, behind: 0 });
 });
 
+test("update is the same command as self-update", () => {
+  const update = cli(installedCli, "update", "--dry-run", "--json");
+  expect(update.code).toBe(0);
+  expect(update.stdout).toBe(cli(installedCli, "self-update", "--dry-run", "--json").stdout);
+});
+
 // A pre-rename install: the same checkout under ~/.local/share/model-ladder.
 function legacyHome(name: string): { home: string; legacy: string } {
   const h = join(root, name);

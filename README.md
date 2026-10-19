@@ -20,7 +20,7 @@ A **catalog** adds optional abilities on demand, for your user config or one rep
 curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh | bash
 ```
 
-Requires only **git** and **Node.js 22.12 or newer** (24 LTS recommended); the installer stops with a clear message if either is missing. The CLI ships prebuilt and self-contained in `dist/cli.mjs`, so nothing is installed or built on your machine: the installer clones to `~/.local/share/agent-config`, checks Node, adds `agent-config` to `~/.local/bin` (with `agi` as a short alias, linked to it unless another `agi` is already there) and opens the TUI. Update from the TUI (**Update agent-config version**), with `agent-config self-update`, or by re-running the one-liner; a failed update rolls back to the previous version.
+Requires only **git** and **Node.js 22.12 or newer** (24 LTS recommended); the installer stops with a clear message if either is missing. The CLI ships prebuilt and self-contained in `dist/cli.mjs`, so nothing is installed or built on your machine: the installer clones to `~/.local/share/agent-config`, checks Node, adds `agent-config` to `~/.local/bin` (with `agi` as a short alias, linked to it unless another `agi` is already there) and opens the TUI. Update from the TUI (**Update agent-config version**), with `agent-config self-update` (or `agent-config update`), or by re-running the one-liner; a failed update rolls back to the previous version.
 
 Non-interactive (scripts and agents):
 
@@ -53,19 +53,19 @@ Also: **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (
 
 ## Commands
 
-| Command                                       | What it does                                                                                                                                            |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent-config`                                | Opens the TUI.                                                                                                                                          |
-| `agent-config install`                        | Applies the saved choices (or detected runtimes on first run). Asks to confirm.                                                                         |
-| `agent-config install <item>`                 | Adds a catalog item, e.g. `agi install kaneo`. `--project <dir>` installs it into one repository instead of your user config. See [Catalog](#catalog).  |
-| `agent-config catalog`                        | Lists catalog items and where each one is installed.                                                                                                    |
-| `agent-config status`                         | Lists what agent-config installed and whether it still matches.                                                                                         |
-| `agent-config uninstall`                      | Undoes it. `--runtime` limits it to some agents.                                                                                                        |
-| `agent-config uninstall <item>`               | Removes only that catalog item (`--project <dir>` for its project copy).                                                                                |
-| `agent-config doctor`                         | Checks runtimes and prerequisites.                                                                                                                      |
-| `agent-config config`                         | Prints the saved choices and their path.                                                                                                                |
-| `agent-config self-update`                    | Updates agent-config itself from GitHub (`--dry-run` only checks). Then run `agent-config install` to re-apply your configuration with the new version. |
-| `agent-config delegate <read\|edit> "<task>"` | Runs a ladder agent headlessly and prints only its reply. For agents that cannot spawn subagents. See below.                                            |
+| Command                                       | What it does                                                                                                                                                                                 |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent-config`                                | Opens the TUI.                                                                                                                                                                               |
+| `agent-config install`                        | Applies the saved choices (or detected runtimes on first run). Asks to confirm.                                                                                                              |
+| `agent-config install <item>`                 | Adds a catalog item, e.g. `agi install kaneo`. `--project <dir>` installs it into one repository instead of your user config. See [Catalog](#catalog).                                       |
+| `agent-config catalog`                        | Lists catalog items and where each one is installed.                                                                                                                                         |
+| `agent-config status`                         | Lists what agent-config installed and whether it still matches.                                                                                                                              |
+| `agent-config uninstall`                      | Undoes it. `--runtime` limits it to some agents.                                                                                                                                             |
+| `agent-config uninstall <item>`               | Removes only that catalog item (`--project <dir>` for its project copy).                                                                                                                     |
+| `agent-config doctor`                         | Checks runtimes and prerequisites.                                                                                                                                                           |
+| `agent-config config`                         | Prints the saved choices and their path.                                                                                                                                                     |
+| `agent-config self-update`                    | Updates agent-config itself from GitHub (`--dry-run` only checks). Then run `agent-config install` to re-apply your configuration with the new version. `agent-config update` does the same. |
+| `agent-config delegate <read\|edit> "<task>"` | Runs a ladder agent headlessly and prints only its reply. For agents that cannot spawn subagents. See below.                                                                                 |
 
 | Flag                                            | Meaning                                                                        |
 | ----------------------------------------------- | ------------------------------------------------------------------------------ |
