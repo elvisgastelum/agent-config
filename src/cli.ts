@@ -9,21 +9,29 @@ import pc from "picocolors";
 import {
   CATALOG,
   catalogItem,
+  entryDefaults,
   entryKey,
-  forgetCatalog,
+  missingProjectWarnings,
   scopeLabel,
   upsertEntry,
   type CatalogEntry,
   type CatalogItem,
 } from "./catalog.ts";
-import { buildPlan, detectedRuntimes, doctor, restoreShared, status, tildify } from "./commands.ts";
+import {
+  buildPlan,
+  Cancelled,
+  detectedRuntimes,
+  doctor,
+  status,
+  tildify,
+  uninstallSelection,
+} from "./commands.ts";
 import { loadConfig, saveConfig, type Config } from "./config.ts";
 import { migrateLegacyLayout } from "./migrate.ts";
 import { configPath, setting } from "./paths.ts";
 import {
   applyPlan,
   COMPONENTS,
-  uninstall,
   type LadderComponent,
   type ManifestRecord,
   type PlannedOp,
@@ -169,9 +177,14 @@ function out(json: boolean, data: unknown, text: string): void {
   process.stdout.write(json ? `${JSON.stringify(data, null, 2)}\n` : `${text}\n`);
 }
 
+/**
+ * The item and scope a command names. Uninstall also accepts a project directory that is gone,
+ * when agent-config still knows an entry or installed files for it.
+ */
 function catalogTarget(
   id: string,
   values: Record<string, unknown>,
+  forUninstall = false,
 ): { item: CatalogItem; project?: string } {
   const item = catalogItem(id);
   if (!item) {
@@ -182,9 +195,13 @@ function catalogTarget(
   const raw = values.project as string | undefined;
   if (raw === undefined) return { item };
   const project = resolve(raw);
-  if (!existsSync(project) || !statSync(project).isDirectory())
-    throw new UsageError(`--project ${project} is not a directory`);
-  return { item, project };
+  if (existsSync(project) && statSync(project).isDirectory()) return { item, project };
+  const key = entryKey({ item: item.id, project });
+  const known =
+    loadConfig().catalog.some((e) => entryKey(e) === key) ||
+    status().some((e) => e.record.item === key);
+  if (forUninstall && known) return { item, project };
+  throw new UsageError(`--project ${project} is not a directory`);
 }
 
 /** The catalog entry to install: flags first, then what was saved, detected, or asked. */
@@ -194,47 +211,45 @@ async function catalogEntryFor(
   config: Config,
   values: Record<string, unknown>,
 ): Promise<CatalogEntry> {
-  const saved = config.catalog.find((e) => entryKey(e) === entryKey({ item: item.id, project }));
+  const defaults = entryDefaults(item, project, config, detectedRuntimes);
   const flagged = (values.runtime as string[] | undefined) ?? [];
   for (const r of flagged) if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
-  const runtimes =
-    flagged.length > 0
-      ? (flagged as Runtime[])
-      : saved?.runtimes.length
-        ? saved.runtimes
-        : config.runtimes.length > 0
-          ? config.runtimes
-          : detectedRuntimes();
+  const runtimes = flagged.length > 0 ? (flagged as Runtime[]) : defaults.runtimes;
   if (runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
-  const discovered = item.discover();
   const settings: Record<string, string> = {};
   for (const s of item.settings) {
     const raw = values[s.flag] as string | undefined;
+    const known = defaults.settings[s.key];
+    let value: string;
     if (raw !== undefined) {
-      const value = s.normalize(raw);
-      if (!value) throw new UsageError(`--${s.flag} expects a value like ${s.placeholder}`);
-      settings[s.key] = value;
-      continue;
+      const normalized = s.normalize(raw);
+      if (!normalized) throw new UsageError(`--${s.flag} expects a value like ${s.placeholder}`);
+      value = normalized;
+    } else if (known) {
+      value = known.value;
+      // A value found in the user's own config is about to be written into the repository.
+      if (known.source === "discovered" && project) {
+        process.stderr.write(
+          `agent-config: using ${s.message.toLowerCase()} ${value} from your user config; it is written into ${project}. Pass --${s.flag} to choose another.\n`,
+        );
+      }
+    } else {
+      if (!process.stdin.isTTY || !process.stdout.isTTY)
+        throw new UsageError(`${item.id} needs --${s.flag} <${s.placeholder}>`);
+      const answer = await p.text({
+        message: s.message,
+        placeholder: s.placeholder,
+        validate: (v) => (s.normalize(v ?? "") ? undefined : `Enter a value like ${s.placeholder}`),
+      });
+      if (p.isCancel(answer)) throw new Cancelled();
+      value = s.normalize(answer) ?? "";
     }
-    const known = saved?.settings[s.key] ?? discovered[s.key];
-    if (known) {
-      settings[s.key] = known;
-      continue;
-    }
-    if (!process.stdin.isTTY || !process.stdout.isTTY)
-      throw new UsageError(`${item.id} needs --${s.flag} <${s.placeholder}>`);
-    const answer = await p.text({
-      message: s.message,
-      placeholder: s.placeholder,
-      validate: (v) => (s.normalize(v ?? "") ? undefined : `Enter a value like ${s.placeholder}`),
-    });
-    if (p.isCancel(answer)) throw new Cancelled();
-    settings[s.key] = s.normalize(answer) ?? "";
+    const warning = s.warning?.(value);
+    if (warning) process.stderr.write(`agent-config: warning: ${warning}\n`);
+    settings[s.key] = value;
   }
   return { item: item.id, ...(project ? { project } : {}), runtimes, settings };
 }
-
-class Cancelled extends Error {}
 
 /** Shows the plan, asks unless --yes, applies it and saves the configuration. */
 async function applyAndReport(
@@ -390,6 +405,8 @@ async function main(argv: string[]): Promise<number> {
       }
       applyFlags(config, values);
       if (config.runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
+      for (const w of missingProjectWarnings(config))
+        process.stderr.write(`agent-config: warning: ${w}\n`);
       return applyAndReport(buildPlan(config), config, values, json);
     }
     case "catalog": {
@@ -443,26 +460,16 @@ async function main(argv: string[]): Promise<number> {
       for (const r of runtimes) if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
       const key = itemId
         ? (() => {
-            const { item, project } = catalogTarget(itemId, values);
+            const { item, project } = catalogTarget(itemId, values, true);
             return entryKey({ item: item.id, project });
           })()
         : undefined;
       const match = (r: ManifestRecord) =>
         (key === undefined || r.item === key) &&
         (runtimes.length === 0 || runtimes.includes(r.runtime));
-      const forget = (config: Config) => {
-        if (key) return forgetCatalog(config, (e) => entryKey(e) === key, runtimes);
-        config.runtimes =
-          runtimes.length === 0 ? [] : config.runtimes.filter((r) => !runtimes.includes(r));
-        forgetCatalog(config, () => true, runtimes);
-      };
       const entries = status().filter((e) => match(e.record));
-      if (entries.length === 0 && key && !values["dry-run"]) {
-        // Nothing on disk, but forget a saved entry so `install` does not bring it back.
-        const config = loadConfig();
-        forget(config);
-        saveConfig(config);
-      }
+      // Nothing on disk: still forget a saved entry so `install` does not bring it back.
+      if (entries.length === 0 && key && !values["dry-run"]) uninstallSelection({ key, runtimes });
       if (entries.length === 0) return (out(json, { results: [] }, "Nothing to uninstall."), 0);
       if (values["dry-run"]) {
         out(
@@ -480,15 +487,10 @@ async function main(argv: string[]): Promise<number> {
         const ok = await p.confirm({ message: `Undo ${entries.length} change(s)?` });
         if (p.isCancel(ok) || !ok) return 130;
       }
-      const results = uninstall(match, values.force === true);
-      const config = loadConfig();
-      forget(config);
-      saveConfig(config);
-      // Only a partial uninstall can leave other runtimes needing a file it removed.
-      const removed = results
-        .filter((r) => r.outcome !== "kept-modified")
-        .map((r) => r.record.path);
-      const restoreErrors = runtimes.length > 0 ? restoreShared(config, removed) : [];
+      const { results, restoreErrors } = uninstallSelection(
+        { ...(key ? { key } : {}), runtimes },
+        values.force === true,
+      );
       out(
         json,
         {

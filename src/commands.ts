@@ -3,8 +3,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { catalogOps, entryKey } from "./catalog.ts";
-import type { Config } from "./config.ts";
+import { catalogOps, entryKey, forgetCatalog, missingProjects } from "./catalog.ts";
+import { loadConfig, saveConfig, type Config } from "./config.ts";
 import {
   applyPlan,
   type ApplyResult,
@@ -17,11 +17,16 @@ import {
   type ManifestRecord,
   type PlannedOp,
   type RecordState,
+  type UndoResult,
+  uninstall,
 } from "./ops.ts";
 import { codexDir, home, piDir, RUNTIME_BIN, runtimeDir } from "./paths.ts";
 import { allOps } from "./runtimes.ts";
 import { defaultInstallHome, legacyInstallHome } from "./selfupdate.ts";
 import { RUNTIMES, type Runtime } from "./tiers.ts";
+
+/** The user cancelled a prompt (Ctrl+C); the CLI exits 130. */
+export class Cancelled extends Error {}
 
 export function onPath(bin: string): boolean {
   try {
@@ -63,7 +68,9 @@ export function buildPlan(config: Config, only?: string[]): PlannedOp[] {
   const catalog = catalogOps(config, only);
   const ops = [...ladder, ...catalog];
   const wanted = new Set(ops.map(opKey));
-  const planned = new Set(only ?? config.catalog.map(entryKey));
+  // Entries whose project directory is gone are neither applied nor cleaned up from here.
+  const missing = new Set(missingProjects(config).map(entryKey));
+  const planned = new Set((only ?? config.catalog.map(entryKey)).filter((k) => !missing.has(k)));
   // Installed items of the selected runtimes and parts that the configuration no longer
   // produces (a moved hook, a renamed setting, a runtime dropped from a catalog entry) are
   // undone, so nothing stale stays behind. Parts that were not selected are left alone.
@@ -88,6 +95,47 @@ export function restoreShared(config: Config, removed: string[]): ApplyResult["e
   const paths = new Set(removed);
   const plan = buildPlan(config, config.catalog.map(entryKey));
   return applyPlan(plan.filter((x) => x.action === "create" && paths.has(x.op.path))).errors;
+}
+
+export interface UninstallOutcome {
+  results: UndoResult[];
+  /** Shared files the remaining runtimes need that could not be put back. */
+  restoreErrors: ApplyResult["errors"];
+}
+
+/**
+ * Undoes what agent-config installed, limited to one catalog entry (`key`) and/or some runtimes,
+ * then updates the saved configuration so `install` does not bring it back. An entry whose files
+ * were kept because the user changed them stays saved, so a later `--force` run can remove them.
+ */
+export function uninstallSelection(
+  selection: { key?: string; runtimes: string[] },
+  force = false,
+): UninstallOutcome {
+  const { key, runtimes } = selection;
+  const results = uninstall(
+    (r) =>
+      (key === undefined || r.item === key) &&
+      (runtimes.length === 0 || runtimes.includes(r.runtime)),
+    force,
+  );
+  const kept = new Set(
+    results.filter((r) => r.outcome === "kept-modified").map((r) => r.record.item),
+  );
+  const config = loadConfig();
+  if (key === undefined)
+    config.runtimes =
+      runtimes.length === 0 ? [] : config.runtimes.filter((r) => !runtimes.includes(r));
+  forgetCatalog(
+    config,
+    (e) => (key === undefined || entryKey(e) === key) && !kept.has(entryKey(e)),
+    runtimes,
+  );
+  saveConfig(config);
+  // Only a partial uninstall can leave other runtimes needing a file it removed.
+  const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
+  const restoreErrors = runtimes.length > 0 ? restoreShared(config, removed) : [];
+  return { results, restoreErrors };
 }
 
 export function tildify(path: string): string {

@@ -10,7 +10,7 @@ Objective: move the kaneo-work-tracking skill into agent-config as the first ins
 - S4. "create a section "catalog" to make this kaneo-work-tracking as a installable and uninstallable skill with his mcp for a system or project as selected by the user" — user scope (home config) or project scope (a repository directory), in the TUI and the CLI.
 - S5. "or running a simple `agi install kaneo` to add the new ability to the agents" — plus `agi uninstall kaneo`.
 - S6. Track the work in Kaneo project https://kaneo.elvisgastelum.com/dashboard/workspace/hvGC20t2pPWwL3iamuq86zXJgvHchGXh/project/xt5aarkpa7iu44awxurrij3s (slug `PV`).
-- Assumption A1: Pi gets MCP through its MCP adapter at user scope (`~/.pi/agent/mcp.json`); project-scope Pi MCP is skipped because no project file is documented.
+- A1 (verified, L9): Pi reads MCP servers from `~/.pi/agent/mcp.json` (user) and `.pi/mcp.json` (project).
 - Assumption A2: a pre-existing `kaneo-work-tracking-skill` block in CLAUDE.md is replaced in place by the agent-config block.
 
 ## Tasks
@@ -21,6 +21,8 @@ Objective: move the kaneo-work-tracking skill into agent-config as the first ins
 - T4 [S5] PV-4 CLI `install kaneo`, `uninstall kaneo`, `catalog` — inline — done (0021aa2)
 - T5 [S4] PV-5 TUI catalog section — inline — done (0b3fd06)
 - T6 [S1] PV-6 README, CLAUDE.md, `vp pack` dist — inline — done (10612c2)
+
+- T7 [L8] review advisories: stale project entries, shared AGENTS.md wording, URL normalization and http warning, discovered-URL notice, Pi scribe tools and project MCP, shared Cancelled, shared entry resolver, skill PR list, shared item uninstall (TUI keeps entry on kept files), tests — inline — done
 
 Route evidence: one feature in one module set; no Writer trigger (units depend on each other), so the parent writes inline.
 
@@ -33,3 +35,6 @@ Route evidence: one feature in one module set; no Writer trigger (units depend o
 - L5 Independent verifier (Sonnet): S1-S6 and probes 1-6 pass, no blockers; advisory: uninstall after a legacy-block migration does not restore the old standalone block (A2 only asks for replacement in place).
 - L6 Native review (risk + reliability) of origin/main..10612c2 approved and acknowledged; advisories fixed test-first in 6f5f74a (dry-run uninstall kept read-only, apply <item>, shared AGENTS.md block restored after partial uninstall; RED observed), then 8f67627 and 592ba5d (restore only removed paths, report restore errors, results printed before exit 1). Each fix commit reviewed (reliability), approved and acknowledged. Open non-blocking advisories: Pi scribe has no tool allowlist (documented in README), http Kaneo URLs accepted, TUI restore path and restore-failure exit untested. vp test 98/98, differential vs origin/main unchanged.
 - L7 Next: push and PR are the user's decision; the PR body starts with the Kaneo PV-3 link and links PV-1, PV-2, PV-4, PV-5, PV-6.
+- L8 (2026-10-18) User: "Fix them on this branch" — the 13 non-blocking advisories of the whole-branch review (lineage review-972f61e1db7ab77f).
+- L9 Discovery: Pi 1.0.2 has built-in MCP; user servers in ~/.pi/agent/mcp.json, project servers in .pi/mcp.json; tools are named mcp__<server>__<tool>; tool_search searches only undeclared (codemode/deferred) tools, while codemode scripts can call bash. A1 is replaced: Pi gets project MCP in .pi/mcp.json, and the Pi scribe gets tools: [tool_search].
+- L10 T7 done: Pi scribe tools [tool_search] and Pi project MCP (.pi/mcp.json); shared AGENTS.md block names every runtime that reads it; kaneoBaseUrl cuts /dashboard and /api paths, query and fragment, kaneoUrlWarning for non-local http; notice when a discovered URL is written into a project; one Cancelled class; entryDefaults shared by CLI and TUI; skill PR list reordered; uninstallSelection shared by CLI and TUI keeps an entry whose files were kept, TUI offers a forced removal; entries whose project directory is gone are skipped with a warning and can be uninstalled. Tests by ladder-edit-balanced (+11). vp test 109/109; differential vs origin/main unchanged; real-machine dry run 13 changes.

@@ -2583,6 +2583,98 @@ function applyEdits(text, edits) {
 	return text;
 }
 //#endregion
+//#region src/tiers.ts
+const RUNTIMES = [
+	"claude",
+	"opencode",
+	"codex",
+	"pi"
+];
+const TIERS = [
+	"fast",
+	"balanced",
+	"deep"
+];
+const ROLES = ["read", "edit"];
+const EFFORTS = [
+	"low",
+	"medium",
+	"high"
+];
+/** Gentle AI review agents whose model this tool can set. */
+const REVIEW_LENSES = [
+	"review-risk",
+	"review-resilience",
+	"review-readability",
+	"review-reliability",
+	"review-refuter"
+];
+const RUNTIME_LABELS = {
+	claude: "Claude Code",
+	opencode: "OpenCode",
+	codex: "Codex",
+	pi: "Pi"
+};
+const TIER_LABELS = {
+	fast: "fast (first try, mechanical work)",
+	balanced: "balanced (multi-step work, first escalation)",
+	deep: "deep (last resort before the parent takes over)"
+};
+const CLAUDE_IDS = {
+	fast: "claude-haiku-5-5",
+	balanced: "claude-sonnet-5-5",
+	deep: "claude-opus-5-5"
+};
+function defaultTierMap(runtime) {
+	const effort = {
+		fast: "low",
+		balanced: "medium",
+		deep: "high"
+	};
+	const model = (tier) => {
+		switch (runtime) {
+			case "claude": return CLAUDE_IDS[tier];
+			case "opencode":
+			case "pi": return `anthropic/${CLAUDE_IDS[tier]}`;
+			case "codex": return "";
+		}
+	};
+	return {
+		fast: {
+			model: model("fast"),
+			effort: effort.fast
+		},
+		balanced: {
+			model: model("balanced"),
+			effort: effort.balanced
+		},
+		deep: {
+			model: model("deep"),
+			effort: effort.deep
+		}
+	};
+}
+/** Which rung each Gentle AI review agent runs on. Readability is pattern work; the rest need judgment. */
+const DEFAULT_REVIEW_TIERS = {
+	"review-risk": "balanced",
+	"review-resilience": "balanced",
+	"review-readability": "fast",
+	"review-reliability": "balanced",
+	"review-refuter": "balanced"
+};
+function agentName(role, tier) {
+	return `ladder-${role}-${tier}`;
+}
+function isTier(value) {
+	return TIERS.includes(value);
+}
+function isRuntime(value) {
+	return RUNTIMES.includes(value);
+}
+function isReviewLens(value) {
+	return REVIEW_LENSES.includes(value);
+}
+//#endregion
 //#region src/kaneo.ts
 const KANEO_SKILL = "kaneo-work-tracking";
 const SCRIBE = "kaneo-scribe";
@@ -2622,14 +2714,21 @@ const CALL = {
 };
 /** The Kaneo web base URL, from what the user typed or an MCP endpoint. */
 function kaneoBaseUrl(raw) {
-	const text = raw.trim().replace(/\/+$/, "").replace(/\/api\/mcp$/, "");
+	let url;
 	try {
-		const url = new URL(text);
-		if (url.protocol !== "https:" && url.protocol !== "http:") return void 0;
-		return text;
+		url = new URL(raw.trim());
 	} catch {
 		return;
 	}
+	if (url.protocol !== "https:" && url.protocol !== "http:") return void 0;
+	const path = url.pathname.replace(/\/(dashboard|api)(\/.*)?$/, "").replace(/\/+$/, "");
+	return `${url.origin}${path}`;
+}
+/** Warns about a base URL that would send Kaneo MCP traffic, and its credentials, unencrypted. */
+function kaneoUrlWarning(base) {
+	const url = new URL(base);
+	const local = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/.test(url.hostname);
+	if (url.protocol === "http:" && !local) return `${base} is not https: Kaneo MCP traffic, including any credentials, is sent unencrypted`;
 }
 function kaneoMcpUrl(base) {
 	return `${base}/api/mcp`;
@@ -2732,6 +2831,8 @@ When a PR delivers work attached to a Kaneo ticket, mention the ticket:
 
 - Start the PR body with a ticket line that links the ticket's Kaneo page: \`Kaneo: [FEX-2 — <ticket title>](<ticket URL>)\`. A bare identifier without the link is not enough.
 - Link every other ticket the PR touches the same way, on the same line or the next.
+- Keep the PR title in the repository's usual style; when the repository has no title convention, prefix it with the identifier: \`FEX-2: Add guest RSVP form\`.
+- Derive the identifier from the branch name when it follows the convention above, and confirm it against Kaneo.
 
 Build each ticket URL from values read from Kaneo, never from guesses:
 
@@ -2743,13 +2844,13 @@ Build each ticket URL from values read from Kaneo, never from guesses:
 - \`<workspaceId>\`, \`<projectId>\`, and \`<taskId>\` are the task's IDs from \`get_task\` or \`list_tasks\` (\`workspaceId\` from the project when the task omits it), not the project slug or task number.
 
 A URL the user shared for the ticket works too. When the base URL or any ID cannot be read, stop and ask the user for the ticket URL instead of opening the PR with an unlinked ticket line.
-- Keep the PR title in the repository's usual style; when the repository has no title convention, prefix it with the identifier: \`FEX-2: Add guest RSVP form\`.
-- Derive the identifier from the branch name when it follows the convention above, and confirm it against Kaneo.
 
 After the PR exists, add a comment to the Kaneo task with the PR URL, and move the task to the project's review column when one exists and the user has not asked to keep the status. Leave PRs for work without a ticket unchanged.
 `;
 }
-function kaneoInstructionsBlock(runtime) {
+/** The always-on block; runtimes that share one file (a project's AGENTS.md) are all named. */
+function kaneoInstructionsBlock(runtimes) {
+	const scribe = runtimes.length === 1 ? CALL[runtimes[0]](SCRIBE) : `the \`${SCRIBE}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL[r](SCRIBE)}`).join("; ")})`;
 	return `## Kaneo work tracking
 
 Kaneo is the work tracker, reached through the \`${KANEO_MCP}\` MCP server. Use the \`${KANEO_SKILL}\` skill before planning, creating, estimating, splitting, or updating Kaneo tickets, and before creating a branch or PR for ticket work.
@@ -2757,12 +2858,13 @@ Kaneo is the work tracker, reached through the \`${KANEO_MCP}\` MCP server. Use 
 - A ticket identifier is the project slug plus the task number, such as \`FEX-2\`. Read both from Kaneo; never guess them.
 - Name a branch for ticket work \`<IDENTIFIER>/<short-kebab-description>\`, such as \`FEX-2/some-feature-getting-done\`, created from the up-to-date default branch unless another base is named.
 - A PR for ticket work starts its body with \`Kaneo: [<IDENTIFIER> — <ticket title>](<ticket URL>)\`, linking the ticket's Kaneo page, and links every other ticket it touches the same way. Build each URL from IDs read from Kaneo, as the \`${KANEO_SKILL}\` skill describes; never guess them. After opening it, comment the PR URL on the Kaneo task.
-- Save and read tickets through ${CALL[runtime](SCRIBE)}, a cheap agent, and gather ticket context with ladder read agents, so Kaneo output stays out of this session.`;
+- Save and read tickets through ${scribe}, a cheap agent, and gather ticket context with ladder read agents, so Kaneo output stays out of this session.`;
 }
 const SCRIBE_DESCRIPTION = "Kaneo ticket clerk on a cheap model. Creates, updates, labels, relates and comments Kaneo tasks exactly as specified, or summarizes the board, and replies with identifiers and task IDs. Never plans or estimates.";
 const SCRIBE_BODY = `You are the Kaneo scribe, a cheap worker that saves and reads Kaneo tickets through the \`${KANEO_MCP}\` MCP tools. The parent session already decided what to track; you carry it out exactly.
 
 Rules:
+- When the Kaneo tools are not declared yet, load them first with \`tool_search\` (query \`kaneo\`).
 - Do only what the request lists. Never invent stories, change estimates, rename titles, or pick another project or column.
 - Before creating tasks, read the project (for its slug) and its columns, and list workspace labels. Reuse a label whose name matches exactly; create one only when it is absent, with the color the request gives.
 - Create tasks in the order given, then attach labels, then create relations (\`blocks\` from the prerequisite to the waiting task), then comments.
@@ -3752,98 +3854,6 @@ function uninstall(filter, force = false) {
 	return results;
 }
 //#endregion
-//#region src/tiers.ts
-const RUNTIMES = [
-	"claude",
-	"opencode",
-	"codex",
-	"pi"
-];
-const TIERS = [
-	"fast",
-	"balanced",
-	"deep"
-];
-const ROLES = ["read", "edit"];
-const EFFORTS = [
-	"low",
-	"medium",
-	"high"
-];
-/** Gentle AI review agents whose model this tool can set. */
-const REVIEW_LENSES = [
-	"review-risk",
-	"review-resilience",
-	"review-readability",
-	"review-reliability",
-	"review-refuter"
-];
-const RUNTIME_LABELS = {
-	claude: "Claude Code",
-	opencode: "OpenCode",
-	codex: "Codex",
-	pi: "Pi"
-};
-const TIER_LABELS = {
-	fast: "fast (first try, mechanical work)",
-	balanced: "balanced (multi-step work, first escalation)",
-	deep: "deep (last resort before the parent takes over)"
-};
-const CLAUDE_IDS = {
-	fast: "claude-haiku-5-5",
-	balanced: "claude-sonnet-5-5",
-	deep: "claude-opus-5-5"
-};
-function defaultTierMap(runtime) {
-	const effort = {
-		fast: "low",
-		balanced: "medium",
-		deep: "high"
-	};
-	const model = (tier) => {
-		switch (runtime) {
-			case "claude": return CLAUDE_IDS[tier];
-			case "opencode":
-			case "pi": return `anthropic/${CLAUDE_IDS[tier]}`;
-			case "codex": return "";
-		}
-	};
-	return {
-		fast: {
-			model: model("fast"),
-			effort: effort.fast
-		},
-		balanced: {
-			model: model("balanced"),
-			effort: effort.balanced
-		},
-		deep: {
-			model: model("deep"),
-			effort: effort.deep
-		}
-	};
-}
-/** Which rung each Gentle AI review agent runs on. Readability is pattern work; the rest need judgment. */
-const DEFAULT_REVIEW_TIERS = {
-	"review-risk": "balanced",
-	"review-resilience": "balanced",
-	"review-readability": "fast",
-	"review-reliability": "balanced",
-	"review-refuter": "balanced"
-};
-function agentName(role, tier) {
-	return `ladder-${role}-${tier}`;
-}
-function isTier(value) {
-	return TIERS.includes(value);
-}
-function isRuntime(value) {
-	return RUNTIMES.includes(value);
-}
-function isReviewLens(value) {
-	return REVIEW_LENSES.includes(value);
-}
-//#endregion
 //#region src/content.ts
 const SKILL_NAME = "model-ladder";
 const HOW_TO_CALL = {
@@ -4452,7 +4462,7 @@ function scribeAgent(runtime, dir, tiers) {
 				`description: ${description}`
 			];
 			if (model) lines.push(`model: ${model}`);
-			lines.push(`thinking: ${effort}`, "---", "", SCRIBE_BODY);
+			lines.push(`thinking: ${effort}`, "tools:", "  - tool_search", "---", "", SCRIBE_BODY);
 			return {
 				path: join(dir, `${SCRIBE}.md`),
 				content: lines.join("\n")
@@ -4499,15 +4509,13 @@ function kaneoMcpOp(runtime, project, url) {
 				conflict: table
 			};
 		}
-		case "pi":
-			if (project) return void 0;
-			return {
-				...base,
-				kind: "json-set",
-				path: join(piDir(), "mcp.json"),
-				pointer: ["mcpServers", KANEO_MCP],
-				value: { url }
-			};
+		case "pi": return {
+			...base,
+			kind: "json-set",
+			path: project ? join(project, ".pi", "mcp.json") : join(piDir(), "mcp.json"),
+			pointer: ["mcpServers", KANEO_MCP],
+			value: { url }
+		};
 	}
 }
 const CATALOG = [{
@@ -4519,7 +4527,8 @@ const CATALOG = [{
 		flag: "url",
 		message: "Kaneo base URL",
 		placeholder: "https://kaneo.example.com",
-		normalize: kaneoBaseUrl
+		normalize: kaneoBaseUrl,
+		warning: kaneoUrlWarning
 	}],
 	discover: () => {
 		const found = [
@@ -4567,19 +4576,26 @@ const CATALOG = [{
 				component: "catalog",
 				kind: "block",
 				path: where.instructions,
-				content: kaneoInstructionsBlock(runtime),
+				content: kaneoInstructionsBlock(entry.runtimes.filter((r) => layout(r, entry.project).instructions === where.instructions)),
 				markers: [blockMarkers("kaneo", "html"), KANEO_LEGACY_BLOCK],
 				label: "kaneo instructions block"
 			}
 		];
 		const url = entry.settings.url;
-		const mcp = url ? kaneoMcpOp(runtime, entry.project, kaneoMcpUrl(url)) : void 0;
-		if (mcp) ops.push(mcp);
+		if (url) ops.push(kaneoMcpOp(runtime, entry.project, kaneoMcpUrl(url)));
 		return ops;
 	}
 }];
 function catalogItem(id) {
 	return CATALOG.find((i) => i.id === id);
+}
+/** One line per skipped project entry, telling how to forget it. */
+function missingProjectWarnings(config) {
+	return missingProjects(config).map((e) => `${e.item}: project directory ${e.project} is gone; skipped. Run \`agent-config uninstall ${e.item} --project ${e.project}\` to forget it.`);
+}
+/** Project entries whose repository directory no longer exists; they are skipped, not recreated. */
+function missingProjects(config) {
+	return config.catalog.filter((e) => e.project !== void 0 && !existsSync(e.project));
 }
 /**
 * Ops for the saved catalog entries (only those whose key is in `keys`, when given). At project
@@ -4587,10 +4603,11 @@ function catalogItem(id) {
 */
 function catalogOps(config, keys) {
 	const ops = /* @__PURE__ */ new Map();
+	const missing = new Set(missingProjects(config).map(entryKey));
 	for (const entry of config.catalog) {
 		const key = entryKey(entry);
 		const item = catalogItem(entry.item);
-		if (!item || keys && !keys.includes(key)) continue;
+		if (!item || keys && !keys.includes(key) || missing.has(key)) continue;
 		for (const runtime of entry.runtimes) for (const op of item.ops(entry, runtime, config.tiers[runtime])) {
 			const tagged = {
 				...op,
@@ -4600,6 +4617,36 @@ function catalogOps(config, keys) {
 		}
 	}
 	return [...ops.values()];
+}
+/**
+* Defaults for installing an item at a scope, shared by the CLI and the TUI: runtimes come from
+* the saved entry, else the configured runtimes, else detection; settings from the saved entry,
+* else what this machine already has configured.
+*/
+function entryDefaults(item, project, config, detected) {
+	const saved = config.catalog.find((e) => entryKey(e) === entryKey({
+		item: item.id,
+		project
+	}));
+	const runtimes = saved?.runtimes.length ? saved.runtimes : config.runtimes.length > 0 ? config.runtimes : detected();
+	const discovered = item.discover();
+	const settings = {};
+	for (const s of item.settings) {
+		const own = saved?.settings[s.key];
+		if (own) settings[s.key] = {
+			value: own,
+			source: "saved"
+		};
+		else if (discovered[s.key]) settings[s.key] = {
+			value: discovered[s.key],
+			source: "discovered"
+		};
+	}
+	return {
+		...saved ? { saved } : {},
+		runtimes,
+		settings
+	};
 }
 /** Adds or replaces the entry with the same item and scope. */
 function upsertEntry(config, entry) {
@@ -4616,6 +4663,64 @@ function forgetCatalog(config, match, runtimes) {
 			runtimes: left
 		}] : [];
 	});
+}
+function defaultConfig() {
+	return {
+		version: 1,
+		runtimes: [],
+		components: [...COMPONENTS],
+		tiers: {
+			claude: defaultTierMap("claude"),
+			opencode: defaultTierMap("opencode"),
+			codex: defaultTierMap("codex"),
+			pi: defaultTierMap("pi")
+		},
+		reviewTiers: { ...DEFAULT_REVIEW_TIERS },
+		minLines: 350,
+		catalog: []
+	};
+}
+/** Loads the saved config over the defaults, dropping anything unrecognized. */
+function loadConfig() {
+	const config = defaultConfig();
+	let raw;
+	try {
+		raw = JSON.parse(readFileSync(configPath(), "utf8"));
+	} catch {
+		return config;
+	}
+	if (Array.isArray(raw.runtimes)) config.runtimes = raw.runtimes.filter(isRuntime);
+	if (Array.isArray(raw.components)) config.components = raw.components.filter((c) => COMPONENTS.includes(c));
+	for (const runtime of RUNTIMES) for (const tier of TIERS) {
+		const saved = raw.tiers?.[runtime]?.[tier];
+		if (!saved) continue;
+		if (typeof saved.model === "string") config.tiers[runtime][tier].model = saved.model;
+		if (EFFORTS.includes(saved.effort)) config.tiers[runtime][tier].effort = saved.effort;
+	}
+	for (const [lens, tier] of Object.entries(raw.reviewTiers ?? {})) if (isReviewLens(lens) && typeof tier === "string" && isTier(tier)) config.reviewTiers[lens] = tier;
+	if (typeof raw.minLines === "number" && raw.minLines > 0) config.minLines = Math.floor(raw.minLines);
+	if (Array.isArray(raw.catalog)) config.catalog = raw.catalog.flatMap(catalogEntry);
+	return config;
+}
+/** A saved catalog entry, or nothing when it names an unknown item or is malformed. */
+function catalogEntry(raw) {
+	if (!raw || typeof raw !== "object") return [];
+	const e = raw;
+	if (typeof e.item !== "string" || !catalogItem(e.item)) return [];
+	if (e.project !== void 0 && (typeof e.project !== "string" || !isAbsolute(e.project))) return [];
+	const settings = {};
+	for (const [k, v] of Object.entries(e.settings ?? {})) if (typeof v === "string") settings[k] = v;
+	return [{
+		item: e.item,
+		...e.project ? { project: e.project } : {},
+		runtimes: Array.isArray(e.runtimes) ? e.runtimes.filter(isRuntime) : [],
+		settings
+	}];
+}
+function saveConfig(config) {
+	const path = configPath();
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
 }
 //#endregion
 //#region src/version.ts
@@ -4811,6 +4916,8 @@ function reapplyWithNewVersion(root = checkoutRoot()) {
 }
 //#endregion
 //#region src/commands.ts
+/** The user cancelled a prompt (Ctrl+C); the CLI exits 130. */
+var Cancelled = class extends Error {};
 function onPath(bin) {
 	try {
 		execFileSync("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
@@ -4840,7 +4947,8 @@ function buildPlan(config, only) {
 	const catalog = catalogOps(config, only);
 	const ops = [...ladder, ...catalog];
 	const wanted = new Set(ops.map(opKey));
-	const planned = new Set(only ?? config.catalog.map(entryKey));
+	const missing = new Set(missingProjects(config).map(entryKey));
+	const planned = new Set((only ?? config.catalog.map(entryKey)).filter((k) => !missing.has(k)));
 	return [...manifest.filter((r) => r.component === "catalog" ? r.item !== void 0 && planned.has(r.item) && !wanted.has(recordKey(r)) : !only && config.runtimes.includes(r.runtime) && config.components.includes(r.component) && !wanted.has(recordKey(r))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
 }
 /**
@@ -4850,6 +4958,25 @@ function buildPlan(config, only) {
 function restoreShared(config, removed) {
 	const paths = new Set(removed);
 	return applyPlan(buildPlan(config, config.catalog.map(entryKey)).filter((x) => x.action === "create" && paths.has(x.op.path))).errors;
+}
+/**
+* Undoes what agent-config installed, limited to one catalog entry (`key`) and/or some runtimes,
+* then updates the saved configuration so `install` does not bring it back. An entry whose files
+* were kept because the user changed them stays saved, so a later `--force` run can remove them.
+*/
+function uninstallSelection(selection, force = false) {
+	const { key, runtimes } = selection;
+	const results = uninstall((r) => (key === void 0 || r.item === key) && (runtimes.length === 0 || runtimes.includes(r.runtime)), force);
+	const kept = new Set(results.filter((r) => r.outcome === "kept-modified").map((r) => r.record.item));
+	const config = loadConfig();
+	if (key === void 0) config.runtimes = runtimes.length === 0 ? [] : config.runtimes.filter((r) => !runtimes.includes(r));
+	forgetCatalog(config, (e) => (key === void 0 || entryKey(e) === key) && !kept.has(entryKey(e)), runtimes);
+	saveConfig(config);
+	const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
+	return {
+		results,
+		restoreErrors: runtimes.length > 0 ? restoreShared(config, removed) : []
+	};
 }
 function tildify(path) {
 	const h = home();
@@ -4912,69 +5039,10 @@ function doctor() {
 	});
 	return checks;
 }
-function defaultConfig() {
-	return {
-		version: 1,
-		runtimes: [],
-		components: [...COMPONENTS],
-		tiers: {
-			claude: defaultTierMap("claude"),
-			opencode: defaultTierMap("opencode"),
-			codex: defaultTierMap("codex"),
-			pi: defaultTierMap("pi")
-		},
-		reviewTiers: { ...DEFAULT_REVIEW_TIERS },
-		minLines: 350,
-		catalog: []
-	};
-}
-/** Loads the saved config over the defaults, dropping anything unrecognized. */
-function loadConfig() {
-	const config = defaultConfig();
-	let raw;
-	try {
-		raw = JSON.parse(readFileSync(configPath(), "utf8"));
-	} catch {
-		return config;
-	}
-	if (Array.isArray(raw.runtimes)) config.runtimes = raw.runtimes.filter(isRuntime);
-	if (Array.isArray(raw.components)) config.components = raw.components.filter((c) => COMPONENTS.includes(c));
-	for (const runtime of RUNTIMES) for (const tier of TIERS) {
-		const saved = raw.tiers?.[runtime]?.[tier];
-		if (!saved) continue;
-		if (typeof saved.model === "string") config.tiers[runtime][tier].model = saved.model;
-		if (EFFORTS.includes(saved.effort)) config.tiers[runtime][tier].effort = saved.effort;
-	}
-	for (const [lens, tier] of Object.entries(raw.reviewTiers ?? {})) if (isReviewLens(lens) && typeof tier === "string" && isTier(tier)) config.reviewTiers[lens] = tier;
-	if (typeof raw.minLines === "number" && raw.minLines > 0) config.minLines = Math.floor(raw.minLines);
-	if (Array.isArray(raw.catalog)) config.catalog = raw.catalog.flatMap(catalogEntry);
-	return config;
-}
-/** A saved catalog entry, or nothing when it names an unknown item or is malformed. */
-function catalogEntry(raw) {
-	if (!raw || typeof raw !== "object") return [];
-	const e = raw;
-	if (typeof e.item !== "string" || !catalogItem(e.item)) return [];
-	if (e.project !== void 0 && (typeof e.project !== "string" || !isAbsolute(e.project))) return [];
-	const settings = {};
-	for (const [k, v] of Object.entries(e.settings ?? {})) if (typeof v === "string") settings[k] = v;
-	return [{
-		item: e.item,
-		...e.project ? { project: e.project } : {},
-		runtimes: Array.isArray(e.runtimes) ? e.runtimes.filter(isRuntime) : [],
-		settings
-	}];
-}
-function saveConfig(config) {
-	const path = configPath();
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
-}
 //#endregion
 //#region src/tui.ts
-var Cancelled$1 = class extends Error {};
 function ask(value) {
-	if (isCancel(value)) throw new Cancelled$1();
+	if (isCancel(value)) throw new Cancelled();
 	return value;
 }
 const ACTION_COLOR = {
@@ -5110,6 +5178,7 @@ async function installFlow() {
 		}));
 		config.minLines = Number(value);
 	}
+	for (const w of missingProjectWarnings(config)) log.warn(w);
 	await applyWithConfirm(buildPlan(config), config);
 }
 /** Shows the plan, asks, applies it and saves the configuration. */
@@ -5171,14 +5240,11 @@ async function catalogFlow() {
 				label: scopeLabel(e)
 			}))
 		}));
-		const key = entryKey(entry);
 		if (!ask(await confirm({ message: `Remove ${item.id} (${scopeLabel(entry)})?` }))) return;
-		const results = uninstall((r) => r.item === key);
-		const kept = results.filter((r) => r.outcome === "kept-modified");
-		log.success(`Undid ${results.length - kept.length} change(s).`);
-		for (const k of kept) log.warn(`Kept ${tildify(k.record.path)}: ${k.note}`);
-		config.catalog = config.catalog.filter((e) => entryKey(e) !== key);
-		saveConfig(config);
+		await uninstallAndReport({
+			key: entryKey(entry),
+			runtimes: []
+		});
 		return;
 	}
 	const project = ask(await select({
@@ -5200,10 +5266,7 @@ async function catalogFlow() {
 			return existsSync(dir) && statSync(dir).isDirectory() ? void 0 : "Enter an existing directory";
 		}
 	}))) : void 0;
-	const saved = config.catalog.find((e) => entryKey(e) === entryKey({
-		item: item.id,
-		project
-	}));
+	const defaults = entryDefaults(item, project, config, detectedRuntimes);
 	const found = detect();
 	const runtimes = ask(await multiselect({
 		message: "For which agents?",
@@ -5212,19 +5275,23 @@ async function catalogFlow() {
 			label: RUNTIME_LABELS[d.runtime],
 			hint: d.bin || d.dir ? "detected" : "not found"
 		})),
-		initialValues: saved?.runtimes.length ? saved.runtimes : config.runtimes.length > 0 ? config.runtimes : detectedRuntimes(),
+		initialValues: defaults.runtimes,
 		required: true
 	}));
-	const discovered = item.discover();
 	const settings = {};
 	for (const s of item.settings) {
-		const value = ask(await text({
-			message: s.message,
+		const known = defaults.settings[s.key];
+		const from = known?.source === "discovered" ? project ? " (from your user config; written into the repository)" : " (from your existing config)" : "";
+		const raw = ask(await text({
+			message: `${s.message}${from}`,
 			placeholder: s.placeholder,
-			initialValue: saved?.settings[s.key] ?? discovered[s.key] ?? "",
+			initialValue: known?.value ?? "",
 			validate: (v) => s.normalize(v ?? "") ? void 0 : `Enter a value like ${s.placeholder}`
 		}));
-		settings[s.key] = s.normalize(value) ?? "";
+		const value = s.normalize(raw) ?? "";
+		const warning = s.warning?.(value);
+		if (warning) log.warn(warning);
+		settings[s.key] = value;
 	}
 	const entry = {
 		item: item.id,
@@ -5270,16 +5337,20 @@ async function uninstallFlow() {
 		required: true
 	}));
 	if (!ask(await confirm({ message: "Remove agent-config files and restore what they replaced?" }))) return;
-	const results = uninstall((r) => runtimes.includes(r.runtime));
-	const kept = results.filter((r) => r.outcome === "kept-modified");
+	await uninstallAndReport({ runtimes });
+}
+/** Uninstalls through the same path as the CLI; offers to remove files kept because you changed them. */
+async function uninstallAndReport(selection) {
+	let { results, restoreErrors } = uninstallSelection(selection);
+	let kept = results.filter((r) => r.outcome === "kept-modified");
 	log.success(`Undid ${results.length - kept.length} change(s).`);
 	for (const k of kept) log.warn(`Kept ${tildify(k.record.path)}: ${k.note}`);
-	const config = loadConfig();
-	config.runtimes = config.runtimes.filter((r) => !runtimes.includes(r));
-	forgetCatalog(config, () => true, runtimes);
-	saveConfig(config);
-	const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
-	for (const e of restoreShared(config, removed)) log.error(`Could not restore ${e.op.label} (${tildify(e.op.path)}): ${e.error}`);
+	if (kept.length > 0 && ask(await confirm({ message: "Remove the files you changed too?" }))) {
+		({results, restoreErrors} = uninstallSelection(selection, true));
+		kept = results.filter((r) => r.outcome === "kept-modified");
+		log.success(`Removed ${results.length - kept.length} more.`);
+	}
+	for (const e of restoreErrors) log.error(`Could not restore ${e.op.label} (${tildify(e.op.path)}): ${e.error}`);
 }
 /** Returns true when a new version was installed and the TUI should exit. */
 async function selfUpdateFlow() {
@@ -5379,7 +5450,7 @@ async function runTui() {
 			}
 		}
 	} catch (error) {
-		if (error instanceof Cancelled$1) {
+		if (error instanceof Cancelled) {
 			cancel("Cancelled.");
 			return 130;
 		}
@@ -5788,51 +5859,63 @@ function delegateRuntime(configured) {
 function out(json, data, text) {
 	process.stdout.write(json ? `${JSON.stringify(data, null, 2)}\n` : `${text}\n`);
 }
-function catalogTarget(id, values) {
+/**
+* The item and scope a command names. Uninstall also accepts a project directory that is gone,
+* when agent-config still knows an entry or installed files for it.
+*/
+function catalogTarget(id, values, forUninstall = false) {
 	const item = catalogItem(id);
 	if (!item) throw new UsageError(`unknown catalog item "${id}"; available: ${CATALOG.map((i) => i.id).join(", ")}`);
 	const raw = values.project;
 	if (raw === void 0) return { item };
 	const project = resolve(raw);
-	if (!existsSync(project) || !statSync(project).isDirectory()) throw new UsageError(`--project ${project} is not a directory`);
-	return {
+	if (existsSync(project) && statSync(project).isDirectory()) return {
 		item,
 		project
 	};
+	const key = entryKey({
+		item: item.id,
+		project
+	});
+	const known = loadConfig().catalog.some((e) => entryKey(e) === key) || status().some((e) => e.record.item === key);
+	if (forUninstall && known) return {
+		item,
+		project
+	};
+	throw new UsageError(`--project ${project} is not a directory`);
 }
 /** The catalog entry to install: flags first, then what was saved, detected, or asked. */
 async function catalogEntryFor(item, project, config, values) {
-	const saved = config.catalog.find((e) => entryKey(e) === entryKey({
-		item: item.id,
-		project
-	}));
+	const defaults = entryDefaults(item, project, config, detectedRuntimes);
 	const flagged = values.runtime ?? [];
 	for (const r of flagged) if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
-	const runtimes = flagged.length > 0 ? flagged : saved?.runtimes.length ? saved.runtimes : config.runtimes.length > 0 ? config.runtimes : detectedRuntimes();
+	const runtimes = flagged.length > 0 ? flagged : defaults.runtimes;
 	if (runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
-	const discovered = item.discover();
 	const settings = {};
 	for (const s of item.settings) {
 		const raw = values[s.flag];
+		const known = defaults.settings[s.key];
+		let value;
 		if (raw !== void 0) {
-			const value = s.normalize(raw);
-			if (!value) throw new UsageError(`--${s.flag} expects a value like ${s.placeholder}`);
-			settings[s.key] = value;
-			continue;
+			const normalized = s.normalize(raw);
+			if (!normalized) throw new UsageError(`--${s.flag} expects a value like ${s.placeholder}`);
+			value = normalized;
+		} else if (known) {
+			value = known.value;
+			if (known.source === "discovered" && project) process.stderr.write(`agent-config: using ${s.message.toLowerCase()} ${value} from your user config; it is written into ${project}. Pass --${s.flag} to choose another.\n`);
+		} else {
+			if (!process.stdin.isTTY || !process.stdout.isTTY) throw new UsageError(`${item.id} needs --${s.flag} <${s.placeholder}>`);
+			const answer = await text({
+				message: s.message,
+				placeholder: s.placeholder,
+				validate: (v) => s.normalize(v ?? "") ? void 0 : `Enter a value like ${s.placeholder}`
+			});
+			if (isCancel(answer)) throw new Cancelled();
+			value = s.normalize(answer) ?? "";
 		}
-		const known = saved?.settings[s.key] ?? discovered[s.key];
-		if (known) {
-			settings[s.key] = known;
-			continue;
-		}
-		if (!process.stdin.isTTY || !process.stdout.isTTY) throw new UsageError(`${item.id} needs --${s.flag} <${s.placeholder}>`);
-		const answer = await text({
-			message: s.message,
-			placeholder: s.placeholder,
-			validate: (v) => s.normalize(v ?? "") ? void 0 : `Enter a value like ${s.placeholder}`
-		});
-		if (isCancel(answer)) throw new Cancelled();
-		settings[s.key] = s.normalize(answer) ?? "";
+		const warning = s.warning?.(value);
+		if (warning) process.stderr.write(`agent-config: warning: ${warning}\n`);
+		settings[s.key] = value;
 	}
 	return {
 		item: item.id,
@@ -5841,7 +5924,6 @@ async function catalogEntryFor(item, project, config, values) {
 		settings
 	};
 }
-var Cancelled = class extends Error {};
 /** Shows the plan, asks unless --yes, applies it and saves the configuration. */
 async function applyAndReport(plan, config, values, json) {
 	const changes = plan.filter((x) => x.action === "create" || x.action === "update" || x.action === "remove");
@@ -5980,6 +6062,7 @@ async function main(argv) {
 			}
 			applyFlags(config, values);
 			if (config.runtimes.length === 0) throw new UsageError("no runtime detected; pass --runtime");
+			for (const w of missingProjectWarnings(config)) process.stderr.write(`agent-config: warning: ${w}\n`);
 			return applyAndReport(buildPlan(config), config, values, json);
 		}
 		case "catalog": {
@@ -6017,24 +6100,18 @@ async function main(argv) {
 			const runtimes = values.runtime ?? [];
 			for (const r of runtimes) if (!isRuntime(r)) throw new UsageError(`unknown runtime "${r}"`);
 			const key = itemId ? (() => {
-				const { item, project } = catalogTarget(itemId, values);
+				const { item, project } = catalogTarget(itemId, values, true);
 				return entryKey({
 					item: item.id,
 					project
 				});
 			})() : void 0;
 			const match = (r) => (key === void 0 || r.item === key) && (runtimes.length === 0 || runtimes.includes(r.runtime));
-			const forget = (config) => {
-				if (key) return forgetCatalog(config, (e) => entryKey(e) === key, runtimes);
-				config.runtimes = runtimes.length === 0 ? [] : config.runtimes.filter((r) => !runtimes.includes(r));
-				forgetCatalog(config, () => true, runtimes);
-			};
 			const entries = status().filter((e) => match(e.record));
-			if (entries.length === 0 && key && !values["dry-run"]) {
-				const config = loadConfig();
-				forget(config);
-				saveConfig(config);
-			}
+			if (entries.length === 0 && key && !values["dry-run"]) uninstallSelection({
+				key,
+				runtimes
+			});
 			if (entries.length === 0) return out(json, { results: [] }, "Nothing to uninstall."), 0;
 			if (values["dry-run"]) {
 				out(json, { entries: entries.map((e) => e.record) }, entries.map((e) => `remove  ${e.record.label}  ${tildify(e.record.path)}`).join("\n"));
@@ -6048,12 +6125,10 @@ async function main(argv) {
 				const ok = await confirm({ message: `Undo ${entries.length} change(s)?` });
 				if (isCancel(ok) || !ok) return 130;
 			}
-			const results = uninstall(match, values.force === true);
-			const config = loadConfig();
-			forget(config);
-			saveConfig(config);
-			const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
-			const restoreErrors = runtimes.length > 0 ? restoreShared(config, removed) : [];
+			const { results, restoreErrors } = uninstallSelection({
+				...key ? { key } : {},
+				runtimes
+			}, values.force === true);
 			out(json, { results: results.map((r) => ({
 				path: r.record.path,
 				label: r.record.label,

@@ -7,30 +7,25 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import {
   CATALOG,
+  entryDefaults,
   entryKey,
-  forgetCatalog,
+  missingProjectWarnings,
   scopeLabel,
   upsertEntry,
   type CatalogEntry,
 } from "./catalog.ts";
 import {
   buildPlan,
+  Cancelled,
   detect,
   detectedRuntimes,
   doctor,
-  restoreShared,
   status,
   tildify,
+  uninstallSelection,
 } from "./commands.ts";
 import { defaultConfig, loadConfig, saveConfig, type Config } from "./config.ts";
-import {
-  applyPlan,
-  COMPONENTS,
-  COMPONENT_LABELS,
-  uninstall,
-  type Action,
-  type PlannedOp,
-} from "./ops.ts";
+import { applyPlan, COMPONENTS, COMPONENT_LABELS, type Action, type PlannedOp } from "./ops.ts";
 import { RUNTIME_COMPONENTS } from "./runtimes.ts";
 import {
   EFFORTS,
@@ -45,8 +40,6 @@ import {
 } from "./tiers.ts";
 import { checkForUpdate, reapplyWithNewVersion, runUpdate } from "./selfupdate.ts";
 import { VERSION } from "./version.ts";
-
-class Cancelled extends Error {}
 
 function ask<T>(value: T): Exclude<T, symbol> {
   if (p.isCancel(value)) throw new Cancelled();
@@ -199,6 +192,7 @@ async function installFlow(): Promise<void> {
     config.minLines = Number(value);
   }
 
+  for (const w of missingProjectWarnings(config)) p.log.warn(w);
   await applyWithConfirm(buildPlan(config), config);
 }
 
@@ -272,14 +266,8 @@ async function catalogFlow(): Promise<void> {
               options: installed.map((e) => ({ value: e, label: scopeLabel(e) })),
             }),
           );
-    const key = entryKey(entry);
     if (!ask(await p.confirm({ message: `Remove ${item.id} (${scopeLabel(entry)})?` }))) return;
-    const results = uninstall((r) => r.item === key);
-    const kept = results.filter((r) => r.outcome === "kept-modified");
-    p.log.success(`Undid ${results.length - kept.length} change(s).`);
-    for (const k of kept) p.log.warn(`Kept ${tildify(k.record.path)}: ${k.note}`);
-    config.catalog = config.catalog.filter((e) => entryKey(e) !== key);
-    saveConfig(config);
+    await uninstallAndReport({ key: entryKey(entry), runtimes: [] });
     return;
   }
 
@@ -309,7 +297,7 @@ async function catalogFlow(): Promise<void> {
           ),
         )
       : undefined;
-  const saved = config.catalog.find((e) => entryKey(e) === entryKey({ item: item.id, project }));
+  const defaults = entryDefaults(item, project, config, detectedRuntimes);
   const found = detect();
   const runtimes = ask(
     await p.multiselect({
@@ -319,26 +307,32 @@ async function catalogFlow(): Promise<void> {
         label: RUNTIME_LABELS[d.runtime],
         hint: d.bin || d.dir ? "detected" : "not found",
       })),
-      initialValues: saved?.runtimes.length
-        ? saved.runtimes
-        : config.runtimes.length > 0
-          ? config.runtimes
-          : detectedRuntimes(),
+      initialValues: defaults.runtimes,
       required: true,
     }),
   ) as Runtime[];
-  const discovered = item.discover();
   const settings: Record<string, string> = {};
   for (const s of item.settings) {
-    const value = ask(
+    const known = defaults.settings[s.key];
+    // Say where a prefilled value came from: in a project it ends up in committed files.
+    const from =
+      known?.source === "discovered"
+        ? project
+          ? " (from your user config; written into the repository)"
+          : " (from your existing config)"
+        : "";
+    const raw = ask(
       await p.text({
-        message: s.message,
+        message: `${s.message}${from}`,
         placeholder: s.placeholder,
-        initialValue: saved?.settings[s.key] ?? discovered[s.key] ?? "",
+        initialValue: known?.value ?? "",
         validate: (v) => (s.normalize(v ?? "") ? undefined : `Enter a value like ${s.placeholder}`),
       }),
     );
-    settings[s.key] = s.normalize(value) ?? "";
+    const value = s.normalize(raw) ?? "";
+    const warning = s.warning?.(value);
+    if (warning) p.log.warn(warning);
+    settings[s.key] = value;
   }
   const entry: CatalogEntry = {
     item: item.id,
@@ -390,16 +384,21 @@ async function uninstallFlow(): Promise<void> {
     !ask(await p.confirm({ message: "Remove agent-config files and restore what they replaced?" }))
   )
     return;
-  const results = uninstall((r) => runtimes.includes(r.runtime));
-  const kept = results.filter((r) => r.outcome === "kept-modified");
+  await uninstallAndReport({ runtimes });
+}
+
+/** Uninstalls through the same path as the CLI; offers to remove files kept because you changed them. */
+async function uninstallAndReport(selection: { key?: string; runtimes: string[] }): Promise<void> {
+  let { results, restoreErrors } = uninstallSelection(selection);
+  let kept = results.filter((r) => r.outcome === "kept-modified");
   p.log.success(`Undid ${results.length - kept.length} change(s).`);
   for (const k of kept) p.log.warn(`Kept ${tildify(k.record.path)}: ${k.note}`);
-  const config = loadConfig();
-  config.runtimes = config.runtimes.filter((r) => !runtimes.includes(r));
-  forgetCatalog(config, () => true, runtimes);
-  saveConfig(config);
-  const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
-  for (const e of restoreShared(config, removed))
+  if (kept.length > 0 && ask(await p.confirm({ message: "Remove the files you changed too?" }))) {
+    ({ results, restoreErrors } = uninstallSelection(selection, true));
+    kept = results.filter((r) => r.outcome === "kept-modified");
+    p.log.success(`Removed ${results.length - kept.length} more.`);
+  }
+  for (const e of restoreErrors)
     p.log.error(`Could not restore ${e.op.label} (${tildify(e.op.path)}): ${e.error}`);
 }
 

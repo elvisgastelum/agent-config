@@ -1,11 +1,18 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
-import { entryKey, upsertEntry, type CatalogEntry } from "../src/catalog.ts";
-import { buildPlan, status } from "../src/commands.ts";
-import { defaultConfig, loadConfig, type Config } from "../src/config.ts";
-import { kaneoBaseUrl } from "../src/kaneo.ts";
+import {
+  catalogItem,
+  entryDefaults,
+  entryKey,
+  missingProjectWarnings,
+  upsertEntry,
+  type CatalogEntry,
+} from "../src/catalog.ts";
+import { buildPlan, restoreShared, status, uninstallSelection } from "../src/commands.ts";
+import { defaultConfig, loadConfig, saveConfig, type Config } from "../src/config.ts";
+import { kaneoBaseUrl, kaneoSkillMarkdown, kaneoUrlWarning } from "../src/kaneo.ts";
 import { applyPlan, uninstall } from "../src/ops.ts";
 import { configPath } from "../src/paths.ts";
 import type { Runtime } from "../src/tiers.ts";
@@ -166,6 +173,7 @@ describe("kaneo catalog item", () => {
       ".opencode/agents/kaneo-scribe.md",
       ".codex/agents/kaneo-scribe.toml",
       ".pi/agents/kaneo-scribe.md",
+      ".pi/mcp.json",
       ".mcp.json",
       "opencode.json",
       ".codex/config.toml",
@@ -173,7 +181,7 @@ describe("kaneo catalog item", () => {
       "AGENTS.md",
     ];
     for (const f of files) expect(existsSync(join(p, f)), f).toBe(true);
-    expect(existsSync(join(p, ".pi/mcp.json"))).toBe(false);
+    expect(JSON.parse(read(join(p, ".pi/mcp.json"))).mcpServers.kaneo).toEqual({ url: MCP });
     expect(JSON.parse(read(join(p, ".mcp.json"))).mcpServers.kaneo).toEqual({
       type: "http",
       url: MCP,
@@ -184,7 +192,10 @@ describe("kaneo catalog item", () => {
       url: MCP,
     });
     expect(read(join(p, ".codex/config.toml"))).toContain("[mcp_servers.kaneo]");
-    expect(read(join(p, "AGENTS.md")).split("<!-- BEGIN agent-config:kaneo").length - 1).toBe(1);
+    const agents = read(join(p, "AGENTS.md"));
+    expect(agents.split("<!-- BEGIN agent-config:kaneo").length - 1).toBe(1);
+    for (const label of ["OpenCode:", "Codex:", "Pi:"]) expect(agents).toContain(label);
+    expect(read(join(p, "CLAUDE.md"))).not.toContain("OpenCode:");
 
     for (const dir of [".claude", ".config/opencode", ".codex", ".pi", ".agents"]) {
       expect(existsSync(join(box.home, dir)), dir).toBe(false);
@@ -215,6 +226,80 @@ describe("kaneo catalog item", () => {
     expect(existsSync(skill)).toBe(false);
     expect(existsSync(join(box.home, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);
   });
+  test("gives the Pi scribe a tool allowlist without bash", () => {
+    const entry = kaneoEntry(["pi"]);
+    install(withEntry(entry), entry);
+    const scribe = read(join(box.home, ".pi/agent/agents/kaneo-scribe.md"));
+    expect(scribe).toContain("tools:");
+    expect(scribe).toContain("  - tool_search");
+    expect(scribe).not.toContain("  - bash");
+  });
+
+  test("a partial uninstall at project scope restores the shared AGENTS.md block for the rest", () => {
+    project = mkdtempSync(join(tmpdir(), "agent-config-project-"));
+    const p = project;
+    const entry = kaneoEntry(["opencode", "codex"], p);
+    install(withEntry(entry), entry);
+    saveConfig(withEntry(entry));
+
+    const out = uninstallSelection({ key: `kaneo@${p}`, runtimes: ["opencode"] });
+    expect(out.restoreErrors).toEqual([]);
+    const agents = read(join(p, "AGENTS.md"));
+    expect(agents).toContain("<!-- BEGIN agent-config:kaneo");
+    expect(agents).toContain("a spawned sub-agent with `kaneo-scribe` as its role");
+    expect(agents).not.toContain("OpenCode:");
+    expect(loadConfig().catalog[0]?.runtimes).toEqual(["codex"]);
+  });
+
+  test("skips a project whose directory is gone: no create, no remove, one warning", () => {
+    project = mkdtempSync(join(tmpdir(), "agent-config-project-"));
+    const p = project;
+    const entry = kaneoEntry(["claude"], p);
+    const config = withEntry(entry);
+    install(config, entry);
+    rmSync(p, { recursive: true, force: true });
+
+    expect(buildPlan(config).filter((x) => x.op.path.startsWith(p))).toEqual([]);
+    const warnings = missingProjectWarnings(config);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("is gone");
+  });
+
+  test("keeps a modified file and its saved entry, and removes both with force", () => {
+    const entry = kaneoEntry(["claude"]);
+    const config = withEntry(entry);
+    install(config, entry);
+    saveConfig(config);
+    const skill = join(box.home, ".claude/skills/kaneo-work-tracking/SKILL.md");
+    writeFileSync(skill, "edited\n");
+
+    const first = uninstallSelection({ key: "kaneo@user", runtimes: [] });
+    expect(first.results.some((r) => r.outcome === "kept-modified")).toBe(true);
+    expect(read(skill)).toBe("edited\n");
+    expect(loadConfig().catalog.map(entryKey)).toContain("kaneo@user");
+
+    uninstallSelection({ key: "kaneo@user", runtimes: [] }, true);
+    expect(existsSync(skill)).toBe(false);
+    expect(loadConfig().catalog.map(entryKey)).not.toContain("kaneo@user");
+  });
+
+  test("restoreShared reports an error when the file to recreate is a directory", () => {
+    project = mkdtempSync(join(tmpdir(), "agent-config-project-"));
+    const p = project;
+    const entry = kaneoEntry(["opencode", "codex"], p);
+    const config = withEntry(entry);
+    install(config, entry);
+    const agents = join(p, "AGENTS.md");
+    const owner = status().find((s) => s.record.path === agents)?.record.runtime;
+    expect(owner).toBeDefined();
+    uninstall((r) => r.item === `kaneo@${p}` && r.runtime === owner);
+    rmSync(agents, { force: true });
+    mkdirSync(agents);
+    const remaining = (["opencode", "codex"] as Runtime[]).filter((r) => r !== owner);
+    upsertEntry(config, kaneoEntry(remaining, p));
+
+    expect(restoreShared(config, [agents])).toHaveLength(1);
+  });
 });
 
 test("a whole-config plan re-applies saved catalog entries and leaves deselected ladder parts alone", () => {
@@ -238,6 +323,60 @@ describe("kaneoBaseUrl", () => {
     expect(kaneoBaseUrl("https://k.example.com/api/mcp/")).toBe("https://k.example.com");
     expect(kaneoBaseUrl("ftp://x")).toBeUndefined();
     expect(kaneoBaseUrl("not a url")).toBeUndefined();
+  });
+
+  test("keeps a sub-path and drops dashboard, API, query and fragment", () => {
+    expect(kaneoBaseUrl("https://k.example.com/dashboard/workspace/abc/project/def?x=1#y")).toBe(
+      "https://k.example.com",
+    );
+    expect(kaneoBaseUrl("https://h.example.com/kaneo/dashboard")).toBe(
+      "https://h.example.com/kaneo",
+    );
+    expect(kaneoBaseUrl("https://k.example.com/api/mcp")).toBe("https://k.example.com");
+  });
+});
+
+describe("kaneoUrlWarning", () => {
+  test("warns about plain http except on loopback", () => {
+    expect(kaneoUrlWarning("http://k.example.com")).toContain("not https");
+    expect(kaneoUrlWarning("http://localhost:1337")).toBeUndefined();
+    expect(kaneoUrlWarning("https://k.example.com")).toBeUndefined();
+  });
+});
+
+describe("entryDefaults", () => {
+  test("discovers the URL from the user's Claude config, and prefers a saved entry", () => {
+    const item = catalogItem("kaneo")!;
+    put(
+      join(box.home, ".claude.json"),
+      JSON.stringify({
+        mcpServers: { kaneo: { type: "http", url: "https://d.example.com/api/mcp" } },
+      }),
+    );
+    const config = defaultConfig();
+    const found = entryDefaults(item, undefined, config, () => ["claude"]);
+    expect(found.runtimes).toEqual(["claude"]);
+    expect(found.settings.url).toEqual({ value: "https://d.example.com", source: "discovered" });
+
+    upsertEntry(config, {
+      item: "kaneo",
+      runtimes: ["codex"],
+      settings: { url: "https://s.example.com" },
+    });
+    const saved = entryDefaults(item, undefined, config, () => ["claude"]);
+    expect(saved.runtimes).toEqual(["codex"]);
+    expect(saved.settings.url).toEqual({ value: "https://s.example.com", source: "saved" });
+  });
+});
+
+describe("kaneoSkillMarkdown", () => {
+  test("lists the PR title rule right after linking every other ticket", () => {
+    const text = kaneoSkillMarkdown("claude", "m");
+    const section = text.split("## Pull requests for ticket work")[1]!;
+    const lines = section.split("\n");
+    const link = lines.findIndex((l) => l.startsWith("- Link every other ticket"));
+    expect(link).toBeGreaterThan(-1);
+    expect(lines[link + 1]).toMatch(/^- Keep the PR title/);
   });
 });
 

@@ -1,7 +1,7 @@
 // The kaneo catalog item's text: the work-tracking skill, its always-on instructions and the
 // cheap kaneo-scribe agent that saves tickets, rendered per runtime.
 
-import type { Runtime } from "./tiers.ts";
+import { RUNTIME_LABELS, type Runtime } from "./tiers.ts";
 
 export const KANEO_SKILL = "kaneo-work-tracking";
 export const SCRIBE = "kaneo-scribe";
@@ -44,17 +44,26 @@ const CALL: Record<Runtime, (agent: string) => string> = {
 
 /** The Kaneo web base URL, from what the user typed or an MCP endpoint. */
 export function kaneoBaseUrl(raw: string): string | undefined {
-  const text = raw
-    .trim()
-    .replace(/\/+$/, "")
-    .replace(/\/api\/mcp$/, "");
+  let url: URL;
   try {
-    const url = new URL(text);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
-    return text;
+    url = new URL(raw.trim());
   } catch {
     return undefined;
   }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+  // A pasted dashboard or MCP link keeps only the part before /dashboard or /api, so a Kaneo
+  // served under a sub-path still works; query and fragment never belong to the base.
+  const path = url.pathname.replace(/\/(dashboard|api)(\/.*)?$/, "").replace(/\/+$/, "");
+  return `${url.origin}${path}`;
+}
+
+/** Warns about a base URL that would send Kaneo MCP traffic, and its credentials, unencrypted. */
+export function kaneoUrlWarning(base: string): string | undefined {
+  const url = new URL(base);
+  const local = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/.test(url.hostname);
+  if (url.protocol === "http:" && !local)
+    return `${base} is not https: Kaneo MCP traffic, including any credentials, is sent unencrypted`;
+  return undefined;
 }
 
 export function kaneoMcpUrl(base: string): string {
@@ -159,6 +168,8 @@ When a PR delivers work attached to a Kaneo ticket, mention the ticket:
 
 - Start the PR body with a ticket line that links the ticket's Kaneo page: \`Kaneo: [FEX-2 — <ticket title>](<ticket URL>)\`. A bare identifier without the link is not enough.
 - Link every other ticket the PR touches the same way, on the same line or the next.
+- Keep the PR title in the repository's usual style; when the repository has no title convention, prefix it with the identifier: \`FEX-2: Add guest RSVP form\`.
+- Derive the identifier from the branch name when it follows the convention above, and confirm it against Kaneo.
 
 Build each ticket URL from values read from Kaneo, never from guesses:
 
@@ -170,14 +181,17 @@ Build each ticket URL from values read from Kaneo, never from guesses:
 - \`<workspaceId>\`, \`<projectId>\`, and \`<taskId>\` are the task's IDs from \`get_task\` or \`list_tasks\` (\`workspaceId\` from the project when the task omits it), not the project slug or task number.
 
 A URL the user shared for the ticket works too. When the base URL or any ID cannot be read, stop and ask the user for the ticket URL instead of opening the PR with an unlinked ticket line.
-- Keep the PR title in the repository's usual style; when the repository has no title convention, prefix it with the identifier: \`FEX-2: Add guest RSVP form\`.
-- Derive the identifier from the branch name when it follows the convention above, and confirm it against Kaneo.
 
 After the PR exists, add a comment to the Kaneo task with the PR URL, and move the task to the project's review column when one exists and the user has not asked to keep the status. Leave PRs for work without a ticket unchanged.
 `;
 }
 
-export function kaneoInstructionsBlock(runtime: Runtime): string {
+/** The always-on block; runtimes that share one file (a project's AGENTS.md) are all named. */
+export function kaneoInstructionsBlock(runtimes: Runtime[]): string {
+  const scribe =
+    runtimes.length === 1
+      ? CALL[runtimes[0]!](SCRIBE)
+      : `the \`${SCRIBE}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL[r](SCRIBE)}`).join("; ")})`;
   return `## Kaneo work tracking
 
 Kaneo is the work tracker, reached through the \`${KANEO_MCP}\` MCP server. Use the \`${KANEO_SKILL}\` skill before planning, creating, estimating, splitting, or updating Kaneo tickets, and before creating a branch or PR for ticket work.
@@ -185,7 +199,7 @@ Kaneo is the work tracker, reached through the \`${KANEO_MCP}\` MCP server. Use 
 - A ticket identifier is the project slug plus the task number, such as \`FEX-2\`. Read both from Kaneo; never guess them.
 - Name a branch for ticket work \`<IDENTIFIER>/<short-kebab-description>\`, such as \`FEX-2/some-feature-getting-done\`, created from the up-to-date default branch unless another base is named.
 - A PR for ticket work starts its body with \`Kaneo: [<IDENTIFIER> — <ticket title>](<ticket URL>)\`, linking the ticket's Kaneo page, and links every other ticket it touches the same way. Build each URL from IDs read from Kaneo, as the \`${KANEO_SKILL}\` skill describes; never guess them. After opening it, comment the PR URL on the Kaneo task.
-- Save and read tickets through ${CALL[runtime](SCRIBE)}, a cheap agent, and gather ticket context with ladder read agents, so Kaneo output stays out of this session.`;
+- Save and read tickets through ${scribe}, a cheap agent, and gather ticket context with ladder read agents, so Kaneo output stays out of this session.`;
 }
 
 export const SCRIBE_DESCRIPTION =
@@ -194,6 +208,7 @@ export const SCRIBE_DESCRIPTION =
 export const SCRIBE_BODY = `You are the Kaneo scribe, a cheap worker that saves and reads Kaneo tickets through the \`${KANEO_MCP}\` MCP tools. The parent session already decided what to track; you carry it out exactly.
 
 Rules:
+- When the Kaneo tools are not declared yet, load them first with \`tool_search\` (query \`kaneo\`).
 - Do only what the request lists. Never invent stories, change estimates, rename titles, or pick another project or column.
 - Before creating tasks, read the project (for its slug) and its columns, and list workspace labels. Reuse a label whose name matches exactly; create one only when it is absent, with the color the request gives.
 - Create tasks in the order given, then attach labels, then create relations (\`blocks\` from the prerequisite to the waiting task), then comments.
