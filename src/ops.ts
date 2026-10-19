@@ -11,7 +11,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -69,8 +71,10 @@ export interface ManifestRecord {
   sha?: string;
   /** file: where the replaced file was saved. */
   backup?: string;
-  /** block: the file did not exist before model-ladder created it. */
+  /** block, json-set, json-hook: the file did not exist before model-ladder created it. */
   createdFile?: boolean;
+  /** Directories model-ladder created for this path, deepest first; removed on uninstall when empty. */
+  createdDirs?: string[];
   /** json-set: JSON pointer segments; frontmatter: the key. */
   pointer?: string[];
   key?: string;
@@ -358,6 +362,22 @@ export function planOp(op: Op): PlannedOp {
 
 // ---------------------------------------------------------------- apply
 
+function missingDirs(dir: string): string[] {
+  const dirs: string[] = [];
+  for (let d = dir; !existsSync(d) && dirname(d) !== d; d = dirname(d)) dirs.push(d);
+  return dirs;
+}
+
+/** Deletes a JSON file model-ladder created once nothing but `{}` is left in it. */
+function writeOrDropJson(r: ManifestRecord, text: string): void {
+  const value = parseJson(r.path, text);
+  if (r.createdFile && value && typeof value === "object" && Object.keys(value).length === 0) {
+    rmSync(r.path, { force: true });
+  } else {
+    writeAtomic(r.path, text);
+  }
+}
+
 function backupFile(path: string): string {
   const { backups } = statePaths();
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -374,7 +394,7 @@ export function applyOp(
 ): ManifestRecord | undefined {
   const { op, action } = planned;
   if (action === "skip") return existing;
-  const base = {
+  const base: ManifestRecord = {
     kind: op.kind,
     runtime: op.runtime,
     component: op.component,
@@ -382,6 +402,8 @@ export function applyOp(
     label: op.label,
   };
   const current = readText(op.path);
+  base.createdDirs = existing?.createdDirs ?? missingDirs(dirname(op.path));
+  const createdFile = existing?.createdFile ?? current === undefined;
   switch (op.kind) {
     case "file": {
       let backup = existing?.backup;
@@ -394,7 +416,7 @@ export function applyOp(
     }
     case "block": {
       if (action !== "unchanged") writeAtomic(op.path, withBlock(current ?? "", op.content));
-      return { ...base, createdFile: existing?.createdFile ?? current === undefined };
+      return { ...base, createdFile };
     }
     case "json-set": {
       const text = current ?? "{}\n";
@@ -402,7 +424,7 @@ export function applyOp(
       const prev = existing?.prev ?? getAt(root, op.pointer);
       const existingDepth = existing?.existingDepth ?? existingPrefix(root, op.pointer);
       if (action !== "unchanged") writeAtomic(op.path, setJson(text, op.pointer, op.value));
-      return { ...base, pointer: op.pointer, value: op.value, prev, existingDepth };
+      return { ...base, pointer: op.pointer, value: op.value, prev, existingDepth, createdFile };
     }
     case "json-hook": {
       const text = current ?? "{}\n";
@@ -417,7 +439,7 @@ export function applyOp(
             : [...groups, { matcher: op.matcher, hooks: [entry] }];
         writeAtomic(op.path, setJson(text, ["hooks", op.event], next));
       }
-      return { ...base, event: op.event, command: op.command };
+      return { ...base, event: op.event, command: op.command, createdFile };
     }
     case "frontmatter": {
       const text = current ?? "";
@@ -536,13 +558,13 @@ export function undoRecord(r: ManifestRecord, force = false): UndoResult {
       let next = setJson(current, pointer, r.prev?.present ? r.prev.value : undefined);
       if (!r.prev?.present)
         next = pruneParents(next, pointer, r.existingDepth ?? pointer.length - 1);
-      writeAtomic(r.path, next);
+      writeOrDropJson(r, next);
       return { record: r, outcome: r.prev?.present ? "restored" : "removed" };
     }
     case "json-hook": {
       const next = removeHook(current, r.event ?? "", r.command ?? "");
       if (next === current) return { record: r, outcome: "already-gone" };
-      writeAtomic(r.path, next);
+      writeOrDropJson(r, next);
       return { record: r, outcome: "removed" };
     }
     case "frontmatter": {
@@ -574,6 +596,17 @@ export function uninstall(filter: (r: ManifestRecord) => boolean, force = false)
     const res = undoRecord(r, force);
     results.push(res);
     if (res.outcome === "kept-modified") keep.unshift(r);
+  }
+  // Remove directories model-ladder created, deepest first, once they are empty.
+  const dirs = new Set(
+    results.filter((r) => r.outcome !== "kept-modified").flatMap((r) => r.record.createdDirs ?? []),
+  );
+  for (const dir of [...dirs].sort((a, b) => b.length - a.length)) {
+    try {
+      if (readdirSync(dir).length === 0) rmdirSync(dir);
+    } catch {
+      // Already gone or not removable: leave it.
+    }
   }
   saveManifest({ version: 1, records: keep });
   return results;
