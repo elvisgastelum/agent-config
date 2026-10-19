@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { parseArgs, styleText } from "node:util";
 import process$1, { stdin, stdout } from "node:process";
@@ -3470,7 +3470,45 @@ function removeHook(text, event, command, created) {
 	if (created === "hooks" && isEmpty(["hooks"])) out = setJson(out, ["hooks"], void 0);
 	return out;
 }
+/** A symlink whose target no longer exists. */
+function isDangling(path) {
+	try {
+		if (!lstatSync(path).isSymbolicLink()) return false;
+	} catch {
+		return false;
+	}
+	return !existsSync(path);
+}
+/**
+* Broken symlinks on a target path: the file itself or a parent directory. An older installer
+* may have linked a skill folder into a checkout that is gone; nothing can be written through it.
+*/
+function danglingLinks(path) {
+	const found = [];
+	for (let p = path; dirname(p) !== p; p = dirname(p)) if (isDangling(p)) found.push(p);
+	return found;
+}
+/** Removes the broken symlinks on a path and returns them, so uninstall can put them back. */
+function replaceDanglingLinks(path) {
+	return danglingLinks(path).map((link) => {
+		const target = readlinkSync(link);
+		unlinkSync(link);
+		return {
+			path: link,
+			target
+		};
+	});
+}
 function planOp(op, recorded) {
+	const planned = planTarget(op, recorded);
+	const broken = danglingLinks(op.path)[0];
+	if (broken && (planned.action === "create" || planned.action === "update") && !planned.reason) return {
+		...planned,
+		reason: `replaces a broken symlink at ${broken}`
+	};
+	return planned;
+}
+function planTarget(op, recorded) {
 	const current = readText(op.path);
 	switch (op.kind) {
 		case "file":
@@ -3587,13 +3625,15 @@ function backupFile(path) {
 function applyOp(planned, existing, notes = []) {
 	const { op, action } = planned;
 	if (action === "skip") return existing;
+	const replacedLinks = [...existing?.replacedLinks ?? [], ...replaceDanglingLinks(op.path)];
 	const base = {
 		kind: op.kind,
 		runtime: op.runtime,
 		component: op.component,
 		path: op.path,
 		label: op.label,
-		...op.item ? { item: op.item } : {}
+		...op.item ? { item: op.item } : {},
+		...replacedLinks.length > 0 ? { replacedLinks } : {}
 	};
 	const current = readText(op.path);
 	base.createdDirs = existing?.createdDirs ?? missingDirs(dirname(op.path));
@@ -3685,7 +3725,10 @@ function applyPlan(plan) {
 				if (res.outcome === "kept-modified") {
 					const original = record.backup ? resolveBackup(record.backup) : void 0;
 					result.notes.push(`${record.path} was left as you changed it and is no longer managed` + (original && existsSync(original) ? `; your original is saved at ${original}` : ""));
-				} else pruneCreatedDirs([record]);
+				} else {
+					pruneCreatedDirs([record]);
+					restoreLinks([record]);
+				}
 				result.applied.push(planned);
 			} catch (error) {
 				result.errors.push({
@@ -3833,6 +3876,18 @@ function pruneCreatedDirs(records) {
 		if (readdirSync(dir).length === 0) rmdirSync(dir);
 	} catch {}
 }
+/** Puts back the broken symlinks agent-config replaced, once nothing it wrote is in their place. */
+function restoreLinks(records) {
+	for (const link of records.flatMap((r) => r.replacedLinks ?? [])) {
+		try {
+			lstatSync(link.path);
+			continue;
+		} catch {}
+		try {
+			symlinkSync(link.target, link.path);
+		} catch {}
+	}
+}
 function uninstall(filter, force = false) {
 	const manifest = loadManifest();
 	const results = [];
@@ -3846,7 +3901,9 @@ function uninstall(filter, force = false) {
 		results.push(res);
 		if (res.outcome === "kept-modified") keep.unshift(r);
 	}
-	pruneCreatedDirs(results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record));
+	const undone = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record);
+	pruneCreatedDirs(undone);
+	restoreLinks(undone);
 	saveManifest({
 		version: 1,
 		records: keep
