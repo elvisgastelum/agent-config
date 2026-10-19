@@ -2679,7 +2679,7 @@ function isReviewLens(value) {
 const COMMIT_SKILL = "commit";
 const COMMIT_WRITER = "commit-writer";
 const COMMIT_GUARD_FILE = "commit-guard.mjs";
-const CALL$1 = {
+const CALL$2 = {
 	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
 	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
 	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
@@ -2705,7 +2705,7 @@ Every commit message is exactly one line: the title. Nothing else.
 
 ## Draft the title on a cheap model
 
-A diff is long and a title is short, so reading the diff does not belong in the main session. Hand it to ${CALL$1[runtime](COMMIT_WRITER)} (${writerModel}, low thinking): it reads the staged diff and recent history and replies with one title.
+A diff is long and a title is short, so reading the diff does not belong in the main session. Hand it to ${CALL$2[runtime](COMMIT_WRITER)} (${writerModel}, low thinking): it reads the staged diff and recent history and replies with one title.
 
 - Tell it in one or two sentences what the change is for, when you know: intent the diff cannot show makes a better title.
 - Use its \`TITLE:\` line as is when it describes the change and follows the rules above; otherwise fix the wording yourself rather than calling it again.
@@ -2750,7 +2750,7 @@ EOF
 }
 /** The always-on block; runtimes that share one file (a project's AGENTS.md) are all named. */
 function commitInstructionsBlock(runtimes) {
-	const writer = runtimes.length === 1 ? CALL$1[runtimes[0]](COMMIT_WRITER) : `the \`${COMMIT_WRITER}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL$1[r](COMMIT_WRITER)}`).join("; ")})`;
+	const writer = runtimes.length === 1 ? CALL$2[runtimes[0]](COMMIT_WRITER) : `the \`${COMMIT_WRITER}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL$2[r](COMMIT_WRITER)}`).join("; ")})`;
 	return `## No AI attribution in commits or pull requests
 
 When creating or editing a commit, pull request title, pull request description, or PR comment:
@@ -2806,7 +2806,7 @@ const KANEO_TOOLS = [
 	"create_task_comment",
 	"list_workspace_members"
 ].map((t) => `mcp__${KANEO_MCP}__${t}`);
-const CALL = {
+const CALL$1 = {
 	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
 	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
 	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
@@ -2847,8 +2847,8 @@ Use the Kaneo MCP as the source of truth for work. Discover the target workspace
 
 Kaneo calls return long JSON and ticket text is boilerplate, so neither belongs in the main session. Decide scope, estimates, splits, and dependencies here; let cheap agents gather and type.
 
-- **Context for a ticket**: when the ticket needs facts from code, logs, or a diff (where a behavior lives, what a change touched, why a test fails), ask ${CALL[runtime]("ladder-read-fast")} for terse \`path:line\` bullets when the model-ladder agents are installed, and put only those bullets in the description.
-- **Saving tickets**: hand the finished batch to ${CALL[runtime](SCRIBE)} (${scribeModel}). Give it the workspace and project IDs, and for each story the exact title, description, column, priority, labels, and relations. It creates or updates them and replies with identifiers and task IDs; it decides nothing.
+- **Context for a ticket**: when the ticket needs facts from code, logs, or a diff (where a behavior lives, what a change touched, why a test fails), ask ${CALL$1[runtime]("ladder-read-fast")} for terse \`path:line\` bullets when the model-ladder agents are installed, and put only those bullets in the description.
+- **Saving tickets**: hand the finished batch to ${CALL$1[runtime](SCRIBE)} (${scribeModel}). Give it the workspace and project IDs, and for each story the exact title, description, column, priority, labels, and relations. It creates or updates them and replies with identifiers and task IDs; it decides nothing.
 - **Reading the board**: ask the scribe for a summary (open tickets in a column, a ticket's relations) instead of listing tasks here.
 - **Check its work**: compare the scribe's reply with the batch you sent, and fetch one task yourself when something is missing. When it replies \`partial\` or a call failed, fix only that item, directly or with one more scribe call.
 - Without an agent tool, or for a single small call, use the Kaneo MCP directly.
@@ -2950,7 +2950,7 @@ After the PR exists, add a comment to the Kaneo task with the PR URL, and move t
 }
 /** The always-on block; runtimes that share one file (a project's AGENTS.md) are all named. */
 function kaneoInstructionsBlock(runtimes) {
-	const scribe = runtimes.length === 1 ? CALL[runtimes[0]](SCRIBE) : `the \`${SCRIBE}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL[r](SCRIBE)}`).join("; ")})`;
+	const scribe = runtimes.length === 1 ? CALL$1[runtimes[0]](SCRIBE) : `the \`${SCRIBE}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL$1[r](SCRIBE)}`).join("; ")})`;
 	return `## Kaneo work tracking
 
 Kaneo is the work tracker, reached through the \`${KANEO_MCP}\` MCP server. Use the \`${KANEO_SKILL}\` skill before planning, creating, estimating, splitting, or updating Kaneo tickets, and before creating a branch or PR for ticket work.
@@ -2980,6 +2980,136 @@ SAVED:
 RELATIONS: <created relations, or "none">
 FAILED: <failed calls with their error, or "none">
 `;
+//#endregion
+//#region src/continue.ts
+const CONTINUE = "continue";
+const CALL = {
+	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
+	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
+	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
+	pi: (agent) => `the subagent tool with the \`${agent}\` agent`
+};
+/** How the user runs the action: a slash command, or Codex's explicit `$skill` mention. */
+function continueCommand(runtime) {
+	return runtime === "codex" ? `$${CONTINUE}` : `/${CONTINUE}`;
+}
+const DESCRIPTION = "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one.";
+const ARGUMENT_HINT = "[parallel [n]]";
+/** Frontmatter for the file each runtime reads; every one keeps the action manual-only. */
+function frontmatter(runtime) {
+	const description = JSON.stringify(`${DESCRIPTION} Manual action only, run with ${continueCommand(runtime)}.`);
+	const hint = `argument-hint: ${JSON.stringify(ARGUMENT_HINT)}`;
+	switch (runtime) {
+		case "claude": return `---\nname: ${CONTINUE}\ndescription: ${description}\n${hint}\ndisable-model-invocation: true\n---`;
+		case "codex": return `---\nname: ${CONTINUE}\ndescription: ${description}\n---`;
+		case "opencode": return `---\ndescription: ${description}\n---`;
+		case "pi": return `---\ndescription: ${description}\n${hint}\n---`;
+	}
+}
+/** Codex: an explicit `$continue` still works; Codex never picks the skill on its own. */
+const CODEX_POLICY = `policy:\n  allow_implicit_invocation: false\n`;
+function continueMarkdown(runtime, models) {
+	const cmd = continueCommand(runtime);
+	const args = runtime === "codex" ? `Arguments passed to this run: the words after \`${cmd}\` in the user's message (none means no arguments).` : "Arguments passed to this run: `$ARGUMENTS` (empty means no arguments).";
+	const scribe = CALL[runtime](SCRIBE);
+	return `${frontmatter(runtime)}
+
+## Arguments
+
+${args} Read them before doing anything else:
+
+| Invocation | Mode | Ticket limit |
+| --- | --- | --- |
+| \`${cmd}\` | Single | 1 (the single-ticket flow below) |
+| \`${cmd} parallel\` | Parallel | 4 |
+| \`${cmd} parallel <n>\` | Parallel | \`<n>\` (a positive integer, e.g. \`${cmd} parallel 10\`) |
+
+If \`parallel\` is followed by something that is not a positive integer, or the first argument is not \`parallel\`, stop and say the argument is invalid. With no arguments, run only the single-ticket flow and ignore the parallel mode section.
+
+## Save context: cheap agents do the reading and the clerical work
+
+This session keeps the decisions (which ticket, the design, conflict resolution, whether checks really pass). Everything bulky goes to an agent on a cheaper model, so its output never fills this session:
+
+- **Kaneo**: read the board and every ticket write (status moves, comments) through ${scribe} (${models.fast}). Ask it for a short summary, never raw Kaneo JSON.
+- **Reads and edits**: follow the \`model-ladder\` skill. Large or many files, logs, CI and test output go to ${CALL[runtime]("ladder-read-fast")}; boilerplate, tests and mechanical edits to ${CALL[runtime]("ladder-edit-fast")} (${CALL[runtime]("ladder-edit-balanced")} for new logic). Climb a rung only when a reply is partial or fails verification.
+- **Commit titles**: the \`${COMMIT_SKILL}\` skill hands the staged diff to ${CALL[runtime](COMMIT_WRITER)}, which replies with one title.
+- **Parallel workers** run on the balanced rung (${models.balanced}), not this session's model, whenever the sub-agent tool lets you choose a model.
+
+When one of these agents is not installed, do the step yourself with bounded reads (line ranges, \`--stat\`, \`tail\`).
+
+## Single-ticket flow
+
+Continue the next Kaneo ticket's work, move it to in progress, then commit and create the merge request:
+
+1. Load the \`${KANEO_SKILL}\` skill. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order with their blocking relations, and pick the first one that is not blocked by an unfinished ticket.
+2. Have the scribe move it to In Progress.
+3. \`git fetch origin\` and create the branch \`<IDENTIFIER>/<short-kebab-description>\` (e.g. \`FEX-2/some-feature-getting-done\`) from the up-to-date default branch.
+4. Implement the ticket with tests and docs alongside the change, delegating reads and edits as above.
+5. Run the project's checks and leave them passing; read long output through the ladder read agent.
+6. Commit with the \`${COMMIT_SKILL}\` skill, push the branch and open the PR (body starts with the Kaneo ticket link, no AI attribution).
+7. Have the scribe comment the PR URL on the ticket.
+8. Report the ticket, branch, PR URL and the checks run with their results.
+
+## Parallel mode
+
+Goal: take up to N Kaneo tickets that can be worked at the same time, build each in its own worktree until it is ready to merge, then merge them one by one, bringing each next branch up to date with the latest default branch before it merges.
+
+### 1. Pick tickets that can run in parallel
+
+1. Load the \`${KANEO_SKILL}\` skill.
+2. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order, each with its relations.
+3. Drop any ticket that is blocked by an unfinished ticket, or that depends on another candidate.
+4. Drop tickets that would clearly change the same files or the same feature area as a ticket already picked; conflicts are allowed but should be rare.
+5. Pick up to N tickets. If fewer qualify, take what qualifies and say why the rest were skipped. If only one qualifies, run the single-ticket flow.
+6. Show the picked tickets (identifier, title) and the planned merge order before creating anything.
+
+### 2. Create one worktree per ticket
+
+For each picked ticket:
+
+1. \`git fetch origin\` and use the up-to-date default branch as the base.
+2. Branch name: \`<IDENTIFIER>/<short-kebab-description>\` (e.g. \`FEX-2/some-feature-getting-done\`).
+3. Worktree path: \`<repo-parent>/<repo-name>-worktrees/<IDENTIFIER>-<short-kebab-description>\`. Never under \`/tmp\`.
+4. \`git worktree add -b <branch> <path> origin/<default-branch>\`
+5. Have the scribe move the ticket to In Progress.
+
+### 3. Build every ticket until it is ready to merge
+
+Launch one sub-agent per worktree, all at once so they run concurrently, each on the balanced rung (${models.balanced}). Each sub-agent:
+
+- works only inside its own worktree path, and never touches another worktree or the main checkout;
+- implements its ticket, with tests and docs alongside the change;
+- keeps its own context small: bounded reads (line ranges, \`--stat\`, \`tail\`), and the ladder, scribe and commit-writer agents when it can delegate;
+- runs the project's checks and leaves them passing;
+- commits with the \`${COMMIT_SKILL}\` skill, pushes its branch, and opens the PR (body starts with the Kaneo ticket link, no AI attribution);
+- comments the PR URL on its Kaneo ticket;
+- reports back in at most ten lines: ticket, branch, worktree path, PR URL, checks run and their results, or why it is blocked.
+
+Wait for all of them. A ticket that comes back blocked or with failing checks is left out of the merge loop and listed in the final report.
+
+### 4. Merge loop, one PR at a time
+
+Merge the ready PRs in the planned order. For each PR:
+
+1. \`git fetch origin\`.
+2. In that ticket's worktree, merge the latest default branch into its branch: \`git merge origin/<default-branch>\`.
+3. If there are conflicts, resolve them locally (load the \`resolving-merge-conflicts\` skill when it is available), keeping the intent of both sides.
+4. Re-run the project's checks. Do not continue if they fail; fix them first.
+5. Commit the merge if needed and push the branch.
+6. Wait for the PR's CI checks to pass; read failing logs through the ladder read agent.
+7. Merge the PR.
+8. Have the scribe move the Kaneo ticket to Done.
+9. Go to the next PR. Its step 2 now picks up the PR that was just merged.
+
+Stop the loop and report when a conflict cannot be resolved with confidence, checks keep failing after a fix attempt, or a PR cannot be merged (review required, branch protection). Leave the remaining PRs open and untouched.
+
+### 5. Clean up and report
+
+1. After a PR is merged, remove its worktree: \`git worktree remove <path>\`. Keep the worktree of any ticket that was not merged.
+2. Update the main checkout: \`git checkout <default-branch> && git pull\`.
+3. Report a table: ticket, PR URL, status (merged / open / blocked), and what is left for anything not merged.
+`;
+}
 //#endregion
 //#region src/paths.ts
 function home() {
@@ -4625,8 +4755,8 @@ function at(root, pointer) {
 	}
 	return node;
 }
-function modelName(runtime, tiers, effort = tiers.fast.effort) {
-	const { model } = tiers.fast;
+function modelName(runtime, tiers, effort = tiers.fast.effort, tier = "fast") {
+	const { model } = tiers[tier];
 	if (runtime === "codex" || !model) return `${model || "session model"}, ${effort} effort`;
 	return model;
 }
@@ -4910,50 +5040,114 @@ function commitGuardOps(project) {
 		}
 	];
 }
+const commit = {
+	id: "commit",
+	title: "Commit titles",
+	description: "title-only commit skill, no-AI-attribution rules, a cheap low-thinking commit-writer agent that drafts the title, and a Claude commit guard",
+	settings: [],
+	discover: () => ({}),
+	ops: (entry, runtime, config) => {
+		const tiers = config.tiers[runtime];
+		const where = layout(runtime, entry.project);
+		const writer = cheapAgent(runtime, where.agents, tiers, WRITER_AGENT);
+		const model = modelName(runtime, tiers, WRITER_EFFORT);
+		const ops = [
+			{
+				runtime,
+				component: "catalog",
+				kind: "file",
+				path: join(where.skills, COMMIT_SKILL, "SKILL.md"),
+				content: commitSkillMarkdown(runtime, model),
+				label: `commit skill ${COMMIT_SKILL}`
+			},
+			{
+				runtime,
+				component: "catalog",
+				kind: "file",
+				path: writer.path,
+				content: writer.content,
+				label: `commit agent ${COMMIT_WRITER} (${model})`
+			},
+			{
+				runtime,
+				component: "catalog",
+				kind: "block",
+				path: where.instructions,
+				content: commitInstructionsBlock(entry.runtimes.filter((r) => layout(r, entry.project).instructions === where.instructions)),
+				markers: [blockMarkers("commit", "html"), COMMIT_LEGACY_BLOCK],
+				label: "commit instructions block"
+			}
+		];
+		if (runtime === "claude") ops.push(...commitGuardOps(entry.project));
+		return ops;
+	}
+};
+/**
+* Where each runtime reads a manual-only action: a Claude skill that the model never invokes, an
+* OpenCode command, a Codex skill with implicit invocation off, a Pi prompt template.
+*/
+function continueOps(runtime, project, config) {
+	const tiers = config.tiers[runtime];
+	const base = {
+		runtime,
+		component: "catalog",
+		label: "continue action"
+	};
+	const content = continueMarkdown(runtime, {
+		fast: modelName(runtime, tiers),
+		balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced")
+	});
+	const skill = join(layout(runtime, project).skills, CONTINUE);
+	switch (runtime) {
+		case "claude": return [{
+			...base,
+			kind: "file",
+			path: join(skill, "SKILL.md"),
+			content
+		}];
+		case "opencode": {
+			const dir = project ? join(project, ".opencode") : opencodeDir();
+			return [{
+				...base,
+				kind: "file",
+				path: join(dir, "commands", `${CONTINUE}.md`),
+				content
+			}];
+		}
+		case "codex": return [{
+			...base,
+			kind: "file",
+			path: join(skill, "SKILL.md"),
+			content
+		}, {
+			...base,
+			kind: "file",
+			path: join(skill, "agents", "openai.yaml"),
+			content: CODEX_POLICY,
+			label: "continue action policy (explicit invocation only)"
+		}];
+		case "pi": {
+			const dir = project ? join(project, ".pi") : piDir();
+			return [{
+				...base,
+				kind: "file",
+				path: join(dir, "prompts", `${CONTINUE}.md`),
+				content
+			}];
+		}
+	}
+}
 const CATALOG = [
 	modelLadder,
 	kaneo,
+	commit,
 	{
-		id: "commit",
-		title: "Commit titles",
-		description: "title-only commit skill, no-AI-attribution rules, a cheap low-thinking commit-writer agent that drafts the title, and a Claude commit guard",
+		id: CONTINUE,
+		title: "Continue Kaneo tickets",
+		description: "manual /continue action that works the next Kaneo ticket (or several in parallel worktrees) end to end, handing reads, edits, ticket writes and commit titles to cheap agents",
 		settings: [],
 		discover: () => ({}),
-		ops: (entry, runtime, config) => {
-			const tiers = config.tiers[runtime];
-			const where = layout(runtime, entry.project);
-			const writer = cheapAgent(runtime, where.agents, tiers, WRITER_AGENT);
-			const model = modelName(runtime, tiers, WRITER_EFFORT);
-			const ops = [
-				{
-					runtime,
-					component: "catalog",
-					kind: "file",
-					path: join(where.skills, COMMIT_SKILL, "SKILL.md"),
-					content: commitSkillMarkdown(runtime, model),
-					label: `commit skill ${COMMIT_SKILL}`
-				},
-				{
-					runtime,
-					component: "catalog",
-					kind: "file",
-					path: writer.path,
-					content: writer.content,
-					label: `commit agent ${COMMIT_WRITER} (${model})`
-				},
-				{
-					runtime,
-					component: "catalog",
-					kind: "block",
-					path: where.instructions,
-					content: commitInstructionsBlock(entry.runtimes.filter((r) => layout(r, entry.project).instructions === where.instructions)),
-					markers: [blockMarkers("commit", "html"), COMMIT_LEGACY_BLOCK],
-					label: "commit instructions block"
-				}
-			];
-			if (runtime === "claude") ops.push(...commitGuardOps(entry.project));
-			return ops;
-		}
+		ops: (entry, runtime, config) => continueOps(runtime, entry.project, config)
 	}
 ];
 function catalogItem(id) {
@@ -6130,7 +6324,7 @@ const SHORT_COMMANDS = {
 const HELP = `agent-config ${VERSION}
 Configure Claude Code, OpenCode, Codex and Pi from a catalog of abilities, such as
 the model ladder (route reads and edits to the cheapest capable model: fast → balanced
-→ deep), Kaneo work tracking and title-only commits.
+→ deep), Kaneo work tracking, title-only commits and the /continue ticket action.
 Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.3.0).
 
 Usage:

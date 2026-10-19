@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
 import { read } from "./helpers.ts";
 
@@ -211,6 +211,79 @@ test("install commit --project writes the guard into the repository's Claude set
   }
 });
 
+test("install continue adds a manual-only action per runtime that delegates to cheap agents", () => {
+  // The old standalone installer's copy is replaced, and put back on uninstall.
+  const skill = join(home, ".claude/skills/continue/SKILL.md");
+  run("install", "kaneo", "--runtime", "claude", "--url", "https://k.example.com", "--yes");
+  mkdirSync(dirname(skill), { recursive: true });
+  writeFileSync(skill, "old continue skill\n");
+
+  const rt = ["claude", "opencode", "codex", "pi"].flatMap((r) => ["--runtime", r]);
+  const installed = run("install", "continue", ...rt, "--yes", "--json");
+  expect(installed.code).toBe(0);
+  const plan = JSON.parse(installed.stdout).plan as { item: string }[];
+  expect(plan.every((x) => x.item === "continue@user")).toBe(true);
+
+  const claude = read(skill);
+  expect(claude).toContain("name: continue");
+  expect(claude).toContain("disable-model-invocation: true");
+  expect(claude).toContain('argument-hint: "[parallel [n]]"');
+  expect(claude).toContain("`$ARGUMENTS`");
+  expect(claude).toContain('`subagent_type: "kaneo-scribe"` (claude-haiku-5-5)');
+  expect(claude).toContain('`subagent_type: "ladder-read-fast"`');
+  expect(claude).toContain('`subagent_type: "commit-writer"`');
+  expect(claude).toContain("each on the balanced rung (claude-sonnet-5-5)");
+
+  const opencode = read(join(home, ".config/opencode/commands/continue.md"));
+  expect(opencode).toContain("`$ARGUMENTS`");
+  expect(opencode).toContain("the task tool with the `kaneo-scribe` agent");
+  expect(opencode).toContain("anthropic/claude-sonnet-5-5");
+  expect(existsSync(join(home, ".config/opencode/skills/continue"))).toBe(false);
+
+  const codex = read(join(home, ".codex/skills/continue/SKILL.md"));
+  expect(codex).toContain("`$continue parallel <n>`");
+  expect(codex).not.toContain("$ARGUMENTS");
+  expect(codex).toContain("session model, medium effort");
+  expect(read(join(home, ".codex/skills/continue/agents/openai.yaml"))).toBe(
+    "policy:\n  allow_implicit_invocation: false\n",
+  );
+
+  const pi = read(join(home, ".pi/agent/prompts/continue.md"));
+  expect(pi).toContain("`/continue parallel`");
+  expect(pi).toContain("the subagent tool with the `commit-writer` agent");
+
+  expect(JSON.parse(run("install", "continue", "--yes", "--json").stdout).applied).toBe(false);
+
+  expect(run("uninstall", "continue", "--yes").code).toBe(0);
+  expect(read(skill)).toBe("old continue skill\n");
+  expect(existsSync(join(home, ".config/opencode/commands/continue.md"))).toBe(false);
+  expect(existsSync(join(home, ".codex/skills/continue"))).toBe(false);
+  expect(existsSync(join(home, ".pi/agent/prompts/continue.md"))).toBe(false);
+  expect(existsSync(join(home, ".claude/skills/kaneo-work-tracking/SKILL.md"))).toBe(true);
+});
+
+test("install continue --project writes each runtime's action into the repository", () => {
+  const repo = mkdtempSync(join(tmpdir(), "agent-config-repo-"));
+  try {
+    const rt = ["claude", "opencode", "codex", "pi"].flatMap((r) => ["--runtime", r]);
+    expect(run("install", "continue", "--project", repo, ...rt, "--yes").code).toBe(0);
+    for (const path of [
+      ".claude/skills/continue/SKILL.md",
+      ".opencode/commands/continue.md",
+      ".agents/skills/continue/SKILL.md",
+      ".agents/skills/continue/agents/openai.yaml",
+      ".pi/prompts/continue.md",
+    ]) {
+      expect(existsSync(join(repo, path))).toBe(true);
+    }
+    expect(existsSync(join(home, ".claude"))).toBe(false);
+    expect(run("uninstall", "continue", "--project", repo, "--yes").code).toBe(0);
+    expect(existsSync(join(repo, ".pi/prompts/continue.md"))).toBe(false);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("install model-ladder installs only the ladder; uninstall model-ladder keeps kaneo", () => {
   const kaneo = ["install", "kaneo", "--runtime", "claude", "--url", "https://k.example.com"];
   expect(run(...kaneo, "--yes").code).toBe(0);
@@ -237,6 +310,7 @@ test("install model-ladder installs only the ladder; uninstall model-ladder keep
     "model-ladder",
     "kaneo",
     "commit",
+    "continue",
   ]);
   expect(listed.items[0].entries).toMatchObject([{ scope: "user", runtimes: ["claude"] }]);
   expect(run("catalog").stdout).toContain("install: agent-config install model-ladder\n");

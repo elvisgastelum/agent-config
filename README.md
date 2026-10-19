@@ -12,7 +12,7 @@ edits  ─┘                          └─ deep      Opus 5.5    last resort,
 
 It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the rungs for **Gentle AI review agents**, and undoes everything with one command.
 
-Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model. See [Catalog](#catalog).
+Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket. See [Catalog](#catalog).
 
 ## Install
 
@@ -117,6 +117,7 @@ agi install model-ladder                        # the ladder, for the detected a
 agi install kaneo --url https://kaneo.example.com   # user scope: every project
 agi install kaneo --project .                   # one repository, committed with it
 agi install commit                              # title-only commits, drafted by a cheap model
+agi install continue                            # /continue: work the next Kaneo ticket end to end
 agi uninstall kaneo [--project .]               # remove that copy only
 ```
 
@@ -162,6 +163,24 @@ Title-only commits, moved here from [claude-commit-skill](https://github.com/elv
 | guard, settings | `~/.claude/hooks/agent-config/commit-guard.mjs`, `~/.claude/settings.json` | `.claude/hooks/agent-config/commit-guard.mjs`, `.claude/settings.json`      |
 
 A block left by the old standalone installer (`BEGIN claude-commit-skill`) is replaced in place. Its `~/.claude/hooks/commit-guard.sh` hook entry is left alone; remove it from `settings.json` once the agent-config guard is installed.
+
+### continue
+
+A manual action that works Kaneo tickets end to end, moved here from [claude-continue-skill](https://github.com/elvisgastelum/claude-continue-skill). Install `kaneo` and `commit` with it (and the model ladder for its read and edit agents).
+
+- `/continue` (`$continue` in Codex) picks the next unblocked ticket, moves it to In Progress, branches `<IDENTIFIER>/<description>`, implements it with tests and docs, commits with the `commit` skill and opens the PR.
+- `/continue parallel [n]` (default 4) picks up to n tickets that do not block each other or touch the same area, builds each in its own worktree at `<repo-parent>/<repo-name>-worktrees/` with one sub-agent per ticket, then merges the PRs one at a time, bringing each branch up to date with the default branch first.
+- Cheap models: Kaneo reads and writes go through `kaneo-scribe`, file, log and CI reads through `ladder-read-fast`, mechanical edits through the ladder edit agents and commit titles through `commit-writer`. Parallel workers run on your balanced rung instead of the session model. The main session keeps only the decisions.
+- Never invoked by the model on its own: a Claude skill with `disable-model-invocation: true`, an OpenCode command, a Codex skill with `allow_implicit_invocation: false` in `agents/openai.yaml`, a Pi prompt template.
+
+| Runtime  | User scope                                              | Project scope (`--project <dir>`)  |
+| -------- | ------------------------------------------------------- | ---------------------------------- |
+| Claude   | `~/.claude/skills/continue/SKILL.md`                    | `.claude/skills/continue/SKILL.md` |
+| OpenCode | `~/.config/opencode/commands/continue.md`               | `.opencode/commands/continue.md`   |
+| Codex    | `~/.codex/skills/continue/` (with `agents/openai.yaml`) | `.agents/skills/continue/`         |
+| Pi       | `~/.pi/agent/prompts/continue.md`                       | `.pi/prompts/continue.md`          |
+
+A `~/.claude/skills/continue/SKILL.md` left by the old standalone installer is replaced and put back on uninstall.
 
 ## How the routing works
 
