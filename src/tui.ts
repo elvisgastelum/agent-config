@@ -13,7 +13,15 @@ import {
   upsertEntry,
   type CatalogEntry,
 } from "./catalog.ts";
-import { buildPlan, detect, detectedRuntimes, doctor, status, tildify } from "./commands.ts";
+import {
+  buildPlan,
+  detect,
+  detectedRuntimes,
+  doctor,
+  restoreShared,
+  status,
+  tildify,
+} from "./commands.ts";
 import { defaultConfig, loadConfig, saveConfig, type Config } from "./config.ts";
 import {
   applyPlan,
@@ -390,6 +398,7 @@ async function uninstallFlow(): Promise<void> {
   config.runtimes = config.runtimes.filter((r) => !runtimes.includes(r));
   forgetCatalog(config, () => true, runtimes);
   saveConfig(config);
+  restoreShared(config);
 }
 
 /** Returns true when a new version was installed and the TUI should exit. */

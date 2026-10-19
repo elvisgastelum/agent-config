@@ -133,6 +133,8 @@ agi uninstall kaneo [--project .]               # remove that copy only
 | instructions   | `~/.claude/CLAUDE.md`, `AGENTS.md` of each runtime                                                                          | `CLAUDE.md`, `AGENTS.md` (one shared block)                              |
 | MCP server     | `~/.claude.json` `mcpServers`, `opencode.jsonc` `mcp`, `~/.codex/config.toml` `[mcp_servers.kaneo]`, `~/.pi/agent/mcp.json` | `.mcp.json`, `opencode.json`, `.codex/config.toml`; Pi: user scope only  |
 
+The Claude scribe may call only Kaneo MCP tools, the OpenCode one cannot edit or run shell commands, and the Codex one runs read-only. Pi has no such restriction (it reaches MCP servers through its adapter's tool), so on Pi only the prompt keeps the scribe away from files and the shell.
+
 A block left by the old standalone installer (`BEGIN kaneo-work-tracking-skill`) is replaced in place. When `config.toml` already defines `[mcp_servers.kaneo]` itself, agent-config leaves it alone.
 
 ## How the routing works

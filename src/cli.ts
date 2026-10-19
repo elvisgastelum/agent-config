@@ -16,7 +16,7 @@ import {
   type CatalogEntry,
   type CatalogItem,
 } from "./catalog.ts";
-import { buildPlan, detectedRuntimes, doctor, status, tildify } from "./commands.ts";
+import { buildPlan, detectedRuntimes, doctor, restoreShared, status, tildify } from "./commands.ts";
 import { loadConfig, saveConfig, type Config } from "./config.ts";
 import { migrateLegacyLayout } from "./migrate.ts";
 import { configPath, setting } from "./paths.ts";
@@ -358,9 +358,9 @@ async function main(argv: string[]): Promise<number> {
         : `--${misplaced} only applies to delegate`,
     );
   }
-  const itemId = command === "install" || command === "uninstall" ? positionals[1] : undefined;
+  const itemId = ["install", "apply", "uninstall"].includes(command) ? positionals[1] : undefined;
   const catalogFlag = given.find((k) => CATALOG_ONLY.includes(k));
-  if (catalogFlag && (!itemId || (catalogFlag === "url" && command !== "install"))) {
+  if (catalogFlag && (!itemId || (catalogFlag === "url" && command === "uninstall"))) {
     throw new UsageError(
       `--${catalogFlag} only applies to ${catalogFlag === "url" ? "install" : "install or uninstall"} <item>`,
     );
@@ -457,7 +457,7 @@ async function main(argv: string[]): Promise<number> {
         forgetCatalog(config, () => true, runtimes);
       };
       const entries = status().filter((e) => match(e.record));
-      if (entries.length === 0 && key) {
+      if (entries.length === 0 && key && !values["dry-run"]) {
         // Nothing on disk, but forget a saved entry so `install` does not bring it back.
         const config = loadConfig();
         forget(config);
@@ -484,6 +484,7 @@ async function main(argv: string[]): Promise<number> {
       const config = loadConfig();
       forget(config);
       saveConfig(config);
+      if (runtimes.length > 0) restoreShared(config);
       out(
         json,
         {
