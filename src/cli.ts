@@ -20,7 +20,7 @@ import { VERSION } from "./version.ts";
 const HELP = `agent-config ${VERSION}
 Configure Claude Code, OpenCode, Codex and Pi. Model ladder: route reads and
 edits to the cheapest capable model (fast → balanced → deep).
-Also installed as \`model-ladder\` (its name before 0.3.0).
+Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.3.0).
 
 Usage:
   agent-config                     open the TUI (in a terminal)

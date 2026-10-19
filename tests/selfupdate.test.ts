@@ -2,9 +2,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -100,6 +102,53 @@ test("install.sh moves a pre-rename install and adds both commands", () => {
       /^\d+\.\d+\.\d+$/,
     );
   }
+  const agi = join(h, ".local", "bin", "agi");
+  expect(readlinkSync(agi)).toBe("agent-config");
+  expect(spawnSync(agi, ["--version"], { encoding: "utf8" }).stdout.trim()).toMatch(
+    /^\d+\.\d+\.\d+$/,
+  );
+});
+
+function runInstaller(h: string, ...args: string[]) {
+  return spawnSync("bash", [join(repo, "install.sh"), ...args], {
+    env: {
+      PATH: process.env.PATH,
+      HOME: h,
+      AGENT_CONFIG_REPO: origin,
+      AGENT_CONFIG_NO_RUN: "1",
+      NO_COLOR: "1",
+    },
+    encoding: "utf8",
+  });
+}
+
+test("install.sh links agi to agent-config and uninstall removes it", () => {
+  const h = join(root, "agi-alias");
+  const bin = join(h, ".local", "bin");
+  expect(runInstaller(h).status).toBe(0);
+  expect(lstatSync(join(bin, "agi")).isSymbolicLink()).toBe(true);
+  expect(readlinkSync(join(bin, "agi"))).toBe("agent-config");
+  // Re-running (an update) keeps the link.
+  expect(runInstaller(h).status).toBe(0);
+  expect(readlinkSync(join(bin, "agi"))).toBe("agent-config");
+  const res = runInstaller(h, "--uninstall");
+  expect(res.status).toBe(0);
+  for (const name of ["agent-config", "model-ladder", "agi"]) {
+    expect(existsSync(join(bin, name))).toBe(false);
+  }
+});
+
+test("install.sh leaves an agi command it did not create alone", () => {
+  const h = join(root, "agi-foreign");
+  const bin = join(h, ".local", "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "agi"), "#!/bin/sh\necho other\n", { mode: 0o755 });
+  const res = runInstaller(h);
+  expect(res.status).toBe(0);
+  expect(res.stderr).toContain("not replacing");
+  expect(readFileSync(join(bin, "agi"), "utf8")).toBe("#!/bin/sh\necho other\n");
+  expect(runInstaller(h, "--uninstall").status).toBe(0);
+  expect(readFileSync(join(bin, "agi"), "utf8")).toBe("#!/bin/sh\necho other\n");
 });
 
 test("self-update moves a pre-rename install even when it is up to date", () => {
@@ -140,6 +189,7 @@ test("pulls a newer version and rewrites the command", () => {
     const wrapper = readFileSync(join(home, ".local", "bin", name), "utf8");
     expect(wrapper).toContain(`export AGENT_CONFIG_HOME='${installed}'`);
   }
+  expect(readlinkSync(join(home, ".local", "bin", "agi"))).toBe("agent-config");
 });
 
 test("rolls back when the new version does not run", () => {

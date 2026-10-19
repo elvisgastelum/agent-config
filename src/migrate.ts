@@ -47,7 +47,9 @@ function key(r: Rec): string {
 
 function readManifest(path: string): ManifestFile | undefined {
   if (!existsSync(path)) return undefined;
-  return JSON.parse(readFileSync(path, "utf8")) as ManifestFile;
+  const data = JSON.parse(readFileSync(path, "utf8")) as ManifestFile;
+  // Same rule as the main loader: records that are not a list count as none.
+  return { ...data, records: Array.isArray(data.records) ? data.records : [] };
 }
 
 /** Writes the records back, keeping every other top-level field of the manifest. */
@@ -82,6 +84,34 @@ function withOriginal(current: Rec, older: Rec): Rec {
   return merged as Rec;
 }
 
+interface Move {
+  from: string;
+  to: string;
+}
+
+/**
+ * Where each old backup stamp goes, renamed when the new folder already has that stamp.
+ * Saved to a journal before anything moves, so an interrupted merge resumes with the same
+ * names instead of guessing: a renamed stamp must never be confused with the newer install's.
+ */
+function planMoves(legacy: string): Move[] {
+  const journal = join(legacy, "migration.json");
+  if (existsSync(journal))
+    return (JSON.parse(readFileSync(journal, "utf8")) as { moves: Move[] }).moves;
+  const state = statePaths();
+  const legacyBackups = join(legacy, "backups");
+  const taken = new Set<string>();
+  const moves: Move[] = [];
+  for (const stamp of existsSync(legacyBackups) ? readdirSync(legacyBackups) : []) {
+    let to = join(state.backups, stamp);
+    for (let i = 2; existsSync(to) || taken.has(to); i++) to = join(state.backups, `${stamp}-${i}`);
+    taken.add(to);
+    moves.push({ from: join(legacyBackups, stamp), to });
+  }
+  writeFileSync(journal, `${JSON.stringify({ moves }, null, 2)}\n`);
+  return moves;
+}
+
 /** Merges an old state folder into an existing new one and removes the old one. */
 function mergeState(legacy: string, warnings: string[]): void {
   const state = statePaths();
@@ -89,38 +119,41 @@ function mergeState(legacy: string, warnings: string[]): void {
   const old = readManifest(legacyManifest);
   const current = readManifest(state.manifest);
 
-  // Move each old backup stamp, renaming it when the new folder already has that stamp.
-  const moves = new Map<string, string>();
-  const legacyBackups = join(legacy, "backups");
-  if (existsSync(legacyBackups)) {
-    for (const stamp of readdirSync(legacyBackups)) {
-      const to = uniquePath(join(state.backups, stamp));
-      mkdirSync(state.backups, { recursive: true });
-      renameSync(join(legacyBackups, stamp), to);
-      moves.set(join(legacyBackups, stamp), to);
-    }
+  const moves = planMoves(legacy);
+  for (const { from, to } of moves) {
+    // Already moved by an earlier, interrupted run.
+    if (!existsSync(from) && existsSync(to)) continue;
+    mkdirSync(state.backups, { recursive: true });
+    renameSync(from, to);
   }
   const relocate = (backup: string | undefined): string | undefined => {
     if (!backup) return backup;
-    for (const [from, to] of moves)
+    for (const { from, to } of moves)
       if (backup.startsWith(`${from}/`)) return to + backup.slice(from.length);
     return backup;
   };
 
-  const olderByKey = new Map(
-    (old?.records ?? []).map((r) => [key(r), { ...r, backup: relocate(r.backup) }]),
-  );
+  // Every old record is kept; the first one for a target the new install also manages lends
+  // that record its originals, the rest are added as they are.
+  const older = (old?.records ?? []).map((r) => ({ ...r, backup: relocate(r.backup) }));
+  const firstByKey = new Map<string, Rec>();
+  for (const r of older) if (!firstByKey.has(key(r))) firstByKey.set(key(r), r);
+  const used = new Set<Rec>();
   const records = (current?.records ?? []).map((r) => {
-    const older = olderByKey.get(key(r));
-    if (!older) return r;
-    olderByKey.delete(key(r));
-    return withOriginal(r, older);
+    const match = firstByKey.get(key(r));
+    if (!match || used.has(match)) return r;
+    used.add(match);
+    return withOriginal(r, match);
   });
-  writeManifest(state.manifest, current, [...records, ...olderByKey.values()]);
+  // A resumed merge may find these already written; never add the same record twice.
+  const present = new Set(records.map((r) => JSON.stringify(r)));
+  const added = older.filter((r) => !used.has(r) && !present.has(JSON.stringify(r)));
+  writeManifest(state.manifest, current, [...records, ...added]);
 
   rmSync(legacyManifest, { force: true });
+  rmSync(join(legacy, "migration.json"), { force: true });
   try {
-    rmdirSync(legacyBackups);
+    rmdirSync(join(legacy, "backups"));
   } catch {
     // Already gone.
   }

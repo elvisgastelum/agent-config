@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -213,4 +214,86 @@ test("a moved state folder with an unreadable manifest is reported as moved, not
   expect(res.stderr).toContain("renamed from model-ladder");
   expect(res.stderr).toContain("could not update the backup paths");
   expect(res.stderr).not.toContain("could not move");
+});
+
+test("an interrupted merge resumes with the same backup names", () => {
+  const original = legacyInstall();
+  const stamp = readdirSync(p(".local/state/model-ladder/backups"))[0] ?? "";
+  // The newer install already has a backup folder with the same name, unrelated content.
+  put(
+    p(`.local/state/agent-config/backups/${stamp}/.claude/skills/model-ladder/SKILL.md`),
+    "newer install\n",
+  );
+  put(p(".local/state/agent-config/manifest.json"), `{ "version": 1, "records": [] }\n`);
+  // An earlier run planned and made the move, then stopped before writing the manifest.
+  const from = p(`.local/state/model-ladder/backups/${stamp}`);
+  const to = p(`.local/state/agent-config/backups/${stamp}-2`);
+  writeFileSync(
+    p(".local/state/model-ladder/migration.json"),
+    JSON.stringify({ moves: [{ from, to }] }),
+  );
+  renameSync(from, to);
+
+  run("status");
+  expect(existsSync(p(".local/state/model-ladder"))).toBe(false);
+  expect(run("uninstall", "--yes").code).toBe(0);
+  expect(read(p(".claude/skills/model-ladder/SKILL.md"))).toBe(original.skill);
+});
+
+test("a file the old install created is removed on uninstall even if a newer install backed it up", () => {
+  const file = p(".claude/agents/created-by-old.md");
+  put(file, "old install output\n");
+  const sha = createHash("sha256").update("old install output\n").digest("hex");
+  const base = {
+    kind: "file",
+    runtime: "claude",
+    component: "agents",
+    path: file,
+    label: "x",
+    sha,
+  };
+  put(
+    p(".local/state/model-ladder/manifest.json"),
+    JSON.stringify({ version: 1, records: [base] }),
+  );
+  const newer = p(".local/state/agent-config/backups/newer/created-by-old.md");
+  put(newer, "old install output\n");
+  put(
+    p(".local/state/agent-config/manifest.json"),
+    JSON.stringify({ version: 1, records: [{ ...base, backup: newer }] }),
+  );
+
+  run("status");
+  const merged = JSON.parse(read(p(".local/state/agent-config/manifest.json"))).records;
+  expect(merged).toHaveLength(1);
+  expect(merged[0].backup).toBeUndefined();
+  expect(run("uninstall", "--yes").code).toBe(0);
+  expect(existsSync(file)).toBe(false);
+});
+
+test("old records that are not a list, or that repeat a target, never block or get lost", () => {
+  put(p(".local/state/agent-config/manifest.json"), `{ "version": 1, "records": [] }\n`);
+  put(
+    p(".local/state/model-ladder/manifest.json"),
+    `{ "version": 1, "records": { "not": "a list" } }\n`,
+  );
+  expect(run("status").stderr).not.toContain("warning");
+  expect(existsSync(p(".local/state/model-ladder"))).toBe(false);
+
+  const a = {
+    kind: "file",
+    runtime: "claude",
+    component: "agents",
+    path: p("a.md"),
+    label: "a",
+    sha: "1",
+  };
+  const b = { ...a, label: "b", sha: "2" };
+  put(
+    p(".local/state/model-ladder/manifest.json"),
+    JSON.stringify({ version: 1, records: [a, b] }),
+  );
+  run("status");
+  const merged = JSON.parse(read(p(".local/state/agent-config/manifest.json"))).records;
+  expect(merged.map((r: { label: string }) => r.label)).toEqual(["a", "b"]);
 });

@@ -15,6 +15,7 @@
   },
   "bin": {
     "agent-config": "./dist/cli.mjs",
+    "agi": "./dist/cli.mjs",
     "model-ladder": "./dist/cli.mjs"
   },
   "files": [

@@ -18,7 +18,7 @@ It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the run
 curl -fsSL https://raw.githubusercontent.com/elvisgastelum/agent-config/main/install.sh | bash
 ```
 
-Requires only **git** and **Node.js 22.12 or newer** (24 LTS recommended); the installer stops with a clear message if either is missing. The CLI ships prebuilt and self-contained in `dist/cli.mjs`, so nothing is installed or built on your machine: the installer clones to `~/.local/share/agent-config`, checks Node, adds `agent-config` to `~/.local/bin` and opens the TUI. Update from the TUI (**Update agent-config version**), with `agent-config self-update`, or by re-running the one-liner; a failed update rolls back to the previous version.
+Requires only **git** and **Node.js 22.12 or newer** (24 LTS recommended); the installer stops with a clear message if either is missing. The CLI ships prebuilt and self-contained in `dist/cli.mjs`, so nothing is installed or built on your machine: the installer clones to `~/.local/share/agent-config`, checks Node, adds `agent-config` to `~/.local/bin` (with `agi` as a short alias, linked to it unless another `agi` is already there) and opens the TUI. Update from the TUI (**Update agent-config version**), with `agent-config self-update`, or by re-running the one-liner; a failed update rolls back to the previous version.
 
 Non-interactive (scripts and agents):
 

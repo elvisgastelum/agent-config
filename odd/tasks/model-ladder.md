@@ -31,7 +31,8 @@ Objective: one-liner installable tool that configures Claude Code, OpenCode, Cod
 - T12 [L16] fix every advisory from the T10 and T11 reviews and untrack `.atl` — inline — done
 - T13 [L18-L20] rename the repo to agent-config (2ffb666) and the tool/binary to `agent-config` with migration and a `model-ladder` alias — inline — done (9c2b790, af78b60; review approved after one correction)
 - T14 [L22] fix the 6 warnings from the rename review — inline — done (a07678a; review approved)
-- T15 [L24] fix the 9 non-blocking findings from the T14 review — inline — done
+- T15 [L24] fix the 9 non-blocking findings from the T14 review — inline — done (5babb3f; review approved)
+- T16 [L26] fix the 6 non-blocking findings from the T15 review — inline — done
 
 Route evidence: all inline; units depend on the shared engine (no Writer trigger).
 
@@ -62,3 +63,5 @@ Route evidence: all inline; units depend on the shared engine (no Writer trigger
 - L23 T14 evidence: migration merges an old state folder into an existing new one (records and backups) instead of skipping it, resolves old backup paths at use time, and never stops a command (warning + current layout); stale removals are error-isolated like other ops; an edited stale item is left in place and dropped from management so installs converge. 4 new tests RED on af78b60 sources, GREEN after; `vp test` 73/73, `vp check` clean.
 - L24 (2026-10-19, user): "Fix all non blocking findings"
 - L25 T15 evidence: merge keeps the oldest original (backup, previous value, created flags) when both installs managed the same target; colliding backup stamps renamed; leftover files moved to `model-ladder-leftovers` so the old folder never survives a run; a successful move with an unreadable manifest is reported as moved with a precise warning; manifest rewrites keep other fields; the "no longer managed" note names the saved original; the permission test skips as root. 4 new tests RED on a07678a sources, GREEN after; `vp test` 77/77, `vp check` clean.
+- L26 (2026-10-19, user): "one more fix pass first"
+- L27 T16 evidence: merge is crash-safe — backup moves are planned and journaled (`migration.json` in the old folder) before any move, an interrupted run resumes with the same names, a resumed merge never appends a record twice; `records` that are not a list count as none; duplicate old records are all kept; the old-install-created-file path is now tested (already correct). 2 new tests RED on 5babb3f sources, 1 pinning test GREEN on both; `vp test` 82/82, `vp check` clean.
