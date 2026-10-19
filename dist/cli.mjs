@@ -3634,10 +3634,13 @@ function applyOp(planned, existing, notes = []) {
 	try {
 		return writeTarget(planned, existing, notes, [...existing?.replacedLinks ?? [], ...fresh]);
 	} catch (error) {
+		rmSync(`${planned.op.path}.agent-config-tmp`, { force: true });
 		for (const link of fresh) {
-			try {
-				rmdirSync(link.path);
-			} catch {}
+			for (let d = dirname(planned.op.path); d === link.path || d.startsWith(`${link.path}/`); d = dirname(d)) try {
+				rmdirSync(d);
+			} catch {
+				break;
+			}
 			try {
 				symlinkSync(link.target, link.path);
 			} catch {}
@@ -3904,6 +3907,7 @@ function pruneCreatedDirs(records) {
 */
 function restoreLinks(records, remaining) {
 	const failed = /* @__PURE__ */ new Map();
+	const fail = (r, note) => failed.set(r, failed.has(r) ? `${failed.get(r)}; ${note}` : note);
 	for (const r of records) for (const link of r.replacedLinks ?? []) {
 		const lost = `could not restore the symlink ${link.path} -> ${link.target}`;
 		let occupied = true;
@@ -3918,13 +3922,13 @@ function restoreLinks(records, remaining) {
 				heir.replacedLinks = [...(heir.replacedLinks ?? []).filter((l) => l.path !== link.path), link];
 				const inside = (r.createdDirs ?? []).filter((d) => d === link.path || d.startsWith(`${link.path}/`));
 				heir.createdDirs = [.../* @__PURE__ */ new Set([...heir.createdDirs ?? [], ...inside])].sort((a, b) => b.length - a.length);
-			} else failed.set(r, `${lost}: something else is there now`);
+			} else fail(r, `${lost}: something else is there now`);
 			continue;
 		}
 		try {
 			symlinkSync(link.target, link.path);
 		} catch (error) {
-			failed.set(r, `${lost}: ${error instanceof Error ? error.message : String(error)}`);
+			fail(r, `${lost}: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 	return failed;
