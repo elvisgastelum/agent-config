@@ -650,12 +650,20 @@ export function applyOp(
   try {
     return writeTarget(planned, existing, notes, [...(existing?.replacedLinks ?? []), ...fresh]);
   } catch (error) {
-    // Nothing was recorded, so put the links back now or they would be lost.
+    // Nothing was recorded, so put the links back now or they would be lost: first clear what
+    // this write left in their place (a temp file, folders up to the link), deepest first.
+    rmSync(`${planned.op.path}.agent-config-tmp`, { force: true });
     for (const link of fresh) {
-      try {
-        rmdirSync(link.path);
-      } catch {
-        // Not created, or not empty.
+      for (
+        let d = dirname(planned.op.path);
+        d === link.path || d.startsWith(`${link.path}/`);
+        d = dirname(d)
+      ) {
+        try {
+          rmdirSync(d);
+        } catch {
+          break; // Not created by this write, or holds something else.
+        }
       }
       try {
         symlinkSync(link.target, link.path);
@@ -935,6 +943,8 @@ function restoreLinks(
   remaining: ManifestRecord[],
 ): Map<ManifestRecord, string> {
   const failed = new Map<ManifestRecord, string>();
+  const fail = (r: ManifestRecord, note: string) =>
+    failed.set(r, failed.has(r) ? `${failed.get(r)}; ${note}` : note);
   for (const r of records) {
     for (const link of r.replacedLinks ?? []) {
       const lost = `could not restore the symlink ${link.path} -> ${link.target}`;
@@ -961,14 +971,14 @@ function restoreLinks(
             (a, b) => b.length - a.length,
           );
         } else {
-          failed.set(r, `${lost}: something else is there now`);
+          fail(r, `${lost}: something else is there now`);
         }
         continue;
       }
       try {
         symlinkSync(link.target, link.path);
       } catch (error) {
-        failed.set(r, `${lost}: ${error instanceof Error ? error.message : String(error)}`);
+        fail(r, `${lost}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }

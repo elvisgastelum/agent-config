@@ -44,3 +44,25 @@ test("a write that fails after a broken symlink was replaced puts the symlink ba
   expect(lstatSync(link).isSymbolicLink()).toBe(true);
   expect(loadManifest().records).toEqual([]);
 });
+
+test("the rollback also clears folders created below the replaced symlink", () => {
+  const skills = join(box.home, ".codex/skills");
+  put(join(skills, "keep.txt"), "x");
+  const link = join(skills, "kaneo");
+  symlinkSync(join(box.home, "gone"), link);
+  const result = applyPlan([
+    {
+      op: {
+        kind: "file",
+        runtime: "codex",
+        component: "skill",
+        path: join(link, "deep", "er", "FAIL.md"),
+        content: "x\n",
+        label: "skill",
+      },
+      action: "create",
+    },
+  ]);
+  expect(result.errors).toHaveLength(1);
+  expect(lstatSync(link).isSymbolicLink()).toBe(true);
+});
