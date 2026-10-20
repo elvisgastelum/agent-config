@@ -12,7 +12,7 @@ edits  ─┘                          └─ deep      Opus 5.5    last resort,
 
 It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the rungs for **Gentle AI review agents**, and undoes everything with one command.
 
-Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket, `agi install statusline` adds a compact Claude Code status line. See [Catalog](#catalog).
+Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket, `agi install kick-off` adds a `/kick-off` action that briefs a whole Kaneo epic for `/continue`, `agi install statusline` adds a compact Claude Code status line. See [Catalog](#catalog).
 
 ## Install
 
@@ -118,6 +118,7 @@ agi install kaneo --url https://kaneo.example.com   # user scope: every project
 agi install kaneo --project .                   # one repository, committed with it
 agi install commit                              # title-only commits, drafted by a cheap model
 agi install continue                            # /continue: work the next Kaneo ticket end to end
+agi install kick-off                            # /kick-off: brief a whole Kaneo epic for /continue
 agi install statusline                          # compact Claude Code status line
 agi uninstall kaneo [--project .]               # remove that copy only
 ```
@@ -182,6 +183,25 @@ A manual action that works Kaneo tickets end to end, moved here from [claude-con
 | Pi       | `~/.pi/agent/prompts/continue.md`                       | `.pi/prompts/continue.md`          |
 
 A `~/.claude/skills/continue/SKILL.md` left by the old standalone installer is replaced and put back on uninstall.
+
+### kick-off
+
+A manual action that reads a whole Kaneo epic, finds what is missing and writes a brief for `/continue`. Install `kaneo`, `continue` and `commit` with it (and the model ladder for its read and diagnosis agents).
+
+- `/kick-off <kaneo-epic-or-ticket-url | ticket-code>` (`$kick-off` in Codex) is never invoked by the model on its own.
+- Step 1, what is missing to complete the epic: `kaneo-scribe` reads the epic and every related ticket (subtasks, related, blockers, done tickets and PR links); `ladder-read-deep` diagnoses the done and open tickets in dependency order, then finds missing tickets, gaps and parallel waves. The overview is shown to you.
+- Step 2 asks four questions: create the missing tickets now, list them or leave them out; run parallel waves (`/continue parallel N`) or one ticket at a time; the integration branch (`dev`, the default branch or another); and review routing by risk (balanced for none or low, deep for medium or high), always deep, or fast for none risk.
+- Step 3 writes a brief to `~/.local/state/agent-config/kick-off/<EPIC-ID>.md` (`$XDG_STATE_HOME/agent-config/kick-off`) and copies it with `pbcopy`, `wl-copy`, `xclip`, `xsel` or `clip.exe`. The brief starts with `/continue`, so a fresh session works the queue: Pick → Plan (deep, picks the edit rung, prefers fast) → Edit (fast or balanced, climbs) → Risk (deep: none, low, medium or high) → Review (routed by risk, never fast unless you approved it) → Fix until no findings (stops after 3 rounds) → PR into the integration branch, CI, merge, ticket Done → Next, until the epic's criteria are met.
+- Every delegated handoff starts with `Phase: <phase>`. Claude's kick-off guard (a PreToolUse hook on `Agent|Task|Bash`, Node, no dependencies) denies diagnose, plan and risk handoffs that are not on the deep rung, reviews on fast without the line `Fast review: approved by the user`, and a clipboard copy of a brief that does not start with `/continue` or misses a section.
+- `/continue` treats every line after its first as the run's brief.
+
+| Runtime      | User scope (Claude / OpenCode / Codex / Pi)                                  | Project scope (`--project <dir>`)                                        |
+| ------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Claude       | `~/.claude/skills/kick-off/SKILL.md`                                         | `.claude/skills/kick-off/SKILL.md`                                       |
+| OpenCode     | `~/.config/opencode/commands/kick-off.md`                                    | `.opencode/commands/kick-off.md`                                         |
+| Codex        | `~/.codex/skills/kick-off/` (with `agents/openai.yaml`)                      | `.agents/skills/kick-off/`                                               |
+| Pi           | `~/.pi/agent/prompts/kick-off.md`                                            | `.pi/prompts/kick-off.md`                                                |
+| Claude guard | `~/.claude/hooks/agent-config/kick-off-guard.mjs`, `~/.claude/settings.json` | `.claude/hooks/agent-config/kick-off-guard.mjs`, `.claude/settings.json` |
 
 ### statusline
 
