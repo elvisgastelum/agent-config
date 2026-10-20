@@ -3012,13 +3012,13 @@ function frontmatter(runtime) {
 const CODEX_POLICY = `policy:\n  allow_implicit_invocation: false\n`;
 function continueMarkdown(runtime, models) {
 	const cmd = continueCommand(runtime);
-	const args = runtime === "codex" ? `Arguments passed to this run: the words after \`${cmd}\` in the user's message (none means no arguments).` : "Arguments passed to this run: `$ARGUMENTS` (empty means no arguments).";
+	const args = runtime === "codex" ? `Arguments passed to this run: the user's message after \`${cmd}\` (none means no arguments).` : "Arguments passed to this run: `$ARGUMENTS` (empty means no arguments).";
 	const scribe = CALL[runtime](SCRIBE);
 	return `${frontmatter(runtime)}
 
 ## Arguments
 
-${args} Read them before doing anything else:
+${args} Read them before doing anything else. Only their first line picks the mode; every line after it is this run's brief:
 
 | Invocation | Mode | Ticket limit |
 | --- | --- | --- |
@@ -3026,7 +3026,9 @@ ${args} Read them before doing anything else:
 | \`${cmd} parallel\` | Parallel | 4 |
 | \`${cmd} parallel <n>\` | Parallel | \`<n>\` (a positive integer, e.g. \`${cmd} parallel 10\`) |
 
-If \`parallel\` is followed by something that is not a positive integer, or the first argument is not \`parallel\`, stop and say the argument is invalid. With no arguments, run only the single-ticket flow and ignore the parallel mode section.
+If \`parallel\` is followed by something that is not a positive integer, or the first line is neither empty nor \`parallel\`, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel mode section.
+
+A brief (such as the one the kick-off action copies) scopes the run: take tickets only from its queue, in its order, and follow its steps wherever they differ from the flows below. Keep working through its queue until it says to stop.
 
 ## Save context: cheap agents do the reading and the clerical work
 

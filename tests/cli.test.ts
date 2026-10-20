@@ -233,6 +233,7 @@ test("install continue adds a manual-only action per runtime that delegates to c
   expect(claude).toContain('`subagent_type: "ladder-read-fast"`');
   expect(claude).toContain('`subagent_type: "commit-writer"`');
   expect(claude).toContain("each on the balanced rung (claude-sonnet-5-5)");
+  expect(claude).toContain("every line after it is this run's brief");
 
   const opencode = read(join(home, ".config/opencode/commands/continue.md"));
   expect(opencode).toContain("`$ARGUMENTS`");
