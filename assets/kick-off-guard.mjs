@@ -27,7 +27,8 @@ const LADDER = /^ladder-(?:read|edit)-(fast|balanced|deep)$/;
 const MODEL_RUNGS = { haiku: "fast", sonnet: "balanced", opus: "deep" };
 
 const BRIEF_PATH = /kick-off\/[^/]+\.md$/;
-const CLIPBOARD = /(^|[\s|;&(])(pbcopy|wl-copy|xclip|xsel|clip(\.exe)?|Set-Clipboard)(?=[\s;&)]|$)/;
+const CLIPBOARD =
+  /(^|[\s|;&(])(pbcopy|wl-copy|xclip|xsel|clip(\.exe)?|Set-Clipboard)(?=[\s;&|<>)]|$)/;
 export const BRIEF_SECTIONS = [
   "# Kick-off:",
   "## Epic",
@@ -49,10 +50,9 @@ export function decide(input) {
   return undefined;
 }
 
-/** The rung a handoff runs on: its model override, else its ladder agent's rung. */
+/** The rung a handoff runs on: its known model override, else its ladder agent's rung. */
 function rungOf(type, model) {
-  if (model) return MODEL_RUNGS[model];
-  return LADDER.exec(type ?? "")?.[1];
+  return MODEL_RUNGS[model] ?? LADDER.exec(type ?? "")?.[1];
 }
 
 function handoff({ prompt, subagent_type: type, model }) {

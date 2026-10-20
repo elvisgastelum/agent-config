@@ -53,6 +53,8 @@ describe("kick-off guard: phase rungs", () => {
     expect(agent(prompt, "general-purpose")).toContain("general-purpose");
     expect(agent(prompt, "general-purpose", "opus")).toBeUndefined();
     expect(agent(prompt, "general-purpose", "fable")).toBeDefined();
+    expect(agent(prompt, "ladder-read-deep", "fable")).toBeUndefined();
+    expect(agent(prompt, "ladder-read-fast", "fable")).toContain("fast rung");
   });
 
   test("Phase: risk is deep-only", () => {
@@ -122,6 +124,9 @@ describe("kick-off guard: brief copies", () => {
       ),
     );
     expect(bash(`pbcopy < ${path}`)).toContain("## Queue");
+    expect(bash(`pbcopy<${path}`)).toContain("## Queue");
+    expect(bash(`cat ${path}|pbcopy`)).toContain("## Queue");
+    expect(bash(`cat ${path} | xclip -selection clipboard>/dev/null`)).toContain("## Queue");
   });
 
   test("a brief whose first line is not /continue is denied", () => {
