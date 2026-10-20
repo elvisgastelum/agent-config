@@ -5,7 +5,7 @@
 // - A delegated handoff whose prompt starts with `Phase: <phase>` runs on the rung that phase
 //   allows: diagnose, plan and risk on deep; review on deep or balanced, and on fast only when the
 //   handoff carries `Fast review: approved by the user`. Edit and fix handoffs are not checked.
-// - A Bash command that copies a kick-off brief (`kick-off/<ID>.md`) to the clipboard is denied
+// - A Bash command that copies a kick-off brief (`agent-config/kick-off/<ID>.md`) to the clipboard is denied
 //   until the brief starts with /continue and has every section and phase the loop needs.
 //
 // Any unexpected input or error lets the call through: the guard never breaks a session.
@@ -26,7 +26,8 @@ const FAST_REVIEW = /^\s*Fast review:\s*approved by the user\b/im;
 const LADDER = /^ladder-(?:read|edit)-(fast|balanced|deep)$/;
 const MODEL_RUNGS = { haiku: "fast", sonnet: "balanced", opus: "deep" };
 
-const BRIEF_PATH = /kick-off\/[^/]+\.md$/;
+// The brief folder is <state dir>/agent-config/kick-off; the skill's own kick-off folder is not.
+const BRIEF_PATH = /(^|\/)agent-config\/kick-off\/[^/]+\.md$/;
 const CLIPBOARD =
   /(^|[\s|;&(])(pbcopy|wl-copy|xclip|xsel|clip(\.exe)?|Set-Clipboard)(?=[\s;&|<>)]|$)/;
 export const BRIEF_SECTIONS = [
@@ -50,7 +51,10 @@ export function decide(input) {
   return undefined;
 }
 
-/** The rung a handoff runs on: its known model override, else its ladder agent's rung. */
+/**
+ * The rung a handoff runs on: its known model override, else its ladder agent's rung. An override
+ * with no known rung (fable) defers to the ladder agent; on any other agent it is denied.
+ */
 function rungOf(type, model) {
   return MODEL_RUNGS[model] ?? LADDER.exec(type ?? "")?.[1];
 }

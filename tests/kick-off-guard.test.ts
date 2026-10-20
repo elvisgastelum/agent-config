@@ -22,8 +22,8 @@ const tempDir = () => {
   return dir;
 };
 const writeBrief = (dir: string, name: string, text: string) => {
-  mkdirSync(join(dir, "kick-off"), { recursive: true });
-  const path = join(dir, "kick-off", name);
+  mkdirSync(join(dir, "agent-config", "kick-off"), { recursive: true });
+  const path = join(dir, "agent-config", "kick-off", name);
   writeFileSync(path, text);
   return path;
 };
@@ -152,7 +152,7 @@ describe("kick-off guard: brief copies", () => {
   test("a relative brief path resolves against cwd", () => {
     const dir = tempDir();
     writeBrief(dir, "FEX-2.md", INCOMPLETE);
-    expect(bash("cat kick-off/FEX-2.md | pbcopy", dir)).toBeDefined();
+    expect(bash("cat agent-config/kick-off/FEX-2.md | pbcopy", dir)).toBeDefined();
   });
 
   test("$HOME in the brief path expands to the home directory", () => {
@@ -161,7 +161,7 @@ describe("kick-off guard: brief copies", () => {
     const original = process.env.HOME;
     try {
       process.env.HOME = dir;
-      expect(bash('wl-copy < "$HOME/kick-off/FEX-3.md"')).toBeDefined();
+      expect(bash('wl-copy < "$HOME/agent-config/kick-off/FEX-3.md"')).toBeDefined();
     } finally {
       if (original === undefined) delete process.env.HOME;
       else process.env.HOME = original;
@@ -176,7 +176,16 @@ describe("kick-off guard: brief copies", () => {
 
   test("copying a missing brief is allowed", () => {
     const dir = tempDir();
-    expect(bash(`pbcopy < ${dir}/kick-off/missing.md`)).toBeUndefined();
+    expect(bash(`pbcopy < ${dir}/agent-config/kick-off/missing.md`)).toBeUndefined();
+  });
+
+  test("copying a file outside the brief folder is allowed, even under a kick-off folder", () => {
+    const dir = tempDir();
+    for (const folder of [join(dir, ".claude", "skills", "kick-off"), join(dir, "kick-off")]) {
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(join(folder, "SKILL.md"), "# not a brief\n");
+      expect(bash(`cat ${join(folder, "SKILL.md")} | pbcopy`)).toBeUndefined();
+    }
   });
 
   test("copying other text is allowed", () => {
