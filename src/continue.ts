@@ -15,9 +15,13 @@ const CALL: Record<Runtime, (agent: string) => string> = {
   pi: (agent) => `the subagent tool with the \`${agent}\` agent`,
 };
 
-/** How the user runs the action: a slash command, or Codex's explicit `$skill` mention. */
+/** How the user runs a manual action: a slash command, or Codex's explicit `$skill` mention. */
+export function actionCommand(runtime: Runtime, name: string): string {
+  return runtime === "codex" ? `$${name}` : `/${name}`;
+}
+
 export function continueCommand(runtime: Runtime): string {
-  return runtime === "codex" ? `$${CONTINUE}` : `/${CONTINUE}`;
+  return actionCommand(runtime, CONTINUE);
 }
 
 const DESCRIPTION =
@@ -32,17 +36,22 @@ export interface ContinueModels {
 }
 
 /** Frontmatter for the file each runtime reads; every one keeps the action manual-only. */
-function frontmatter(runtime: Runtime): string {
+export function actionFrontmatter(
+  runtime: Runtime,
+  name: string,
+  summary: string,
+  argumentHint: string,
+): string {
   const description = JSON.stringify(
-    `${DESCRIPTION} Manual action only, run with ${continueCommand(runtime)}.`,
+    `${summary} Manual action only, run with ${actionCommand(runtime, name)}.`,
   );
-  const hint = `argument-hint: ${JSON.stringify(ARGUMENT_HINT)}`;
+  const hint = `argument-hint: ${JSON.stringify(argumentHint)}`;
   switch (runtime) {
     case "claude":
-      return `---\nname: ${CONTINUE}\ndescription: ${description}\n${hint}\ndisable-model-invocation: true\n---`;
+      return `---\nname: ${name}\ndescription: ${description}\n${hint}\ndisable-model-invocation: true\n---`;
     case "codex":
       // Implicit invocation is turned off in agents/openai.yaml beside this file.
-      return `---\nname: ${CONTINUE}\ndescription: ${description}\n---`;
+      return `---\nname: ${name}\ndescription: ${description}\n---`;
     case "opencode":
       return `---\ndescription: ${description}\n---`;
     case "pi":
@@ -60,7 +69,7 @@ export function continueMarkdown(runtime: Runtime, models: ContinueModels): stri
       ? `Arguments passed to this run: the user's message after \`${cmd}\` (none means no arguments).`
       : "Arguments passed to this run: `$ARGUMENTS` (empty means no arguments).";
   const scribe = CALL[runtime](SCRIBE);
-  return `${frontmatter(runtime)}
+  return `${actionFrontmatter(runtime, CONTINUE, DESCRIPTION, ARGUMENT_HINT)}
 
 ## Arguments
 

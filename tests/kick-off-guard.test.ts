@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vite-plus/test";
 // @ts-expect-error plain .mjs asset without type declarations
 import { BRIEF_PHASES, BRIEF_SECTIONS, briefProblems, decide } from "../assets/kick-off-guard.mjs";
+import { kickOffMarkdown } from "../src/kickoff.ts";
 
 const agent = (prompt: string, subagent_type: string, model?: string) =>
   decide({
@@ -202,4 +203,20 @@ describe("kick-off guard: runs as a hook", () => {
     ).toBe("");
     expect(hook("not json")).toBe("");
   });
+});
+
+describe("kick-off action: the brief template", () => {
+  test.each(["claude", "opencode", "pi"] as const)(
+    "the %s template is a valid brief",
+    (runtime) => {
+      const text = kickOffMarkdown(
+        runtime,
+        { fast: "f", balanced: "b", deep: "d" },
+        "~/x/kick-off",
+      );
+      const template = text.split("````markdown\n")[1]?.split("\n````")[0] ?? "";
+      expect(template).not.toBe("");
+      expect(briefProblems(template)).toEqual([]);
+    },
+  );
 });

@@ -30,7 +30,16 @@ import {
   kaneoUrlWarning,
 } from "./kaneo.ts";
 import { LADDER_ITEM, opKey, type Op } from "./ops.ts";
-import { claudeDir, claudeJsonPath, codexDir, opencodeDir, piDir } from "./paths.ts";
+import { KICK_OFF, KICK_OFF_GUARD_FILE, kickOffMarkdown } from "./kickoff.ts";
+import {
+  claudeDir,
+  claudeJsonPath,
+  codexDir,
+  home,
+  kickOffDir,
+  opencodeDir,
+  piDir,
+} from "./paths.ts";
 import { assetSource, opencodeConfigPath, runtimeOps, tomlMultiline } from "./runtimes.ts";
 import type { Effort, Runtime, Tier, TierMap } from "./tiers.ts";
 
@@ -392,34 +401,59 @@ const WRITER_AGENT: CheapAgent = {
   piTools: ["read", "grep", "find", "ls", "bash"],
 };
 
-/** Claude only: the commit guard hook and the settings that drop commit and PR attribution. */
-function commitGuardOps(project: string | undefined): Op[] {
+/**
+ * Claude only: copies a hook script asset into the hooks folder and registers it as a PreToolUse
+ * hook for the matcher. A project's settings are committed, so its hook finds the script from the
+ * project root.
+ */
+function guardHookOps(
+  project: string | undefined,
+  file: string,
+  matcher: string,
+  scriptLabel: string,
+  hookLabel: string,
+): Op[] {
   const base = { runtime: "claude" as const, component: "catalog" as const };
   const dir = project ? join(project, ".claude") : claudeDir();
-  const script = join(dir, "hooks", "agent-config", COMMIT_GUARD_FILE);
+  const script = join(dir, "hooks", "agent-config", file);
   const settings = join(dir, "settings.json");
-  // A project's settings are committed, so its hook finds the script from the project root.
   const command = project
-    ? `node "$CLAUDE_PROJECT_DIR/.claude/hooks/agent-config/${COMMIT_GUARD_FILE}"`
+    ? `node "$CLAUDE_PROJECT_DIR/.claude/hooks/agent-config/${file}"`
     : `node "${script}"`;
   return [
     {
       ...base,
       kind: "file",
       path: script,
-      content: assetSource(COMMIT_GUARD_FILE),
+      content: assetSource(file),
       executable: true,
-      label: "commit-guard hook script",
+      label: scriptLabel,
     },
     {
       ...base,
       kind: "json-hook",
       path: settings,
       event: "PreToolUse",
-      matcher: "Bash",
+      matcher,
       command,
-      label: "PreToolUse hook (Bash) commit guard",
+      label: hookLabel,
     },
+  ];
+}
+
+/** Claude only: the commit guard hook and the settings that drop commit and PR attribution. */
+function commitGuardOps(project: string | undefined): Op[] {
+  const base = { runtime: "claude" as const, component: "catalog" as const };
+  const dir = project ? join(project, ".claude") : claudeDir();
+  const settings = join(dir, "settings.json");
+  return [
+    ...guardHookOps(
+      project,
+      COMMIT_GUARD_FILE,
+      "Bash",
+      "commit-guard hook script",
+      "PreToolUse hook (Bash) commit guard",
+    ),
     {
       ...base,
       kind: "json-set",
@@ -501,20 +535,21 @@ const commit: CatalogItem = {
  * Where each runtime reads a manual-only action: a Claude skill that the model never invokes, an
  * OpenCode command, a Codex skill with implicit invocation off, a Pi prompt template.
  */
-function continueOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
-  const tiers = config.tiers[runtime];
-  const base = { runtime, component: "catalog" as const, label: "continue action" };
-  const content = continueMarkdown(runtime, {
-    fast: modelName(runtime, tiers),
-    balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
-  });
-  const skill = join(layout(runtime, project).skills, CONTINUE);
+function actionOps(
+  runtime: Runtime,
+  project: string | undefined,
+  name: string,
+  content: string,
+  label: string,
+): Op[] {
+  const base = { runtime, component: "catalog" as const, label: `${label} action` };
+  const skill = join(layout(runtime, project).skills, name);
   switch (runtime) {
     case "claude":
       return [{ ...base, kind: "file", path: join(skill, "SKILL.md"), content }];
     case "opencode": {
       const dir = project ? join(project, ".opencode") : opencodeDir();
-      return [{ ...base, kind: "file", path: join(dir, "commands", `${CONTINUE}.md`), content }];
+      return [{ ...base, kind: "file", path: join(dir, "commands", `${name}.md`), content }];
     }
     case "codex":
       return [
@@ -524,14 +559,59 @@ function continueOps(runtime: Runtime, project: string | undefined, config: Conf
           kind: "file",
           path: join(skill, "agents", "openai.yaml"),
           content: CODEX_POLICY,
-          label: "continue action policy (explicit invocation only)",
+          label: `${label} action policy (explicit invocation only)`,
         },
       ];
     case "pi": {
       const dir = project ? join(project, ".pi") : piDir();
-      return [{ ...base, kind: "file", path: join(dir, "prompts", `${CONTINUE}.md`), content }];
+      return [{ ...base, kind: "file", path: join(dir, "prompts", `${name}.md`), content }];
     }
   }
+}
+
+function continueOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
+  const tiers = config.tiers[runtime];
+  const content = continueMarkdown(runtime, {
+    fast: modelName(runtime, tiers),
+    balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
+  });
+  return actionOps(runtime, project, CONTINUE, content, "continue");
+}
+
+// ---------------------------------------------------------------- kick-off
+
+/** The brief folder as the skill shows it: under the home directory it reads `~/...`. */
+function briefDirText(): string {
+  const dir = kickOffDir();
+  const root = home();
+  return dir.startsWith(`${root}/`) ? `~${dir.slice(root.length)}` : dir;
+}
+
+/** Claude only: the guard that keeps phase rungs and the brief structure honest. */
+function kickOffGuardOps(project: string | undefined): Op[] {
+  return guardHookOps(
+    project,
+    KICK_OFF_GUARD_FILE,
+    "Agent|Task|Bash",
+    "kick-off-guard hook script",
+    "PreToolUse hook (Agent|Task|Bash) kick-off guard",
+  );
+}
+
+function kickOffOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
+  const tiers = config.tiers[runtime];
+  const content = kickOffMarkdown(
+    runtime,
+    {
+      fast: modelName(runtime, tiers),
+      balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
+      deep: modelName(runtime, tiers, tiers.deep.effort, "deep"),
+    },
+    briefDirText(),
+  );
+  const ops = actionOps(runtime, project, KICK_OFF, content, "kick-off");
+  if (runtime === "claude") ops.push(...kickOffGuardOps(project));
+  return ops;
 }
 
 // ---------------------------------------------------------------- statusline
@@ -582,7 +662,24 @@ const continueItem: CatalogItem = {
   ops: (entry, runtime, config) => continueOps(runtime, entry.project, config),
 };
 
-export const CATALOG: CatalogItem[] = [modelLadder, kaneo, commit, continueItem, statusline];
+const kickOff: CatalogItem = {
+  id: KICK_OFF,
+  title: "Kick off a Kaneo epic",
+  description:
+    "manual /kick-off action that diagnoses what a Kaneo epic is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
+  settings: [],
+  discover: () => ({}),
+  ops: (entry, runtime, config) => kickOffOps(runtime, entry.project, config),
+};
+
+export const CATALOG: CatalogItem[] = [
+  modelLadder,
+  kaneo,
+  commit,
+  continueItem,
+  kickOff,
+  statusline,
+];
 
 export function catalogItem(id: string): CatalogItem | undefined {
   return CATALOG.find((i) => i.id === id);

@@ -2679,7 +2679,7 @@ function isReviewLens(value) {
 const COMMIT_SKILL = "commit";
 const COMMIT_WRITER = "commit-writer";
 const COMMIT_GUARD_FILE = "commit-guard.mjs";
-const CALL$2 = {
+const CALL$3 = {
 	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
 	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
 	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
@@ -2705,7 +2705,7 @@ Every commit message is exactly one line: the title. Nothing else.
 
 ## Draft the title on a cheap model
 
-A diff is long and a title is short, so reading the diff does not belong in the main session. Hand it to ${CALL$2[runtime](COMMIT_WRITER)} (${writerModel}, low thinking): it reads the staged diff and recent history and replies with one title.
+A diff is long and a title is short, so reading the diff does not belong in the main session. Hand it to ${CALL$3[runtime](COMMIT_WRITER)} (${writerModel}, low thinking): it reads the staged diff and recent history and replies with one title.
 
 - Tell it in one or two sentences what the change is for, when you know: intent the diff cannot show makes a better title.
 - Use its \`TITLE:\` line as is when it describes the change and follows the rules above; otherwise fix the wording yourself rather than calling it again.
@@ -2750,7 +2750,7 @@ EOF
 }
 /** The always-on block; runtimes that share one file (a project's AGENTS.md) are all named. */
 function commitInstructionsBlock(runtimes) {
-	const writer = runtimes.length === 1 ? CALL$2[runtimes[0]](COMMIT_WRITER) : `the \`${COMMIT_WRITER}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL$2[r](COMMIT_WRITER)}`).join("; ")})`;
+	const writer = runtimes.length === 1 ? CALL$3[runtimes[0]](COMMIT_WRITER) : `the \`${COMMIT_WRITER}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL$3[r](COMMIT_WRITER)}`).join("; ")})`;
 	return `## No AI attribution in commits or pull requests
 
 When creating or editing a commit, pull request title, pull request description, or PR comment:
@@ -2806,7 +2806,7 @@ const KANEO_TOOLS = [
 	"create_task_comment",
 	"list_workspace_members"
 ].map((t) => `mcp__${KANEO_MCP}__${t}`);
-const CALL$1 = {
+const CALL$2 = {
 	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
 	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
 	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
@@ -2847,8 +2847,8 @@ Use the Kaneo MCP as the source of truth for work. Discover the target workspace
 
 Kaneo calls return long JSON and ticket text is boilerplate, so neither belongs in the main session. Decide scope, estimates, splits, and dependencies here; let cheap agents gather and type.
 
-- **Context for a ticket**: when the ticket needs facts from code, logs, or a diff (where a behavior lives, what a change touched, why a test fails), ask ${CALL$1[runtime]("ladder-read-fast")} for terse \`path:line\` bullets when the model-ladder agents are installed, and put only those bullets in the description.
-- **Saving tickets**: hand the finished batch to ${CALL$1[runtime](SCRIBE)} (${scribeModel}). Give it the workspace and project IDs, and for each story the exact title, description, column, priority, labels, and relations. It creates or updates them and replies with identifiers and task IDs; it decides nothing.
+- **Context for a ticket**: when the ticket needs facts from code, logs, or a diff (where a behavior lives, what a change touched, why a test fails), ask ${CALL$2[runtime]("ladder-read-fast")} for terse \`path:line\` bullets when the model-ladder agents are installed, and put only those bullets in the description.
+- **Saving tickets**: hand the finished batch to ${CALL$2[runtime](SCRIBE)} (${scribeModel}). Give it the workspace and project IDs, and for each story the exact title, description, column, priority, labels, and relations. It creates or updates them and replies with identifiers and task IDs; it decides nothing.
 - **Reading the board**: ask the scribe for a summary (open tickets in a column, a ticket's relations) instead of listing tasks here.
 - **Check its work**: compare the scribe's reply with the batch you sent, and fetch one task yourself when something is missing. When it replies \`partial\` or a call failed, fix only that item, directly or with one more scribe call.
 - Without an agent tool, or for a single small call, use the Kaneo MCP directly.
@@ -2950,7 +2950,7 @@ After the PR exists, add a comment to the Kaneo task with the PR URL, and move t
 }
 /** The always-on block; runtimes that share one file (a project's AGENTS.md) are all named. */
 function kaneoInstructionsBlock(runtimes) {
-	const scribe = runtimes.length === 1 ? CALL$1[runtimes[0]](SCRIBE) : `the \`${SCRIBE}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL$1[r](SCRIBE)}`).join("; ")})`;
+	const scribe = runtimes.length === 1 ? CALL$2[runtimes[0]](SCRIBE) : `the \`${SCRIBE}\` agent (${runtimes.map((r) => `${RUNTIME_LABELS[r]}: ${CALL$2[r](SCRIBE)}`).join("; ")})`;
 	return `## Kaneo work tracking
 
 Kaneo is the work tracker, reached through the \`${KANEO_MCP}\` MCP server. Use the \`${KANEO_SKILL}\` skill before planning, creating, estimating, splitting, or updating Kaneo tickets, and before creating a branch or PR for ticket work.
@@ -2985,25 +2985,28 @@ FAILED: <"none", or one line per failed call:>
 //#endregion
 //#region src/continue.ts
 const CONTINUE = "continue";
-const CALL = {
+const CALL$1 = {
 	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
 	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
 	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
 	pi: (agent) => `the subagent tool with the \`${agent}\` agent`
 };
-/** How the user runs the action: a slash command, or Codex's explicit `$skill` mention. */
-function continueCommand(runtime) {
-	return runtime === "codex" ? `$${CONTINUE}` : `/${CONTINUE}`;
+/** How the user runs a manual action: a slash command, or Codex's explicit `$skill` mention. */
+function actionCommand(runtime, name) {
+	return runtime === "codex" ? `$${name}` : `/${name}`;
 }
-const DESCRIPTION = "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one.";
+function continueCommand(runtime) {
+	return actionCommand(runtime, CONTINUE);
+}
+const DESCRIPTION$1 = "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one.";
 const ARGUMENT_HINT = "[parallel [n]]";
 /** Frontmatter for the file each runtime reads; every one keeps the action manual-only. */
-function frontmatter(runtime) {
-	const description = JSON.stringify(`${DESCRIPTION} Manual action only, run with ${continueCommand(runtime)}.`);
-	const hint = `argument-hint: ${JSON.stringify(ARGUMENT_HINT)}`;
+function actionFrontmatter(runtime, name, summary, argumentHint) {
+	const description = JSON.stringify(`${summary} Manual action only, run with ${actionCommand(runtime, name)}.`);
+	const hint = `argument-hint: ${JSON.stringify(argumentHint)}`;
 	switch (runtime) {
-		case "claude": return `---\nname: ${CONTINUE}\ndescription: ${description}\n${hint}\ndisable-model-invocation: true\n---`;
-		case "codex": return `---\nname: ${CONTINUE}\ndescription: ${description}\n---`;
+		case "claude": return `---\nname: ${name}\ndescription: ${description}\n${hint}\ndisable-model-invocation: true\n---`;
+		case "codex": return `---\nname: ${name}\ndescription: ${description}\n---`;
 		case "opencode": return `---\ndescription: ${description}\n---`;
 		case "pi": return `---\ndescription: ${description}\n${hint}\n---`;
 	}
@@ -3013,8 +3016,8 @@ const CODEX_POLICY = `policy:\n  allow_implicit_invocation: false\n`;
 function continueMarkdown(runtime, models) {
 	const cmd = continueCommand(runtime);
 	const args = runtime === "codex" ? `Arguments passed to this run: the user's message after \`${cmd}\` (none means no arguments).` : "Arguments passed to this run: `$ARGUMENTS` (empty means no arguments).";
-	const scribe = CALL[runtime](SCRIBE);
-	return `${frontmatter(runtime)}
+	const scribe = CALL$1[runtime](SCRIBE);
+	return `${actionFrontmatter(runtime, CONTINUE, DESCRIPTION$1, ARGUMENT_HINT)}
 
 ## Arguments
 
@@ -3035,8 +3038,8 @@ A brief (such as the one the kick-off action copies) scopes the run: take ticket
 This session keeps the decisions (which ticket, the design, conflict resolution, whether checks really pass). Everything bulky goes to an agent on a cheaper model, so its output never fills this session:
 
 - **Kaneo**: read the board and every ticket write (status moves, comments) through ${scribe} (${models.fast}). Ask it for a short summary, never raw Kaneo JSON.
-- **Reads and edits**: follow the \`model-ladder\` skill. Large or many files, logs, CI and test output go to ${CALL[runtime]("ladder-read-fast")}; boilerplate, tests and mechanical edits to ${CALL[runtime]("ladder-edit-fast")} (${CALL[runtime]("ladder-edit-balanced")} for new logic). Climb a rung only when a reply is partial or fails verification.
-- **Commit titles**: the \`${COMMIT_SKILL}\` skill hands the staged diff to ${CALL[runtime](COMMIT_WRITER)}, which replies with one title.
+- **Reads and edits**: follow the \`model-ladder\` skill. Large or many files, logs, CI and test output go to ${CALL$1[runtime]("ladder-read-fast")}; boilerplate, tests and mechanical edits to ${CALL$1[runtime]("ladder-edit-fast")} (${CALL$1[runtime]("ladder-edit-balanced")} for new logic). Climb a rung only when a reply is partial or fails verification.
+- **Commit titles**: the \`${COMMIT_SKILL}\` skill hands the staged diff to ${CALL$1[runtime](COMMIT_WRITER)}, which replies with one title.
 - **Parallel workers** run on the balanced rung (${models.balanced}), not this session's model, whenever the sub-agent tool lets you choose a model.
 
 When one of these agents is not installed, do the step yourself with bounded reads (line ranges, \`--stat\`, \`tail\`).
@@ -3138,6 +3141,10 @@ function statePaths() {
 		manifest: join(dir, "manifest.json"),
 		backups: join(dir, "backups")
 	};
+}
+/** Where the kick-off action leaves the briefs it writes. */
+function kickOffDir() {
+	return join(statePaths().dir, "kick-off");
 }
 function configPath() {
 	return join(configRoot(), "agent-config", "config.json");
@@ -4203,6 +4210,147 @@ function uninstall(filter, force = false) {
 	return results;
 }
 //#endregion
+//#region src/kickoff.ts
+const KICK_OFF = "kick-off";
+const KICK_OFF_GUARD_FILE = "kick-off-guard.mjs";
+const DESCRIPTION = "Kick off a Kaneo epic: diagnose what it is missing, ask how to run it, and copy a /continue brief to the clipboard that works the whole epic in a fresh session.";
+const KICK_OFF_HINT = "<kaneo-epic-or-ticket-url | ticket-code>";
+const CALL = {
+	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
+	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
+	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
+	pi: (agent) => `the subagent tool with the \`${agent}\` agent`
+};
+const agent = (name) => `\`${name}\``;
+function kickOffMarkdown(runtime, models, briefDir) {
+	const cmd = actionCommand(runtime, KICK_OFF);
+	const cont = actionCommand(runtime, CONTINUE);
+	const args = runtime === "codex" ? `Argument: the user's message after \`${cmd}\`.` : "Argument: `$ARGUMENTS`.";
+	const ask = runtime === "claude" ? "with the AskUserQuestion tool" : "in one message with numbered options";
+	const guard = runtime === "claude" ? " The kick-off guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, and a clipboard copy of an incomplete brief." : "";
+	const deepRead = agent("ladder-read-deep");
+	const balancedRead = agent("ladder-read-balanced");
+	const fastRead = agent("ladder-read-fast");
+	const routed = `none and low risk: ${balancedRead}; medium and high: ${deepRead}`;
+	return `${actionFrontmatter(runtime, KICK_OFF, DESCRIPTION, KICK_OFF_HINT)}
+
+## Arguments
+
+${args} It names one Kaneo epic or ticket: a URL (\`…/task/<id>\`) or an identifier such as \`FEX-12\`. When it is empty, ask for it and wait.
+
+## Save context
+
+This session decides; everything bulky runs on an agent and comes back as a short summary. Agents run through ${CALL[runtime]("<name>")}.
+
+- **Kaneo**: every read and write goes through ${agent(SCRIBE)} (${models.fast}). Ask for summaries, never raw Kaneo JSON.
+- **Reasoning**: the diagnosis runs on ${deepRead} (${models.deep}). Every handoff starts with its phase line, \`Phase: <phase>\`.${guard}
+- Anything else you read follows the \`model-ladder\` skill.
+
+When one of these agents is not installed, do the step yourself with bounded reads.
+
+## 1. What is missing to complete the epic
+
+1. Load the \`${KANEO_SKILL}\` skill. Have the scribe resolve the argument to its epic: the ticket itself when it is the epic, otherwise the epic it belongs to (its parent, epic or \`related\` relation; with none, the ticket is the root). In the same request, ask for one summary of the epic (identifier, title, URL, description, acceptance criteria) and of every ticket related to it (subtasks, related, blocking, blocked by), each with identifier, title, status, priority, size label, relations, its criteria in one line and any PR link in its comments.
+2. Hand that summary to ${deepRead}:
+
+   \`\`\`
+   Phase: diagnose
+   Epic: <identifier> <title>, <url>
+   Tickets: <the scribe's summary>
+   Scope: this repository
+   Question: what is missing to complete this epic?
+   Answer shape: done tickets; open tickets in dependency order with what blocks each; work the epic's criteria need that no ticket covers (proposed tickets: title, one-line scope, size, dependencies); gaps (vague or missing criteria, tickets without criteria, dependency cycles, stale blockers, code that contradicts a done ticket); waves of open tickets that can run in parallel (no dependency between them, different areas of the code), each ticket with the context a fresh session needs and the paths it touches.
+   Budget: <= 700 words
+   \`\`\`
+
+3. Show the user the overview: progress (done / open / missing), blockers, missing tickets, gaps, and the proposed order and waves.
+
+## 2. Ask how to run it
+
+Ask these four ${ask}, recommending the first option of each, and wait for the answers:
+
+1. **Missing tickets**: create them in Kaneo now / list them in the brief for the new session to create first / leave them out.
+2. **Parallelism**: parallel waves of up to N tickets (\`${cont} parallel N\`, N = the widest wave) / one ticket at a time (\`${cont}\`). Recommend one at a time when no wave has two tickets.
+3. **Integration branch**: \`dev\` / the repository's default branch / another branch. Every ticket branch starts from it and every PR merges into it.
+4. **Reviews**: routed by risk (${routed}) / always ${deepRead} / fast allowed for none risk.
+
+When the user chose to create the missing tickets, have the scribe create them, sized, labelled and related as the \`${KANEO_SKILL}\` skill says, and put their identifiers in the queue.
+
+The brief's review routing, from answer 4:
+
+- Routed by risk: "${routed}."
+- Always deep: "${deepRead} for every risk."
+- Fast allowed for none risk: "none: ${fastRead}, with the line \`Fast review: approved by the user\` under the phase line; low: ${balancedRead}; medium and high: ${deepRead}."
+
+## 3. Write the brief and copy it
+
+1. Write the brief to \`${briefDir}/<EPIC-ID>.md\` (create the folder) from the template below. Replace every \`<…>\` and keep the rest as written: the loop, routing and stop sections are what the new session runs on.
+2. Copy it to the clipboard with the first tool that exists: \`pbcopy < <file>\` (macOS), \`wl-copy < <file>\`, \`xclip -selection clipboard < <file>\`, \`xsel --clipboard --input < <file>\` or \`clip.exe < <file>\`. When none exists, say so and give the path.
+3. Report the path, whether the brief is on the clipboard, one line per wave, and: open a fresh session in this repository and paste it.
+
+## Brief template
+
+The first line is the command alone: \`${cont}\` for one ticket at a time, \`${cont} parallel <N>\` for waves.
+
+\`\`\`\`markdown
+${cont} parallel <N>
+
+# Kick-off: <EPIC-ID> <epic title>
+
+## Epic
+
+- Ticket: [<EPIC-ID> <title>](<url>)
+- Goal: <one sentence>
+- Done when: <each acceptance criterion of the epic, one per line>
+- State: <done>/<total> tickets done, <open> open, <created> created by kick-off.
+- Integration branch: \`<branch>\`. Every ticket branch starts from \`origin/<branch>\` and every PR merges into it.
+
+## Queue
+
+Work only these tickets, in this order. Tickets in one wave do not depend on each other and may run in parallel; a wave starts once the previous one merged.
+
+### Wave 1
+
+- \`<ID>\` <title>: <why now and the context the ticket needs, one or two lines>. Depends on: <IDs or none>. Done when: <criteria>. Touches: <areas or paths>.
+
+## Gaps
+
+- <gap>: <what to do: create the ticket first, ask the user, or note it in the PR>.
+
+## Loop per ticket
+
+Agents run through ${CALL[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`Phase: plan\`, so the run can be checked.
+
+1. **Pick.** Have ${agent(SCRIBE)} re-read the ticket and its blockers. Still blocked: skip it, say why and take the next. Otherwise move it to In Progress and branch \`<ID>/<short-kebab-description>\` from \`origin/<branch>\`.
+2. **Plan** (\`Phase: plan\`, ${deepRead}). Diagnose every change the ticket needs. Return a task list; each task has a spec, its allowed paths, a reference file, a verify command and its edit rung: fast for pattern work (tests, boilerplate, config, mechanical edits), balanced for new logic. Prefer fast.
+3. **Edit** (\`Phase: edit\`). Run each task on its rung, ${agent("ladder-edit-fast")} or ${agent("ladder-edit-balanced")}. Climb one rung on a partial or escalate reply or a failed verify; ${agent("ladder-edit-deep")} only after balanced failed. Run every verify command yourself.
+4. **Risk** (\`Phase: risk\`, ${deepRead}). Classify the diff (\`git diff origin/<branch>...HEAD\`) as none, low, medium or high per area, one reason each: none for docs and comments; low for tests and isolated internals; medium for behavior other code calls; high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions. The ticket takes the highest.
+5. **Review** (\`Phase: review\`): <review routing>. Give the reviewer the diff, the ticket's criteria and the risk notes; it returns findings (path:line, severity, fix, and the fix's edit rung) or none. A review never runs on a fast agent unless this brief allows it.
+6. **Fix** (\`Phase: fix\`). Hand each finding to an edit agent on its rung and verify it. Go back to Risk when a fix changed what the diff touches, otherwise to Review. Repeat until the review has no findings.
+7. **Deliver.** Run the project's checks and leave them passing. Commit with the \`${COMMIT_SKILL}\` skill (titles from ${agent(COMMIT_WRITER)}), push, and open the PR into \`<branch>\`: its body starts with the Kaneo ticket link and has no AI attribution. Have the scribe comment the PR URL on the ticket. Wait for CI; read failures through ${fastRead} and fix them through Plan, Edit and Review. Merge, have the scribe move the ticket to Done, then delete the branch and its worktree.
+8. **Next.** Back to Pick. After each wave, have the scribe re-read the epic: tickets added since go to the end of the queue in dependency order.
+
+## Model routing
+
+| Phase | Agent |
+| --- | --- |
+| Kaneo reads and writes | ${agent(SCRIBE)} (${models.fast}) |
+| plan, risk | ${deepRead} (${models.deep}) |
+| edit, fix | ${agent("ladder-edit-fast")} (${models.fast}) for pattern work, ${agent("ladder-edit-balanced")} (${models.balanced}) for new logic, ${agent("ladder-edit-deep")} only after balanced failed |
+| review | <review routing> |
+| commit titles | ${agent(COMMIT_WRITER)} |
+
+Parallel workers cannot start agents: they run each phase on its rung with \`agent-config delegate read|edit --runtime ${runtime} --tier <rung> --no-climb "<handoff>"\`.
+
+## Stop and report
+
+Stop and ask the user when a ticket stays blocked, the review still has findings after 3 rounds, CI fails twice after fixes, a merge conflict cannot be resolved with confidence, a PR cannot merge (required review, branch protection), or the epic's criteria are ambiguous.
+
+When the queue is empty, have ${deepRead} check the epic's "Done when" list against the merged code (\`Phase: review\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
+\`\`\`\`
+`;
+}
+//#endregion
 //#region src/content.ts
 const SKILL_NAME = "model-ladder";
 const HOW_TO_CALL = {
@@ -4990,6 +5138,37 @@ const WRITER_AGENT = {
 		"bash"
 	]
 };
+/**
+* Claude only: copies a hook script asset into the hooks folder and registers it as a PreToolUse
+* hook for the matcher. A project's settings are committed, so its hook finds the script from the
+* project root.
+*/
+function guardHookOps(project, file, matcher, scriptLabel, hookLabel) {
+	const base = {
+		runtime: "claude",
+		component: "catalog"
+	};
+	const dir = project ? join(project, ".claude") : claudeDir();
+	const script = join(dir, "hooks", "agent-config", file);
+	const settings = join(dir, "settings.json");
+	const command = project ? `node "$CLAUDE_PROJECT_DIR/.claude/hooks/agent-config/${file}"` : `node "${script}"`;
+	return [{
+		...base,
+		kind: "file",
+		path: script,
+		content: assetSource(file),
+		executable: true,
+		label: scriptLabel
+	}, {
+		...base,
+		kind: "json-hook",
+		path: settings,
+		event: "PreToolUse",
+		matcher,
+		command,
+		label: hookLabel
+	}];
+}
 /** Claude only: the commit guard hook and the settings that drop commit and PR attribution. */
 function commitGuardOps(project) {
 	const base = {
@@ -4997,27 +5176,9 @@ function commitGuardOps(project) {
 		component: "catalog"
 	};
 	const dir = project ? join(project, ".claude") : claudeDir();
-	const script = join(dir, "hooks", "agent-config", COMMIT_GUARD_FILE);
 	const settings = join(dir, "settings.json");
-	const command = project ? `node "$CLAUDE_PROJECT_DIR/.claude/hooks/agent-config/${COMMIT_GUARD_FILE}"` : `node "${script}"`;
 	return [
-		{
-			...base,
-			kind: "file",
-			path: script,
-			content: assetSource(COMMIT_GUARD_FILE),
-			executable: true,
-			label: "commit-guard hook script"
-		},
-		{
-			...base,
-			kind: "json-hook",
-			path: settings,
-			event: "PreToolUse",
-			matcher: "Bash",
-			command,
-			label: "PreToolUse hook (Bash) commit guard"
-		},
+		...guardHookOps(project, COMMIT_GUARD_FILE, "Bash", "commit-guard hook script", "PreToolUse hook (Bash) commit guard"),
 		{
 			...base,
 			kind: "json-set",
@@ -5090,18 +5251,13 @@ const commit = {
 * Where each runtime reads a manual-only action: a Claude skill that the model never invokes, an
 * OpenCode command, a Codex skill with implicit invocation off, a Pi prompt template.
 */
-function continueOps(runtime, project, config) {
-	const tiers = config.tiers[runtime];
+function actionOps(runtime, project, name, content, label) {
 	const base = {
 		runtime,
 		component: "catalog",
-		label: "continue action"
+		label: `${label} action`
 	};
-	const content = continueMarkdown(runtime, {
-		fast: modelName(runtime, tiers),
-		balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced")
-	});
-	const skill = join(layout(runtime, project).skills, CONTINUE);
+	const skill = join(layout(runtime, project).skills, name);
 	switch (runtime) {
 		case "claude": return [{
 			...base,
@@ -5114,7 +5270,7 @@ function continueOps(runtime, project, config) {
 			return [{
 				...base,
 				kind: "file",
-				path: join(dir, "commands", `${CONTINUE}.md`),
+				path: join(dir, "commands", `${name}.md`),
 				content
 			}];
 		}
@@ -5128,18 +5284,47 @@ function continueOps(runtime, project, config) {
 			kind: "file",
 			path: join(skill, "agents", "openai.yaml"),
 			content: CODEX_POLICY,
-			label: "continue action policy (explicit invocation only)"
+			label: `${label} action policy (explicit invocation only)`
 		}];
 		case "pi": {
 			const dir = project ? join(project, ".pi") : piDir();
 			return [{
 				...base,
 				kind: "file",
-				path: join(dir, "prompts", `${CONTINUE}.md`),
+				path: join(dir, "prompts", `${name}.md`),
 				content
 			}];
 		}
 	}
+}
+function continueOps(runtime, project, config) {
+	const tiers = config.tiers[runtime];
+	const content = continueMarkdown(runtime, {
+		fast: modelName(runtime, tiers),
+		balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced")
+	});
+	return actionOps(runtime, project, CONTINUE, content, "continue");
+}
+/** The brief folder as the skill shows it: under the home directory it reads `~/...`. */
+function briefDirText() {
+	const dir = kickOffDir();
+	const root = home();
+	return dir.startsWith(`${root}/`) ? `~${dir.slice(root.length)}` : dir;
+}
+/** Claude only: the guard that keeps phase rungs and the brief structure honest. */
+function kickOffGuardOps(project) {
+	return guardHookOps(project, KICK_OFF_GUARD_FILE, "Agent|Task|Bash", "kick-off-guard hook script", "PreToolUse hook (Agent|Task|Bash) kick-off guard");
+}
+function kickOffOps(runtime, project, config) {
+	const tiers = config.tiers[runtime];
+	const content = kickOffMarkdown(runtime, {
+		fast: modelName(runtime, tiers),
+		balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
+		deep: modelName(runtime, tiers, tiers.deep.effort, "deep")
+	}, briefDirText());
+	const ops = actionOps(runtime, project, KICK_OFF, content, "kick-off");
+	if (runtime === "claude") ops.push(...kickOffGuardOps(project));
+	return ops;
 }
 const STATUSLINE_FILE = "statusline.sh";
 const CATALOG = [
@@ -5153,6 +5338,14 @@ const CATALOG = [
 		settings: [],
 		discover: () => ({}),
 		ops: (entry, runtime, config) => continueOps(runtime, entry.project, config)
+	},
+	{
+		id: KICK_OFF,
+		title: "Kick off a Kaneo epic",
+		description: "manual /kick-off action that diagnoses what a Kaneo epic is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
+		settings: [],
+		discover: () => ({}),
+		ops: (entry, runtime, config) => kickOffOps(runtime, entry.project, config)
 	},
 	{
 		id: "statusline",

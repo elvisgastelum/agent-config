@@ -285,6 +285,79 @@ test("install continue --project writes each runtime's action into the repositor
   }
 });
 
+test("install kick-off adds a manual-only action per runtime and a Claude guard hook", () => {
+  const rt = ["claude", "opencode", "codex", "pi"].flatMap((r) => ["--runtime", r]);
+  const settingsPath = join(home, ".claude/settings.json");
+  expect(run("install", "commit", "--runtime", "claude", "--yes").code).toBe(0);
+  const installed = run("install", "kick-off", ...rt, "--yes", "--json");
+  expect(installed.code).toBe(0);
+  const plan = JSON.parse(installed.stdout).plan as { item: string }[];
+  expect(plan.every((x) => x.item === "kick-off@user")).toBe(true);
+
+  const claude = read(join(home, ".claude/skills/kick-off/SKILL.md"));
+  expect(claude).toContain("name: kick-off");
+  expect(claude).toContain("disable-model-invocation: true");
+  expect(claude).toContain('argument-hint: "<kaneo-epic-or-ticket-url | ticket-code>"');
+  expect(claude).toContain("`$ARGUMENTS`");
+  expect(claude).toContain("Phase: diagnose");
+  expect(claude).toContain("`ladder-read-deep` (claude-opus-5-5)");
+  expect(claude).toContain("/continue parallel <N>");
+  expect(claude).toContain("kick-off/<EPIC-ID>.md");
+  expect(existsSync(join(home, ".claude/hooks/agent-config/kick-off-guard.mjs"))).toBe(true);
+  const entries = JSON.parse(read(settingsPath)).hooks.PreToolUse as {
+    matcher: string;
+    hooks: { command: string }[];
+  }[];
+  const guard = entries.find((e) => e.hooks.some((h) => h.command.includes("kick-off-guard.mjs")));
+  expect(guard?.matcher).toBe("Agent|Task|Bash");
+
+  expect(existsSync(join(home, ".config/opencode/commands/kick-off.md"))).toBe(true);
+  expect(read(join(home, ".codex/skills/kick-off/SKILL.md"))).toContain("$continue parallel <N>");
+  expect(existsSync(join(home, ".codex/skills/kick-off/agents/openai.yaml"))).toBe(true);
+  expect(existsSync(join(home, ".pi/agent/prompts/kick-off.md"))).toBe(true);
+
+  expect(JSON.parse(run("install", "kick-off", "--yes", "--json").stdout).applied).toBe(false);
+
+  expect(run("uninstall", "kick-off", "--yes").code).toBe(0);
+  expect(existsSync(join(home, ".claude/skills/kick-off"))).toBe(false);
+  expect(existsSync(join(home, ".claude/hooks/agent-config/kick-off-guard.mjs"))).toBe(false);
+  expect(existsSync(join(home, ".config/opencode/commands/kick-off.md"))).toBe(false);
+  expect(existsSync(join(home, ".codex/skills/kick-off"))).toBe(false);
+  expect(existsSync(join(home, ".pi/agent/prompts/kick-off.md"))).toBe(false);
+  const after = JSON.parse(read(settingsPath)).hooks.PreToolUse as {
+    hooks: { command: string }[];
+  }[];
+  const commands = after.flatMap((e) => e.hooks.map((h) => h.command));
+  expect(commands.some((c) => c.includes("kick-off-guard.mjs"))).toBe(false);
+  expect(commands.some((c) => c.includes("commit-guard.mjs"))).toBe(true);
+});
+
+test("install kick-off --project writes into the repository with a project-rooted hook", () => {
+  const repo = mkdtempSync(join(tmpdir(), "agent-config-repo-"));
+  try {
+    const rt = ["claude", "opencode", "codex", "pi"].flatMap((r) => ["--runtime", r]);
+    expect(run("install", "kick-off", "--project", repo, ...rt, "--yes").code).toBe(0);
+    for (const path of [
+      ".claude/skills/kick-off/SKILL.md",
+      ".claude/hooks/agent-config/kick-off-guard.mjs",
+      ".opencode/commands/kick-off.md",
+      ".agents/skills/kick-off/SKILL.md",
+      ".agents/skills/kick-off/agents/openai.yaml",
+      ".pi/prompts/kick-off.md",
+    ]) {
+      expect(existsSync(join(repo, path))).toBe(true);
+    }
+    expect(read(join(repo, ".claude/settings.json"))).toContain(
+      "$CLAUDE_PROJECT_DIR/.claude/hooks/agent-config/kick-off-guard.mjs",
+    );
+    expect(existsSync(join(home, ".claude"))).toBe(false);
+    expect(run("uninstall", "kick-off", "--project", repo, "--yes").code).toBe(0);
+    expect(existsSync(join(repo, ".pi/prompts/kick-off.md"))).toBe(false);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("install model-ladder installs only the ladder; uninstall model-ladder keeps kaneo", () => {
   const kaneo = ["install", "kaneo", "--runtime", "claude", "--url", "https://k.example.com"];
   expect(run(...kaneo, "--yes").code).toBe(0);
@@ -312,6 +385,7 @@ test("install model-ladder installs only the ladder; uninstall model-ladder keep
     "kaneo",
     "commit",
     "continue",
+    "kick-off",
     "statusline",
   ]);
   expect(listed.items[0].entries).toMatchObject([{ scope: "user", runtimes: ["claude"] }]);

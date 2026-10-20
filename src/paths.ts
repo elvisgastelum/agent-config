@@ -30,6 +30,11 @@ export function statePaths(): { dir: string; manifest: string; backups: string }
   return { dir, manifest: join(dir, "manifest.json"), backups: join(dir, "backups") };
 }
 
+/** Where the kick-off action leaves the briefs it writes. */
+export function kickOffDir(): string {
+  return join(statePaths().dir, "kick-off");
+}
+
 export function configPath(): string {
   return join(configRoot(), "agent-config", "config.json");
 }
