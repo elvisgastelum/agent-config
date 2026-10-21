@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { PLAN_DB, PLAN_MIGRATIONS, PLAN_SCHEMA, PLAN_SCHEMA_VERSION } from "../src/planning.ts";
-import { findStores, MissingPathError, upgradeStores } from "../src/plans.ts";
+import { findStores, MissingPathError, readPlan, upgradeStores } from "../src/plans.ts";
 import { put } from "./helpers.ts";
 
 let root: string;
@@ -141,5 +141,144 @@ describe("plans upgrade", () => {
     expect(() => findStores([missing])).toThrow(MissingPathError);
     expect(existsSync(missing)).toBe(false);
     expect(existsSync(join(root, "nope"))).toBe(false);
+  });
+});
+
+const PLAN_ROW =
+  "INSERT INTO plan (title, kind, request, outcome, status, tracker, created_at) VALUES ('Plan', 'feat', 'req', NULL, 'review', 'store', '2026-01-01 00:00:00')";
+
+/** Runs `sql` against the store at `path`. */
+function run(path: string, sql: string): void {
+  const db = new DatabaseSync(path);
+  try {
+    db.exec(`PRAGMA foreign_keys = ON; ${sql}`);
+  } finally {
+    db.close();
+  }
+}
+
+describe("readPlan", () => {
+  test("reads every table of a store", async () => {
+    const path = storeFrom(join(root, "a"), PLAN_SCHEMA);
+    run(
+      path,
+      `${PLAN_ROW};
+      INSERT INTO epics (id, title, goal, done_when, position, tracker_id) VALUES ('E2', 'Second', 'g2', 'd2', 2, 'k-2'), ('E1', 'First', 'g1', 'd1', 1, NULL);
+      INSERT INTO tickets (id, epic_id, title, outcome, done_when, size, touches, status) VALUES
+        ('T1', 'E1', 'One', 'o1', 'c1', 'P2', 'a', 'todo'),
+        ('T2', NULL, 'Two', 'o2', 'c2', 'P3', 'b', 'todo'),
+        ('T3', 'E2', 'Three', 'o3', 'c3', 'P2', 'c', 'done');
+      INSERT INTO blocks (blocker, blocked) VALUES ('T1', 'T2');
+      INSERT INTO decisions (topic, question, answer, why, decided_by) VALUES ('t', 'q', 'a', NULL, 'user');
+      INSERT INTO facts (topic, fact, source) VALUES ('t', 'f', 's');
+      INSERT INTO findings (kind, lens, detail, why, recommendation, status, resolution, ticket_id) VALUES ('gap', 'l', 'd', 'w', NULL, 'open', NULL, 'T1');`,
+    );
+    const detail = await readPlan(path);
+    expect(detail.path).toBe(path);
+    expect(detail.version).toBe(PLAN_SCHEMA_VERSION);
+    expect(detail.plan).toEqual({
+      title: "Plan",
+      kind: "feat",
+      request: "req",
+      outcome: null,
+      status: "review",
+      tracker: "store",
+      createdAt: "2026-01-01 00:00:00",
+    });
+    expect(detail.epics).toEqual([
+      { id: "E1", title: "First", goal: "g1", doneWhen: "d1", position: 1, trackerId: null },
+      { id: "E2", title: "Second", goal: "g2", doneWhen: "d2", position: 2, trackerId: "k-2" },
+    ]);
+    expect(detail.tickets).toEqual([
+      {
+        id: "T1",
+        epicId: "E1",
+        kind: "story",
+        title: "One",
+        outcome: "o1",
+        doneWhen: "c1",
+        size: "P2",
+        touches: "a",
+        status: "todo",
+        trackerId: null,
+        blockedBy: [],
+        wave: 1,
+      },
+      {
+        id: "T2",
+        epicId: null,
+        kind: "story",
+        title: "Two",
+        outcome: "o2",
+        doneWhen: "c2",
+        size: "P3",
+        touches: "b",
+        status: "todo",
+        trackerId: null,
+        blockedBy: ["T1"],
+        wave: 2,
+      },
+      {
+        id: "T3",
+        epicId: "E2",
+        kind: "story",
+        title: "Three",
+        outcome: "o3",
+        doneWhen: "c3",
+        size: "P2",
+        touches: "c",
+        status: "done",
+        trackerId: null,
+        blockedBy: [],
+        wave: null,
+      },
+    ]);
+    expect(detail.decisions).toEqual([
+      { id: 1, topic: "t", question: "q", answer: "a", why: null, decidedBy: "user" },
+    ]);
+    expect(detail.facts).toEqual([{ id: 1, topic: "t", fact: "f", source: "s" }]);
+    expect(detail.findings).toEqual([
+      {
+        id: 1,
+        kind: "gap",
+        lens: "l",
+        detail: "d",
+        why: "w",
+        recommendation: null,
+        status: "open",
+        resolution: null,
+        ticketId: "T1",
+      },
+    ]);
+    expect(detail.progress).toEqual({ todo: 2, inProgress: 0, done: 1, total: 3 });
+  });
+
+  test("reads a version 0 store", async () => {
+    const path = staleStore(join(root, "a"));
+    run(path, PLAN_ROW);
+    const detail = await readPlan(path);
+    expect(detail.version).toBe(0);
+    expect(detail.plan?.title).toBe("Plan");
+  });
+
+  test("rejects a store newer than this agent-config", async () => {
+    const path = storeFrom(join(root, "a"), PLAN_SCHEMA);
+    run(path, `PRAGMA user_version = ${PLAN_SCHEMA_VERSION + 1}`);
+    await expect(readPlan(path)).rejects.toThrow("agent-config update");
+  });
+
+  test("a store with no plan row has a null plan and no progress", async () => {
+    const path = storeFrom(join(root, "a"), PLAN_SCHEMA);
+    const detail = await readPlan(path);
+    expect(detail.plan).toBeNull();
+    expect(detail.progress).toEqual({ todo: 0, inProgress: 0, done: 0, total: 0 });
+  });
+
+  test("reading leaves the file unchanged", async () => {
+    const path = storeFrom(join(root, "a"), PLAN_SCHEMA);
+    run(path, PLAN_ROW);
+    const before = readFileSync(path);
+    await readPlan(path);
+    expect(readFileSync(path).equals(before)).toBe(true);
   });
 });

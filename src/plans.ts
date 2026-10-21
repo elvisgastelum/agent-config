@@ -113,3 +113,146 @@ export async function upgradeStores(stores: string[], dryRun = false): Promise<P
   }
   return results;
 }
+
+/** Ticket statuses the schema allows, as the progress counts use them. */
+const STATUS_TODO = "todo";
+const STATUS_IN_PROGRESS = "in_progress";
+const STATUS_DONE = "done";
+
+/** The single row of table `plan`. */
+export type PlanRow = {
+  title: string;
+  kind: string;
+  request: string;
+  outcome: string | null;
+  status: string;
+  tracker: string;
+  createdAt: string;
+};
+
+export type PlanEpic = {
+  id: string;
+  title: string;
+  goal: string;
+  doneWhen: string;
+  position: number;
+  trackerId: string | null;
+};
+
+/** A ticket with its blocker ids and the wave it can start in (null when done or stuck). */
+export type PlanTicket = {
+  id: string;
+  epicId: string | null;
+  kind: string;
+  title: string;
+  outcome: string;
+  doneWhen: string;
+  size: string;
+  touches: string;
+  status: string;
+  trackerId: string | null;
+  blockedBy: string[];
+  wave: number | null;
+};
+
+export type PlanDecision = {
+  id: number;
+  topic: string;
+  question: string;
+  answer: string;
+  why: string | null;
+  decidedBy: string;
+};
+
+export type PlanFact = { id: number; topic: string; fact: string; source: string };
+
+export type PlanFinding = {
+  id: number;
+  kind: string;
+  lens: string;
+  detail: string;
+  why: string;
+  recommendation: string | null;
+  status: string;
+  resolution: string | null;
+  ticketId: string | null;
+};
+
+/** Ticket counts by status. */
+export type PlanProgress = { todo: number; inProgress: number; done: number; total: number };
+
+/** Everything one store holds, for display. */
+export type PlanDetail = {
+  path: string;
+  version: number;
+  plan: PlanRow | null;
+  epics: PlanEpic[];
+  tickets: PlanTicket[];
+  decisions: PlanDecision[];
+  facts: PlanFact[];
+  findings: PlanFinding[];
+  progress: PlanProgress;
+};
+
+/** Reads one store without writing to it; a store newer than this agent-config throws. */
+export async function readPlan(path: string): Promise<PlanDetail> {
+  // Loaded here so the SQLite experimental warning never shows on other commands.
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    const version = versionOf(db);
+    checkVersion(version);
+    const all = <T>(sql: string): T[] => db.prepare(sql).all() as T[];
+    const plan =
+      (db
+        .prepare(
+          "SELECT title, kind, request, outcome, status, tracker, created_at AS createdAt FROM plan WHERE id = 1",
+        )
+        .get() as PlanRow | undefined) ?? null;
+    const epics = all<PlanEpic>(
+      "SELECT id, title, goal, done_when AS doneWhen, position, tracker_id AS trackerId FROM epics ORDER BY position, id",
+    );
+    const blockedBy = new Map<string, string[]>();
+    for (const row of all<{ blocker: string; blocked: string }>(
+      "SELECT blocker, blocked FROM blocks ORDER BY blocker",
+    )) {
+      blockedBy.set(row.blocked, [...(blockedBy.get(row.blocked) ?? []), row.blocker]);
+    }
+    const waves = new Map(
+      all<{ ticket_id: string; wave: number }>("SELECT ticket_id, wave FROM waves").map((row) => [
+        row.ticket_id,
+        Number(row.wave),
+      ]),
+    );
+    const tickets = all<Omit<PlanTicket, "blockedBy" | "wave">>(
+      "SELECT id, epic_id AS epicId, kind, title, outcome, done_when AS doneWhen, size, touches, status, tracker_id AS trackerId FROM tickets ORDER BY rowid",
+    ).map((ticket) => ({
+      ...ticket,
+      blockedBy: blockedBy.get(ticket.id) ?? [],
+      wave: waves.get(ticket.id) ?? null,
+    }));
+    const count = (status: string): number => tickets.filter((t) => t.status === status).length;
+    return {
+      path,
+      version,
+      plan,
+      epics,
+      tickets,
+      decisions: all<PlanDecision>(
+        "SELECT id, topic, question, answer, why, decided_by AS decidedBy FROM decisions ORDER BY id",
+      ),
+      facts: all<PlanFact>("SELECT id, topic, fact, source FROM facts ORDER BY id"),
+      findings: all<PlanFinding>(
+        "SELECT id, kind, lens, detail, why, recommendation, status, resolution, ticket_id AS ticketId FROM findings ORDER BY id",
+      ),
+      progress: {
+        todo: count(STATUS_TODO),
+        inProgress: count(STATUS_IN_PROGRESS),
+        done: count(STATUS_DONE),
+        total: tickets.length,
+      },
+    };
+  } finally {
+    db.close();
+  }
+}
