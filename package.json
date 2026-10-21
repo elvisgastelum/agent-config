@@ -1,6 +1,6 @@
 {
   "name": "agent-config",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "description": "Configure Claude Code, OpenCode, Codex and Pi from one TUI and a catalog of abilities, such as the model ladder, which routes reads and edits to the cheapest capable model (Haiku → Sonnet → Opus) so the main session's context stays small.",
   "homepage": "https://github.com/elvisgastelum/agent-config#readme",
