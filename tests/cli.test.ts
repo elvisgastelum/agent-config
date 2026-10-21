@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -769,4 +769,25 @@ test("install statusline refuses other runtimes and --project", () => {
   const project = run("install", "statusline", "--project", home, "--yes");
   expect(project.code).not.toBe(0);
   expect(project.stderr).toContain("user scope only");
+});
+
+test("plans serve --json prints one JSON line, answers on it, and exits 0 on SIGINT", async () => {
+  const child = spawn("node", [cli, "plans", "serve", "--json"], {
+    cwd: home,
+    env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exited = new Promise<number | null>((done) => child.on("close", done));
+  let out = "";
+  const line = await new Promise<string>((done) => {
+    child.stdout.on("data", (chunk) => {
+      out += chunk;
+      if (out.includes("\n")) done(out);
+    });
+  });
+  const { urls } = JSON.parse(line) as { urls: { local: string } };
+  expect((await fetch(urls.local)).status).toBe(200);
+  child.kill("SIGINT");
+  expect(await exited).toBe(0);
+  expect(line.trim().split("\n")).toHaveLength(1);
 });

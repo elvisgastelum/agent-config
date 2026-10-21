@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs, styleText } from "node:util";
 import process$1, { stdin, stdout } from "node:process";
 import l__default, * as l from "node:readline";
 import { ReadStream } from "node:tty";
-import { createHash } from "node:crypto";
-import { homedir, tmpdir } from "node:os";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { homedir, networkInterfaces, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 //#region \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -4508,7 +4509,9 @@ const STORY_SIZES = [
 	MAX_STORY_SIZE
 ];
 /** The `plans` subcommand that upgrades existing stores. */
-const PLANS_SUBCOMMAND = "upgrade";
+const PLANS_UPGRADE = "upgrade";
+/** The `plans` subcommand that serves stores to a browser. */
+const PLANS_SERVE = "serve";
 /**
 * The `waves` view layers open tickets by their unfinished blockers and leaves out every ticket in
 * a dependency cycle or behind one (`stuck`), since none of them can start. It is dropped and
@@ -4823,7 +4826,7 @@ Climb on a failed review, never for speed: a cheap draft that the review checks 
 - **Kaneo**: load the ${code(KANEO_SKILL)} skill and follow its "Plan an epic" section; epics are titled ${code(`${EPIC_TITLE_PREFIX}<outcome>`)}. Have the scribe create each epic, then its stories and gap tickets with their labels and relations, in batches. Check each reply against the store, record every Kaneo identifier in \`tracker_id\`, and set the plan's tracker to \`kaneo\`.
 - **Store only**: the tickets already live in the store.
 
-Set the plan's status to \`written\`.
+Set the plan's status to \`written\`. Tell the user they can review the plan in a browser, also from a phone on the same network, with ${code(`agent-config plans ${PLANS_SERVE}`)}.
 
 ## 8. Report
 
@@ -4843,7 +4846,7 @@ Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is
 ${PLAN_SCHEMA}
 \`\`\`
 
-Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. An existing store is upgraded with ${code(`agent-config plans ${PLANS_SUBCOMMAND} <path>`)}, never by running the schema on it again. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. An existing store is upgraded with ${code(`agent-config plans ${PLANS_UPGRADE} <path>`)}, never by running the schema on it again. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
 ## Design system standard
 
@@ -6947,6 +6950,1104 @@ async function upgradeStores(stores, dryRun = false) {
 	}
 	return results;
 }
+/** Ticket statuses the schema allows, as the progress counts use them. */
+const STATUS_TODO = "todo";
+const STATUS_IN_PROGRESS = "in_progress";
+const STATUS_DONE = "done";
+/** Reads one store without writing to it; a store newer than this agent-config throws. */
+async function readPlan(path) {
+	const { DatabaseSync } = await import("node:sqlite");
+	const db = new DatabaseSync(path, { readOnly: true });
+	try {
+		const version = versionOf(db);
+		checkVersion(version);
+		const all = (sql) => db.prepare(sql).all();
+		const plan = db.prepare("SELECT title, kind, request, outcome, status, tracker, created_at AS createdAt FROM plan WHERE id = 1").get() ?? null;
+		const epics = all("SELECT id, title, goal, done_when AS doneWhen, position, tracker_id AS trackerId FROM epics ORDER BY position, id");
+		const blockedBy = /* @__PURE__ */ new Map();
+		for (const row of all("SELECT blocker, blocked FROM blocks ORDER BY blocker")) blockedBy.set(row.blocked, [...blockedBy.get(row.blocked) ?? [], row.blocker]);
+		const waves = new Map(all("SELECT ticket_id, wave FROM waves").map((row) => [row.ticket_id, Number(row.wave)]));
+		const tickets = all("SELECT id, epic_id AS epicId, kind, title, outcome, done_when AS doneWhen, size, touches, status, tracker_id AS trackerId FROM tickets ORDER BY rowid").map((ticket) => ({
+			...ticket,
+			blockedBy: blockedBy.get(ticket.id) ?? [],
+			wave: waves.get(ticket.id) ?? null
+		}));
+		const count = (status) => tickets.filter((t) => t.status === status).length;
+		return {
+			path,
+			version,
+			plan,
+			epics,
+			tickets,
+			decisions: all("SELECT id, topic, question, answer, why, decided_by AS decidedBy FROM decisions ORDER BY id"),
+			facts: all("SELECT id, topic, fact, source FROM facts ORDER BY id"),
+			findings: all("SELECT id, kind, lens, detail, why, recommendation, status, resolution, ticket_id AS ticketId FROM findings ORDER BY id"),
+			progress: {
+				todo: count(STATUS_TODO),
+				inProgress: count(STATUS_IN_PROGRESS),
+				done: count(STATUS_DONE),
+				total: tickets.length
+			}
+		};
+	} finally {
+		db.close();
+	}
+}
+//#endregion
+//#region src/serve.ts
+const TOKEN_BYTES = 18;
+const PLAN_ID_LENGTH = 16;
+const ALLOWED_METHODS = "GET, HEAD";
+const PLAN_ROUTE = /^\/plan\/([^/]+)$/;
+const STATUS_CLASS_UNSAFE = /[^a-z_]/g;
+const HTML = "text/html; charset=utf-8";
+const PLAIN = "text/plain; charset=utf-8";
+const SECURITY_HEADERS = {
+	"Cache-Control": "no-store",
+	"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+	"X-Content-Type-Options": "nosniff",
+	"Referrer-Policy": "no-referrer"
+};
+const ESCAPES = {
+	"&": "&amp;",
+	"<": "&lt;",
+	">": "&gt;",
+	"\"": "&quot;",
+	"'": "&#39;"
+};
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ESCAPES[c]);
+const planId = (storePath) => createHash("sha256").update(storePath).digest("base64url").slice(0, PLAN_ID_LENGTH);
+const shown = (path) => relative(process.cwd(), path) || ".";
+const STYLE = `
+:root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--fg:#1c2026;--muted:#5d6672;--line:#dde1e6;--todo:#6b7280;--progress:#b45309;--done:#15803d;--open:#b91c1c;--link:#1d4ed8}
+@media(prefers-color-scheme:dark){:root{--bg:#111418;--card:#1b2026;--fg:#e6e9ed;--muted:#9aa4b0;--line:#2d343c;--todo:#9ca3af;--progress:#fbbf24;--done:#4ade80;--open:#f87171;--link:#7aa7ff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:56rem;margin:0 auto;padding:1rem}
+a{color:var(--link)}
+h1{font-size:1.5rem;margin:.5rem 0}h2{font-size:1.1rem;margin:0}h3{font-size:1rem;margin:.75rem 0 .25rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:.6rem;padding:.75rem 1rem;margin:.75rem 0}
+.meta{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
+.text{white-space:pre-wrap;overflow-wrap:anywhere;margin:.25rem 0}
+.label{color:var(--muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
+.badge{display:inline-block;padding:0 .5rem;border-radius:1rem;border:1px solid currentColor;font-size:.8rem}
+.s-todo,.s-interview,.s-store,.s-resolved,.s-dismissed{color:var(--todo)}
+.s-in_progress,.s-review,.s-ticketed{color:var(--progress)}
+.s-done,.s-written{color:var(--done)}
+.s-open{color:var(--open)}
+progress{width:100%;height:.8rem}
+details{margin:1rem 0}summary{cursor:pointer;font-weight:600}
+`;
+function page(title, body) {
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body><main>${body}</main></body></html>`;
+}
+const badge = (status) => `<span class="badge s-${escapeHtml(status.replace(STATUS_CLASS_UNSAFE, ""))}">${escapeHtml(status)}</span>`;
+const field = (label, value) => value ? `<div class="label">${escapeHtml(label)}</div><div class="text">${escapeHtml(value)}</div>` : "";
+const section = (title, count, body) => `<details open><summary>${escapeHtml(title)} (${count})</summary>${body}</details>`;
+const progressText = (p) => `${p.done}/${p.total} done, ${p.inProgress} in progress`;
+const progressBar = (p) => `<progress max="${p.total}" value="${p.done}"></progress> <span class="meta">${escapeHtml(progressText(p))}</span>`;
+function titleOf(detail) {
+	return detail.plan?.title ?? basename(dirname(detail.path));
+}
+function indexPage(roots, cards) {
+	const rootText = roots.map(shown).join(", ");
+	const body = cards.length ? cards.map((card) => {
+		const id = planId(card.path);
+		if ("error" in card) return `<div class="card"><h2>${escapeHtml(shown(card.path))}</h2><div class="text">${escapeHtml(card.error)}</div></div>`;
+		const open = card.findings.filter((f) => f.status === "open").length;
+		return `<div class="card"><h2><a href="plan/${id}">${escapeHtml(titleOf(card))}</a></h2>
+<div>${card.plan ? `${escapeHtml(card.plan.kind)} ${badge(card.plan.status)} <span class="meta">tracker ${escapeHtml(card.plan.tracker)}, created ${escapeHtml(card.plan.createdAt)}</span>` : ""}</div>
+<div>${progressBar(card.progress)}</div>
+<div class="meta">${open} open findings</div>
+<div class="meta">${escapeHtml(shown(card.path))}</div></div>`;
+	}).join("") : `<div class="card">No plan stores found yet in ${escapeHtml(rootText)}. Ask your agent to run /planning, then reload this page.</div>`;
+	return page("Plans", `<h1>Plans</h1><div class="meta">Searched: ${escapeHtml(rootText)}</div>${body}`);
+}
+const ticketAnchor = (id) => escapeHtml(`ticket-${id}`);
+function ticketCard(t, anchored) {
+	const blockers = t.blockedBy.map((id) => `<a href="#${ticketAnchor(id)}">${escapeHtml(id)}</a>`).join(", ");
+	return `<div class="card"${anchored ? ` id="${ticketAnchor(t.id)}"` : ""}>
+<h3>${escapeHtml(t.id)} ${escapeHtml(t.title)} ${badge(t.status)}</h3>
+<div class="meta">${escapeHtml(t.kind)}, size ${escapeHtml(t.size)}, wave ${t.wave ?? "none"}${t.trackerId ? `, tracker ${escapeHtml(t.trackerId)}` : ""}</div>
+${field("Outcome", t.outcome)}${field("Done when", t.doneWhen)}${field("Touches", t.touches)}
+${blockers ? `<div class="label">Blocked by</div><div>${blockers}</div>` : ""}</div>`;
+}
+function planPage(d) {
+	const byId = new Map(d.tickets.map((t) => [t.id, t]));
+	const open = d.tickets.filter((t) => t.status !== "done");
+	const waves = [...new Set(open.map((t) => t.wave).filter((w) => w !== null))].sort((a, b) => a - b);
+	const stuck = open.filter((t) => t.wave === null);
+	const waveHtml = waves.map((w) => `<h3>Wave ${w}</h3>${open.filter((t) => t.wave === w).map((t) => ticketCard(t, false)).join("")}`).join("") + (stuck.length ? `<h3>Stuck</h3><div class="meta">In or behind a dependency cycle.</div>${stuck.map((t) => ticketCard(t, false)).join("")}` : "");
+	const epicIds = new Set(d.epics.map((e) => e.id));
+	const loose = d.tickets.filter((t) => t.epicId === null || !epicIds.has(t.epicId));
+	const epicHtml = d.epics.map((e) => `<div class="card"><h3>${escapeHtml(e.id)} ${escapeHtml(e.title)}${e.trackerId ? ` <span class="meta">tracker ${escapeHtml(e.trackerId)}</span>` : ""}</h3>${field("Goal", e.goal)}${field("Done when", e.doneWhen)}${d.tickets.filter((t) => t.epicId === e.id).map((t) => ticketCard(t, true)).join("")}</div>`).join("") + (loose.length ? `<h3>No epic</h3>${loose.map((t) => ticketCard(t, true)).join("")}` : "");
+	const findingHtml = [...d.findings].sort((a, b) => Number(b.status === "open") - Number(a.status === "open") || a.id - b.id).map((f) => `<div class="card"><h3>${escapeHtml(f.kind)} <span class="meta">${escapeHtml(f.lens)}</span> ${badge(f.status)}</h3>${field("Detail", f.detail)}${field("Why", f.why)}${field("Recommendation", f.recommendation)}${field("Resolution", f.resolution)}${f.ticketId && byId.has(f.ticketId) ? `<div><a href="#${ticketAnchor(f.ticketId)}">${escapeHtml(f.ticketId)}</a></div>` : ""}</div>`).join("");
+	const decisionHtml = d.decisions.map((x) => `<div class="card"><h3>${escapeHtml(x.topic)}</h3>${field("Question", x.question)}${field("Answer", x.answer)}${field("Why", x.why)}<div class="meta">decided by ${escapeHtml(x.decidedBy)}</div></div>`).join("");
+	const factHtml = d.facts.map((x) => `<div class="card"><h3>${escapeHtml(x.topic)}</h3>${field("Fact", x.fact)}${field("Source", x.source)}</div>`).join("");
+	const p = d.plan;
+	const head = `<p><a href="../">All plans</a></p><h1>${escapeHtml(titleOf(d))}</h1>
+<div class="meta">${p ? `${escapeHtml(p.kind)} ${badge(p.status)} tracker ${escapeHtml(p.tracker)}, created ${escapeHtml(p.createdAt)}, ` : ""}schema v${d.version}</div>
+<div class="meta">${escapeHtml(shown(d.path))}</div>${p ? field("Request", p.request) + field("Outcome", p.outcome) : ""}
+<div class="card">${progressBar(d.progress)}</div>`;
+	return page(titleOf(d), head + section("Waves", open.length, waveHtml) + section("Epics", d.epics.length, epicHtml) + section("Findings", d.findings.length, findingHtml) + section("Decisions", d.decisions.length, decisionHtml) + section("Facts", d.facts.length, factHtml));
+}
+function send(res, status, type, body, extra = {}) {
+	res.writeHead(status, {
+		"Content-Type": type,
+		...SECURITY_HEADERS,
+		...extra
+	});
+	res.end(body);
+}
+/** Every store under `roots`; a root that is gone contributes none. */
+function discover(roots) {
+	const found = [];
+	for (const root of roots) try {
+		found.push(...findStores([root]));
+	} catch (error) {
+		if (!(error instanceof MissingPathError)) throw error;
+	}
+	return [...new Set(found)];
+}
+async function route(roots, token, req, res) {
+	if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, PLAIN, "Method not allowed", { Allow: ALLOWED_METHODS });
+	const { pathname } = new URL(req.url ?? "/", "http://localhost");
+	const given = Buffer.from(pathname.split("/")[1] ?? "");
+	if (given.length !== token.length || !timingSafeEqual(given, token)) return send(res, 404, PLAIN, "Not found");
+	const rest = pathname.slice(1 + token.length);
+	const stores = discover(roots);
+	if (rest === "/") {
+		const cards = await Promise.all(stores.map((path) => readPlan(path).catch((error) => ({
+			path,
+			error: error instanceof Error ? error.message : String(error)
+		}))));
+		const created = (c) => "error" in c ? "" : c.plan?.createdAt ?? "";
+		cards.sort((a, b) => (created(b) ? 1 : 0) - (created(a) ? 1 : 0) || created(b).localeCompare(created(a)) || a.path.localeCompare(b.path));
+		return send(res, 200, HTML, indexPage(roots, cards));
+	}
+	const id = PLAN_ROUTE.exec(rest)?.[1];
+	const path = id === void 0 ? void 0 : stores.find((s) => planId(s) === id);
+	if (path === void 0) return send(res, 404, HTML, page("Not found", "<h1>Not found</h1>"));
+	try {
+		return send(res, 200, HTML, planPage(await readPlan(path)));
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		return send(res, 500, HTML, page("Plan unreadable", `<p><a href="../">All plans</a></p><h1>Cannot read this plan</h1><div class="meta">${escapeHtml(shown(path))}</div><div class="text">${escapeHtml(msg)}</div>`));
+	}
+}
+/** Starts the server; `host` defaults to every interface. */
+async function servePlans(roots, options = {}) {
+	const secret = randomBytes(TOKEN_BYTES).toString("base64url");
+	const token = Buffer.from(secret);
+	const server = createServer((req, res) => {
+		route(roots, token, req, res).catch(() => {
+			if (!res.headersSent) send(res, 500, PLAIN, "Internal error");
+			else res.end();
+		});
+	});
+	await new Promise((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, options.host, resolve);
+	});
+	const address = server.address();
+	const port = typeof address === "object" && address ? address.port : 0;
+	const network = Object.values(networkInterfaces()).flatMap((list) => list ?? []).filter((i) => i.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${port}/${secret}/`);
+	return {
+		port,
+		urls: {
+			local: `http://localhost:${port}/${secret}/`,
+			network
+		},
+		close: () => new Promise((resolve) => {
+			server.close(() => resolve());
+			server.closeAllConnections();
+		})
+	};
+}
+//#endregion
+//#region node_modules/.pnpm/uqr@0.1.3/node_modules/uqr/dist/index.mjs
+var QrCodeDataType = /* @__PURE__ */ ((QrCodeDataType2) => {
+	QrCodeDataType2[QrCodeDataType2["Border"] = -1] = "Border";
+	QrCodeDataType2[QrCodeDataType2["Data"] = 0] = "Data";
+	QrCodeDataType2[QrCodeDataType2["Function"] = 1] = "Function";
+	QrCodeDataType2[QrCodeDataType2["Position"] = 2] = "Position";
+	QrCodeDataType2[QrCodeDataType2["Timing"] = 3] = "Timing";
+	QrCodeDataType2[QrCodeDataType2["Alignment"] = 4] = "Alignment";
+	return QrCodeDataType2;
+})(QrCodeDataType || {});
+const LOW = [0, 1];
+const MEDIUM = [1, 0];
+const QUARTILE = [2, 3];
+const HIGH = [3, 2];
+const EccMap = {
+	L: LOW,
+	M: MEDIUM,
+	Q: QUARTILE,
+	H: HIGH
+};
+const NUMERIC_REGEX = /^\d*$/;
+const ALPHANUMERIC_REGEX = /^[A-Z0-9 $%*+./:-]*$/;
+const ALPHANUMERIC_CHARSET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+const MIN_VERSION = 1;
+const MAX_VERSION = 40;
+const PENALTY_N1 = 3;
+const PENALTY_N2 = 3;
+const PENALTY_N3 = 40;
+const PENALTY_N4 = 10;
+const ECC_CODEWORDS_PER_BLOCK = [
+	[
+		-1,
+		7,
+		10,
+		15,
+		20,
+		26,
+		18,
+		20,
+		24,
+		30,
+		18,
+		20,
+		24,
+		26,
+		30,
+		22,
+		24,
+		28,
+		30,
+		28,
+		28,
+		28,
+		28,
+		30,
+		30,
+		26,
+		28,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30
+	],
+	[
+		-1,
+		10,
+		16,
+		26,
+		18,
+		24,
+		16,
+		18,
+		22,
+		22,
+		26,
+		30,
+		22,
+		22,
+		24,
+		24,
+		28,
+		28,
+		26,
+		26,
+		26,
+		26,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28,
+		28
+	],
+	[
+		-1,
+		13,
+		22,
+		18,
+		26,
+		18,
+		24,
+		18,
+		22,
+		20,
+		24,
+		28,
+		26,
+		24,
+		20,
+		30,
+		24,
+		28,
+		28,
+		26,
+		30,
+		28,
+		30,
+		30,
+		30,
+		30,
+		28,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30
+	],
+	[
+		-1,
+		17,
+		28,
+		22,
+		16,
+		22,
+		28,
+		26,
+		26,
+		24,
+		28,
+		24,
+		28,
+		22,
+		24,
+		24,
+		30,
+		28,
+		28,
+		26,
+		28,
+		30,
+		24,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30,
+		30
+	]
+];
+const NUM_ERROR_CORRECTION_BLOCKS = [
+	[
+		-1,
+		1,
+		1,
+		1,
+		1,
+		1,
+		2,
+		2,
+		2,
+		2,
+		4,
+		4,
+		4,
+		4,
+		4,
+		6,
+		6,
+		6,
+		6,
+		7,
+		8,
+		8,
+		9,
+		9,
+		10,
+		12,
+		12,
+		12,
+		13,
+		14,
+		15,
+		16,
+		17,
+		18,
+		19,
+		19,
+		20,
+		21,
+		22,
+		24,
+		25
+	],
+	[
+		-1,
+		1,
+		1,
+		1,
+		2,
+		2,
+		4,
+		4,
+		4,
+		5,
+		5,
+		5,
+		8,
+		9,
+		9,
+		10,
+		10,
+		11,
+		13,
+		14,
+		16,
+		17,
+		17,
+		18,
+		20,
+		21,
+		23,
+		25,
+		26,
+		28,
+		29,
+		31,
+		33,
+		35,
+		37,
+		38,
+		40,
+		43,
+		45,
+		47,
+		49
+	],
+	[
+		-1,
+		1,
+		1,
+		2,
+		2,
+		4,
+		4,
+		6,
+		6,
+		8,
+		8,
+		8,
+		10,
+		12,
+		16,
+		12,
+		17,
+		16,
+		18,
+		21,
+		20,
+		23,
+		23,
+		25,
+		27,
+		29,
+		34,
+		34,
+		35,
+		38,
+		40,
+		43,
+		45,
+		48,
+		51,
+		53,
+		56,
+		59,
+		62,
+		65,
+		68
+	],
+	[
+		-1,
+		1,
+		1,
+		2,
+		4,
+		4,
+		4,
+		5,
+		6,
+		8,
+		8,
+		11,
+		11,
+		16,
+		16,
+		18,
+		16,
+		19,
+		21,
+		25,
+		25,
+		25,
+		34,
+		30,
+		32,
+		35,
+		37,
+		40,
+		42,
+		45,
+		48,
+		51,
+		54,
+		57,
+		60,
+		63,
+		66,
+		70,
+		74,
+		77,
+		81
+	]
+];
+var QrCode = class {
+	constructor(version, ecc, dataCodewords, msk) {
+		this.version = version;
+		this.ecc = ecc;
+		if (version < MIN_VERSION || version > MAX_VERSION) throw new RangeError("Version value out of range");
+		if (msk < -1 || msk > 7) throw new RangeError("Mask value out of range");
+		this.size = version * 4 + 17;
+		const row = Array.from({ length: this.size }).fill(false);
+		for (let i = 0; i < this.size; i++) {
+			this.modules.push(row.slice());
+			this.types.push(row.map(() => 0));
+		}
+		this.drawFunctionPatterns();
+		const allCodewords = this.addEccAndInterleave(dataCodewords);
+		this.drawCodewords(allCodewords);
+		if (msk === -1) {
+			let minPenalty = 1e9;
+			for (let i = 0; i < 8; i++) {
+				this.applyMask(i);
+				this.drawFormatBits(i);
+				const penalty = this.getPenaltyScore();
+				if (penalty < minPenalty) {
+					msk = i;
+					minPenalty = penalty;
+				}
+				this.applyMask(i);
+			}
+		}
+		this.mask = msk;
+		this.applyMask(msk);
+		this.drawFormatBits(msk);
+	}
+	size;
+	mask;
+	modules = [];
+	types = [];
+	getModule(x, y) {
+		return x >= 0 && x < this.size && y >= 0 && y < this.size && this.modules[y][x];
+	}
+	drawFunctionPatterns() {
+		for (let i = 0; i < this.size; i++) {
+			this.setFunctionModule(6, i, i % 2 === 0, QrCodeDataType.Timing);
+			this.setFunctionModule(i, 6, i % 2 === 0, QrCodeDataType.Timing);
+		}
+		this.drawFinderPattern(3, 3);
+		this.drawFinderPattern(this.size - 4, 3);
+		this.drawFinderPattern(3, this.size - 4);
+		const alignPatPos = this.getAlignmentPatternPositions();
+		const numAlign = alignPatPos.length;
+		for (let i = 0; i < numAlign; i++) for (let j = 0; j < numAlign; j++) if (!(i === 0 && j === 0 || i === 0 && j === numAlign - 1 || i === numAlign - 1 && j === 0)) this.drawAlignmentPattern(alignPatPos[i], alignPatPos[j]);
+		this.drawFormatBits(0);
+		this.drawVersion();
+	}
+	drawFormatBits(mask) {
+		const data = this.ecc[1] << 3 | mask;
+		let rem = data;
+		for (let i = 0; i < 10; i++) rem = rem << 1 ^ (rem >>> 9) * 1335;
+		const bits = (data << 10 | rem) ^ 21522;
+		for (let i = 0; i <= 5; i++) this.setFunctionModule(8, i, getBit(bits, i));
+		this.setFunctionModule(8, 7, getBit(bits, 6));
+		this.setFunctionModule(8, 8, getBit(bits, 7));
+		this.setFunctionModule(7, 8, getBit(bits, 8));
+		for (let i = 9; i < 15; i++) this.setFunctionModule(14 - i, 8, getBit(bits, i));
+		for (let i = 0; i < 8; i++) this.setFunctionModule(this.size - 1 - i, 8, getBit(bits, i));
+		for (let i = 8; i < 15; i++) this.setFunctionModule(8, this.size - 15 + i, getBit(bits, i));
+		this.setFunctionModule(8, this.size - 8, true);
+	}
+	drawVersion() {
+		if (this.version < 7) return;
+		let rem = this.version;
+		for (let i = 0; i < 12; i++) rem = rem << 1 ^ (rem >>> 11) * 7973;
+		const bits = this.version << 12 | rem;
+		for (let i = 0; i < 18; i++) {
+			const color = getBit(bits, i);
+			const a = this.size - 11 + i % 3;
+			const b = Math.floor(i / 3);
+			this.setFunctionModule(a, b, color);
+			this.setFunctionModule(b, a, color);
+		}
+	}
+	drawFinderPattern(x, y) {
+		for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+			const dist = Math.max(Math.abs(dx), Math.abs(dy));
+			const xx = x + dx;
+			const yy = y + dy;
+			if (xx >= 0 && xx < this.size && yy >= 0 && yy < this.size) this.setFunctionModule(xx, yy, dist !== 2 && dist !== 4, QrCodeDataType.Position);
+		}
+	}
+	drawAlignmentPattern(x, y) {
+		for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) this.setFunctionModule(x + dx, y + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1, QrCodeDataType.Alignment);
+	}
+	setFunctionModule(x, y, isDark, type = QrCodeDataType.Function) {
+		this.modules[y][x] = isDark;
+		this.types[y][x] = type;
+	}
+	addEccAndInterleave(data) {
+		const ver = this.version;
+		const ecl = this.ecc;
+		if (data.length !== getNumDataCodewords(ver, ecl)) throw new RangeError("Invalid argument");
+		const numBlocks = NUM_ERROR_CORRECTION_BLOCKS[ecl[0]][ver];
+		const blockEccLen = ECC_CODEWORDS_PER_BLOCK[ecl[0]][ver];
+		const rawCodewords = Math.floor(getNumRawDataModules(ver) / 8);
+		const numShortBlocks = numBlocks - rawCodewords % numBlocks;
+		const shortBlockLen = Math.floor(rawCodewords / numBlocks);
+		const blocks = [];
+		const rsDiv = reedSolomonComputeDivisor(blockEccLen);
+		for (let i = 0, k = 0; i < numBlocks; i++) {
+			const dat = data.slice(k, k + shortBlockLen - blockEccLen + (i < numShortBlocks ? 0 : 1));
+			k += dat.length;
+			const ecc = reedSolomonComputeRemainder(dat, rsDiv);
+			if (i < numShortBlocks) dat.push(0);
+			blocks.push(dat.concat(ecc));
+		}
+		const result = [];
+		for (let i = 0; i < blocks[0].length; i++) blocks.forEach((block, j) => {
+			if (i !== shortBlockLen - blockEccLen || j >= numShortBlocks) result.push(block[i]);
+		});
+		return result;
+	}
+	drawCodewords(data) {
+		if (data.length !== Math.floor(getNumRawDataModules(this.version) / 8)) throw new RangeError("Invalid argument");
+		let i = 0;
+		for (let right = this.size - 1; right >= 1; right -= 2) {
+			if (right === 6) right = 5;
+			for (let vert = 0; vert < this.size; vert++) for (let j = 0; j < 2; j++) {
+				const x = right - j;
+				const y = (right + 1 & 2) === 0 ? this.size - 1 - vert : vert;
+				if (!this.types[y][x] && i < data.length * 8) {
+					this.modules[y][x] = getBit(data[i >>> 3], 7 - (i & 7));
+					i++;
+				}
+			}
+		}
+	}
+	applyMask(mask) {
+		if (mask < 0 || mask > 7) throw new RangeError("Mask value out of range");
+		for (let y = 0; y < this.size; y++) for (let x = 0; x < this.size; x++) {
+			let invert;
+			switch (mask) {
+				case 0:
+					invert = (x + y) % 2 === 0;
+					break;
+				case 1:
+					invert = y % 2 === 0;
+					break;
+				case 2:
+					invert = x % 3 === 0;
+					break;
+				case 3:
+					invert = (x + y) % 3 === 0;
+					break;
+				case 4:
+					invert = (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0;
+					break;
+				case 5:
+					invert = x * y % 2 + x * y % 3 === 0;
+					break;
+				case 6:
+					invert = (x * y % 2 + x * y % 3) % 2 === 0;
+					break;
+				case 7:
+					invert = ((x + y) % 2 + x * y % 3) % 2 === 0;
+					break;
+				default: throw new Error("Unreachable");
+			}
+			if (!this.types[y][x] && invert) this.modules[y][x] = !this.modules[y][x];
+		}
+	}
+	getPenaltyScore() {
+		let result = 0;
+		for (let y = 0; y < this.size; y++) {
+			let runColor = false;
+			let runX = 0;
+			const runHistory = [
+				0,
+				0,
+				0,
+				0,
+				0,
+				0,
+				0
+			];
+			for (let x = 0; x < this.size; x++) if (this.modules[y][x] === runColor) {
+				runX++;
+				if (runX === 5) result += PENALTY_N1;
+				else if (runX > 5) result++;
+			} else {
+				this.finderPenaltyAddHistory(runX, runHistory);
+				if (!runColor) result += this.finderPenaltyCountPatterns(runHistory) * PENALTY_N3;
+				runColor = this.modules[y][x];
+				runX = 1;
+			}
+			result += this.finderPenaltyTerminateAndCount(runColor, runX, runHistory) * PENALTY_N3;
+		}
+		for (let x = 0; x < this.size; x++) {
+			let runColor = false;
+			let runY = 0;
+			const runHistory = [
+				0,
+				0,
+				0,
+				0,
+				0,
+				0,
+				0
+			];
+			for (let y = 0; y < this.size; y++) if (this.modules[y][x] === runColor) {
+				runY++;
+				if (runY === 5) result += PENALTY_N1;
+				else if (runY > 5) result++;
+			} else {
+				this.finderPenaltyAddHistory(runY, runHistory);
+				if (!runColor) result += this.finderPenaltyCountPatterns(runHistory) * PENALTY_N3;
+				runColor = this.modules[y][x];
+				runY = 1;
+			}
+			result += this.finderPenaltyTerminateAndCount(runColor, runY, runHistory) * PENALTY_N3;
+		}
+		for (let y = 0; y < this.size - 1; y++) for (let x = 0; x < this.size - 1; x++) {
+			const color = this.modules[y][x];
+			if (color === this.modules[y][x + 1] && color === this.modules[y + 1][x] && color === this.modules[y + 1][x + 1]) result += PENALTY_N2;
+		}
+		let dark = 0;
+		for (const row of this.modules) dark = row.reduce((sum, color) => sum + (color ? 1 : 0), dark);
+		const total = this.size * this.size;
+		const k = Math.ceil(Math.abs(dark * 20 - total * 10) / total) - 1;
+		result += k * PENALTY_N4;
+		return result;
+	}
+	getAlignmentPatternPositions() {
+		if (this.version === 1) return [];
+		else {
+			const numAlign = Math.floor(this.version / 7) + 2;
+			const step = this.version === 32 ? 26 : Math.ceil((this.version * 4 + 4) / (numAlign * 2 - 2)) * 2;
+			const result = [6];
+			for (let pos = this.size - 7; result.length < numAlign; pos -= step) result.splice(1, 0, pos);
+			return result;
+		}
+	}
+	finderPenaltyCountPatterns(runHistory) {
+		const n = runHistory[1];
+		const core = n > 0 && runHistory[2] === n && runHistory[3] === n * 3 && runHistory[4] === n && runHistory[5] === n;
+		return (core && runHistory[0] >= n * 4 && runHistory[6] >= n ? 1 : 0) + (core && runHistory[6] >= n * 4 && runHistory[0] >= n ? 1 : 0);
+	}
+	finderPenaltyTerminateAndCount(currentRunColor, currentRunLength, runHistory) {
+		if (currentRunColor) {
+			this.finderPenaltyAddHistory(currentRunLength, runHistory);
+			currentRunLength = 0;
+		}
+		currentRunLength += this.size;
+		this.finderPenaltyAddHistory(currentRunLength, runHistory);
+		return this.finderPenaltyCountPatterns(runHistory);
+	}
+	finderPenaltyAddHistory(currentRunLength, runHistory) {
+		if (runHistory[0] === 0) currentRunLength += this.size;
+		runHistory.pop();
+		runHistory.unshift(currentRunLength);
+	}
+};
+function appendBits(val, len, bb) {
+	if (len < 0 || len > 31 || val >>> len !== 0) throw new RangeError("Value out of range");
+	for (let i = len - 1; i >= 0; i--) bb.push(val >>> i & 1);
+}
+function getBit(x, i) {
+	return (x >>> i & 1) !== 0;
+}
+var QrSegment = class {
+	constructor(mode, numChars, bitData) {
+		this.mode = mode;
+		this.numChars = numChars;
+		this.bitData = bitData;
+		if (numChars < 0) throw new RangeError("Invalid argument");
+		this.bitData = bitData.slice();
+	}
+	getData() {
+		return this.bitData.slice();
+	}
+};
+const MODE_NUMERIC = [
+	1,
+	10,
+	12,
+	14
+];
+const MODE_ALPHANUMERIC = [
+	2,
+	9,
+	11,
+	13
+];
+const MODE_BYTE = [
+	4,
+	8,
+	16,
+	16
+];
+function numCharCountBits(mode, ver) {
+	return mode[Math.floor((ver + 7) / 17) + 1];
+}
+function makeBytes(data) {
+	const bb = [];
+	for (const b of data) appendBits(b, 8, bb);
+	return new QrSegment(MODE_BYTE, data.length, bb);
+}
+function makeNumeric(digits) {
+	if (!isNumeric(digits)) throw new RangeError("String contains non-numeric characters");
+	const bb = [];
+	for (let i = 0; i < digits.length;) {
+		const n = Math.min(digits.length - i, 3);
+		appendBits(Number.parseInt(digits.substring(i, i + n), 10), n * 3 + 1, bb);
+		i += n;
+	}
+	return new QrSegment(MODE_NUMERIC, digits.length, bb);
+}
+function makeAlphanumeric(text) {
+	if (!isAlphanumeric(text)) throw new RangeError("String contains unencodable characters in alphanumeric mode");
+	const bb = [];
+	let i = 0;
+	for (; i + 2 <= text.length; i += 2) {
+		let temp = ALPHANUMERIC_CHARSET.indexOf(text.charAt(i)) * 45;
+		temp += ALPHANUMERIC_CHARSET.indexOf(text.charAt(i + 1));
+		appendBits(temp, 11, bb);
+	}
+	if (i < text.length) appendBits(ALPHANUMERIC_CHARSET.indexOf(text.charAt(i)), 6, bb);
+	return new QrSegment(MODE_ALPHANUMERIC, text.length, bb);
+}
+function makeSegments(text) {
+	if (text === "") return [];
+	else if (isNumeric(text)) return [makeNumeric(text)];
+	else if (isAlphanumeric(text)) return [makeAlphanumeric(text)];
+	else return [makeBytes(toUtf8ByteArray(text))];
+}
+function isNumeric(text) {
+	return NUMERIC_REGEX.test(text);
+}
+function isAlphanumeric(text) {
+	return ALPHANUMERIC_REGEX.test(text);
+}
+function getTotalBits(segs, version) {
+	let result = 0;
+	for (const seg of segs) {
+		const ccbits = numCharCountBits(seg.mode, version);
+		if (seg.numChars >= 1 << ccbits) return Number.POSITIVE_INFINITY;
+		result += 4 + ccbits + seg.bitData.length;
+	}
+	return result;
+}
+function toUtf8ByteArray(str) {
+	str = encodeURI(str);
+	const result = [];
+	for (let i = 0; i < str.length; i++) if (str.charAt(i) !== "%") result.push(str.charCodeAt(i));
+	else {
+		result.push(Number.parseInt(str.substring(i + 1, i + 3), 16));
+		i += 2;
+	}
+	return result;
+}
+function getNumRawDataModules(ver) {
+	if (ver < MIN_VERSION || ver > MAX_VERSION) throw new RangeError("Version number out of range");
+	let result = (16 * ver + 128) * ver + 64;
+	if (ver >= 2) {
+		const numAlign = Math.floor(ver / 7) + 2;
+		result -= (25 * numAlign - 10) * numAlign - 55;
+		if (ver >= 7) result -= 36;
+	}
+	return result;
+}
+function getNumDataCodewords(ver, ecl) {
+	return Math.floor(getNumRawDataModules(ver) / 8) - ECC_CODEWORDS_PER_BLOCK[ecl[0]][ver] * NUM_ERROR_CORRECTION_BLOCKS[ecl[0]][ver];
+}
+function reedSolomonComputeDivisor(degree) {
+	if (degree < 1 || degree > 255) throw new RangeError("Degree out of range");
+	const result = [];
+	for (let i = 0; i < degree - 1; i++) result.push(0);
+	result.push(1);
+	let root = 1;
+	for (let i = 0; i < degree; i++) {
+		for (let j = 0; j < result.length; j++) {
+			result[j] = reedSolomonMultiply(result[j], root);
+			if (j + 1 < result.length) result[j] ^= result[j + 1];
+		}
+		root = reedSolomonMultiply(root, 2);
+	}
+	return result;
+}
+function reedSolomonComputeRemainder(data, divisor) {
+	const result = divisor.map((_) => 0);
+	for (const b of data) {
+		const factor = b ^ result.shift();
+		result.push(0);
+		divisor.forEach((coef, i) => result[i] ^= reedSolomonMultiply(coef, factor));
+	}
+	return result;
+}
+function reedSolomonMultiply(x, y) {
+	if (x >>> 8 !== 0 || y >>> 8 !== 0) throw new RangeError("Byte out of range");
+	let z = 0;
+	for (let i = 7; i >= 0; i--) {
+		z = z << 1 ^ (z >>> 7) * 285;
+		z ^= (y >>> i & 1) * x;
+	}
+	return z;
+}
+function encodeSegments(segs, ecl, minVersion = 1, maxVersion = 40, mask = -1, boostEcl = true) {
+	if (!(MIN_VERSION <= minVersion && minVersion <= maxVersion && maxVersion <= MAX_VERSION) || mask < -1 || mask > 7) throw new RangeError("Invalid value");
+	let version;
+	let dataUsedBits;
+	for (version = minVersion;; version++) {
+		const dataCapacityBits2 = getNumDataCodewords(version, ecl) * 8;
+		const usedBits = getTotalBits(segs, version);
+		if (usedBits <= dataCapacityBits2) {
+			dataUsedBits = usedBits;
+			break;
+		}
+		if (version >= maxVersion) throw new RangeError("Data too long");
+	}
+	for (const newEcl of [
+		MEDIUM,
+		QUARTILE,
+		HIGH
+	]) if (boostEcl && dataUsedBits <= getNumDataCodewords(version, newEcl) * 8) ecl = newEcl;
+	const bb = [];
+	for (const seg of segs) {
+		appendBits(seg.mode[0], 4, bb);
+		appendBits(seg.numChars, numCharCountBits(seg.mode, version), bb);
+		for (const b of seg.getData()) bb.push(b);
+	}
+	const dataCapacityBits = getNumDataCodewords(version, ecl) * 8;
+	appendBits(0, Math.min(4, dataCapacityBits - bb.length), bb);
+	appendBits(0, (8 - bb.length % 8) % 8, bb);
+	for (let padByte = 236; bb.length < dataCapacityBits; padByte ^= 253) appendBits(padByte, 8, bb);
+	const dataCodewords = Array.from({ length: Math.ceil(bb.length / 8) }, () => 0);
+	bb.forEach((b, i) => dataCodewords[i >>> 3] |= b << 7 - (i & 7));
+	return new QrCode(version, ecl, dataCodewords, mask);
+}
+function encode(data, options) {
+	const { ecc = "L", boostEcc = false, minVersion = 1, maxVersion = 40, maskPattern = -1, border = 1 } = options || {};
+	const segment = typeof data === "string" ? makeSegments(data) : Array.isArray(data) ? [makeBytes(data)] : void 0;
+	if (!segment) throw new Error(`uqr only supports encoding string and binary data, but got: ${typeof data}`);
+	const qr = encodeSegments(segment, EccMap[ecc], minVersion, maxVersion, maskPattern, boostEcc);
+	const result = addBorder({
+		version: qr.version,
+		maskPattern: qr.mask,
+		size: qr.size,
+		data: qr.modules,
+		types: qr.types
+	}, border);
+	if (options?.invert) result.data = result.data.map((row) => row.map((mod) => !mod));
+	options?.onEncoded?.(result);
+	return result;
+}
+function addBorder(input, border = 1) {
+	if (!border) return input;
+	const { size } = input;
+	const newSize = size + border * 2;
+	input.size = newSize;
+	input.data.forEach((row) => {
+		for (let i = 0; i < border; i++) {
+			row.unshift(false);
+			row.push(false);
+		}
+	});
+	for (let i = 0; i < border; i++) {
+		input.data.unshift(Array.from({ length: newSize }, (_) => false));
+		input.data.push(Array.from({ length: newSize }, (_) => false));
+	}
+	const b = QrCodeDataType.Border;
+	input.types.forEach((row) => {
+		for (let i = 0; i < border; i++) {
+			row.unshift(b);
+			row.push(b);
+		}
+	});
+	for (let i = 0; i < border; i++) {
+		input.types.unshift(Array.from({ length: newSize }, (_) => b));
+		input.types.push(Array.from({ length: newSize }, (_) => b));
+	}
+	return input;
+}
+function getDataAt(data, x, y, defaults = false) {
+	if (x < 0 || y < 0 || x >= data.length || y >= data.length) return defaults;
+	return data[y][x];
+}
+function renderUnicodeCompact(data, options = {}) {
+	const palette = {
+		WHITE_ALL: "█",
+		WHITE_BLACK: "▀",
+		BLACK_WHITE: "▄",
+		BLACK_ALL: " "
+	};
+	const result = encode(data, options);
+	const WHITE = false;
+	const BLACK = true;
+	const at = (x, y) => getDataAt(result.data, x, y, true);
+	const lines = [];
+	let line = "";
+	for (let row = 0; row < result.size; row += 2) {
+		for (let col = 0; col < result.size; col++) if (at(col, row) === WHITE && at(col, row + 1) === WHITE) line += palette.WHITE_ALL;
+		else if (at(col, row) === WHITE && at(col, row + 1) === BLACK) line += palette.WHITE_BLACK;
+		else if (at(col, row) === BLACK && at(col, row + 1) === WHITE) line += palette.BLACK_WHITE;
+		else line += palette.BLACK_ALL;
+		lines.push(line);
+		line = "";
+	}
+	return lines.join("\n");
+}
 //#endregion
 //#region src/delegate.ts
 /** Set in every process `delegate` starts; its presence means "already delegated". */
@@ -7249,9 +8350,12 @@ Usage:
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
-  agent-config plans ${PLANS_SUBCOMMAND} [<path> ...]
+  agent-config plans ${PLANS_UPGRADE} [<path> ...]
                                    upgrade /planning plan stores (default: ./.plans; a directory is
                                    searched for plan.sqlite; --dry-run lists them)
+  agent-config plans ${PLANS_SERVE} [<path> ...]
+                                   serve plan stores read-only as a web page, with a QR code for
+                                   a phone on the same network (default: ./.plans)
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -7707,9 +8811,46 @@ async function main(argv) {
 			return last.status === "done" ? 0 : 3;
 		}
 		case "plans": {
-			if (positionals[1] !== "upgrade") throw new UsageError(`plans expects "${PLANS_SUBCOMMAND}"`);
+			const sub = positionals[1];
+			if (sub !== "upgrade" && sub !== "serve") throw new UsageError(`plans expects "${PLANS_UPGRADE}" or "${PLANS_SERVE}"`);
 			const given = positionals.slice(2);
 			const hasStoreDir = existsSync(resolve(PLANS_DIR));
+			if (sub === "serve") {
+				const roots = given.length > 0 ? given.map((p) => resolve(p)) : [resolve(PLANS_DIR)];
+				if (given.length > 0) try {
+					findStores(given);
+				} catch (error) {
+					if (error instanceof MissingPathError) throw new UsageError(error.message);
+					throw error;
+				}
+				const server = await servePlans(roots);
+				const { local, network } = server.urls;
+				if (json) process.stdout.write(`${JSON.stringify({
+					port: server.port,
+					urls: server.urls
+				})}\n`);
+				else {
+					const lines = [
+						`Serving plans from ${roots.map((r) => relative(process.cwd(), r) || ".").join(", ")} (read-only, re-read on every request). Press Ctrl+C to stop.`,
+						`  Local:   ${local}`,
+						...network.map((url) => `  Network: ${url}`),
+						network.length > 0 ? "Anyone on your network with this link can read these plans." : "No network address found; the page is reachable from this machine only."
+					];
+					if (network.length > 0) lines.push(renderUnicodeCompact(network[0]), "Scan to open on a phone or another device on the same network.");
+					process.stdout.write(`${lines.join("\n")}\n`);
+				}
+				await new Promise((done) => {
+					const stop = () => {
+						process.off("SIGINT", stop);
+						process.off("SIGTERM", stop);
+						done();
+					};
+					process.on("SIGINT", stop);
+					process.on("SIGTERM", stop);
+				});
+				await server.close();
+				return 0;
+			}
 			if (given.length === 0 && !hasStoreDir) {
 				out(json, { stores: [] }, "No plan stores found.");
 				return 0;

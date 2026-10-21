@@ -2,7 +2,7 @@
 // agent-config: the TUI for humans, plain commands (and --json) for scripts and agents.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
@@ -41,7 +41,9 @@ import {
 import { EFFORTS, isReviewLens, isRuntime, isTier, type Effort, type Runtime } from "./tiers.ts";
 import { formatPlan, runTui } from "./tui.ts";
 import { MissingPathError, findStores, upgradeStores } from "./plans.ts";
-import { PLANS_DIR, PLANS_SUBCOMMAND } from "./planning.ts";
+import { PLANS_DIR, PLANS_SERVE, PLANS_UPGRADE } from "./planning.ts";
+import { servePlans } from "./serve.ts";
+import { renderUnicodeCompact } from "uqr";
 import { DELEGATED_ENV, LEGACY_DELEGATED_ENV, delegate } from "./delegate.ts";
 import {
   checkForUpdate,
@@ -80,9 +82,12 @@ Usage:
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
-  agent-config plans ${PLANS_SUBCOMMAND} [<path> ...]
+  agent-config plans ${PLANS_UPGRADE} [<path> ...]
                                    upgrade /planning plan stores (default: ./.plans; a directory is
                                    searched for plan.sqlite; --dry-run lists them)
+  agent-config plans ${PLANS_SERVE} [<path> ...]
+                                   serve plan stores read-only as a web page, with a QR code for
+                                   a phone on the same network (default: ./.plans)
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -648,11 +653,56 @@ async function main(argv: string[]): Promise<number> {
       return last.status === "done" ? 0 : 3;
     }
     case "plans": {
-      if (positionals[1] !== PLANS_SUBCOMMAND) {
-        throw new UsageError(`plans expects "${PLANS_SUBCOMMAND}"`);
+      const sub = positionals[1];
+      if (sub !== PLANS_UPGRADE && sub !== PLANS_SERVE) {
+        throw new UsageError(`plans expects "${PLANS_UPGRADE}" or "${PLANS_SERVE}"`);
       }
       const given = positionals.slice(2);
       const hasStoreDir = existsSync(resolve(PLANS_DIR));
+      if (sub === PLANS_SERVE) {
+        const roots = given.length > 0 ? given.map((p) => resolve(p)) : [resolve(PLANS_DIR)];
+        if (given.length > 0) {
+          try {
+            findStores(given);
+          } catch (error) {
+            if (error instanceof MissingPathError) throw new UsageError(error.message);
+            throw error;
+          }
+        }
+        const server = await servePlans(roots);
+        const { local, network } = server.urls;
+        if (json) {
+          process.stdout.write(`${JSON.stringify({ port: server.port, urls: server.urls })}\n`);
+        } else {
+          const shownRoots = roots.map((r) => relative(process.cwd(), r) || ".").join(", ");
+          const lines = [
+            `Serving plans from ${shownRoots} (read-only, re-read on every request). Press Ctrl+C to stop.`,
+            `  Local:   ${local}`,
+            ...network.map((url) => `  Network: ${url}`),
+            network.length > 0
+              ? "Anyone on your network with this link can read these plans."
+              : "No network address found; the page is reachable from this machine only.",
+          ];
+          if (network.length > 0) {
+            lines.push(
+              renderUnicodeCompact(network[0]),
+              "Scan to open on a phone or another device on the same network.",
+            );
+          }
+          process.stdout.write(`${lines.join("\n")}\n`);
+        }
+        await new Promise<void>((done) => {
+          const stop = (): void => {
+            process.off("SIGINT", stop);
+            process.off("SIGTERM", stop);
+            done();
+          };
+          process.on("SIGINT", stop);
+          process.on("SIGTERM", stop);
+        });
+        await server.close();
+        return 0;
+      }
       if (given.length === 0 && !hasStoreDir) {
         out(json, { stores: [] }, "No plan stores found.");
         return 0;

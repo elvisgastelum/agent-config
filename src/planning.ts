@@ -52,7 +52,10 @@ const MAX_STORY_SIZE = "P5";
 const STORY_SIZES = [GAP_SIZE, "P2", "P3", MAX_STORY_SIZE] as const;
 
 /** The `plans` subcommand that upgrades existing stores. */
-export const PLANS_SUBCOMMAND = "upgrade";
+export const PLANS_UPGRADE = "upgrade";
+
+/** The `plans` subcommand that serves stores to a browser. */
+export const PLANS_SERVE = "serve";
 
 /**
  * The plan store's schema version, kept in SQLite's `PRAGMA user_version`. A store without one is
@@ -407,7 +410,7 @@ Climb on a failed review, never for speed: a cheap draft that the review checks 
 - **Kaneo**: load the ${code(KANEO_SKILL)} skill and follow its "Plan an epic" section; epics are titled ${code(`${EPIC_TITLE_PREFIX}<outcome>`)}. Have the scribe create each epic, then its stories and gap tickets with their labels and relations, in batches. Check each reply against the store, record every Kaneo identifier in \`tracker_id\`, and set the plan's tracker to \`kaneo\`.
 - **Store only**: the tickets already live in the store.
 
-Set the plan's status to \`written\`.
+Set the plan's status to \`written\`. Tell the user they can review the plan in a browser, also from a phone on the same network, with ${code(`agent-config plans ${PLANS_SERVE}`)}.
 
 ## 8. Report
 
@@ -427,7 +430,7 @@ Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is
 ${PLAN_SCHEMA}
 \`\`\`
 
-Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. An existing store is upgraded with ${code(`agent-config plans ${PLANS_SUBCOMMAND} <path>`)}, never by running the schema on it again. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. An existing store is upgraded with ${code(`agent-config plans ${PLANS_UPGRADE} <path>`)}, never by running the schema on it again. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
 ## Design system standard
 
