@@ -217,6 +217,7 @@ describe("kick-off guard: brief copies", () => {
     const dir = tempDir();
     const incomplete = writeBrief(dir, "FEX-15.md", INCOMPLETE);
     expect(bash(`cat ${incomplete} 2>&1 | pbcopy`)).toContain("FEX-15.md");
+    expect(bash(`cat ${incomplete} |& pbcopy`)).toContain("FEX-15.md");
     expect(bash(`cat ${incomplete} >&2 | pbcopy`)).toContain("FEX-15.md");
     expect(bash(`cat ${incomplete} &>/dev/null | pbcopy`)).toContain("FEX-15.md");
     expect(bash(`cat ${incomplete} & echo hi | pbcopy`)).toBeUndefined();

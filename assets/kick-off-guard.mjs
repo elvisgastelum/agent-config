@@ -109,6 +109,8 @@ const HEREDOC = /^<<(?!<)-?/;
 const LEADING_TABS = /^\t+/;
 /** Joins the commands of one pipeline. */
 const PIPE = "|";
+/** `|&` pipes stdout and stderr; its `&` belongs to the pipe, not a background job. */
+const PIPE_WITH_ERRORS = "|&";
 const OUTPUT_REDIRECT = ">";
 const INPUT_REDIRECT = "<";
 /** `&>file`: stdout and stderr to a file; this `&` is a redirect, not a background job. */
@@ -253,6 +255,7 @@ function parse(command) {
     } else if (c === PIPE) {
       end();
       pipelines.at(-1).push([]);
+      if (command.startsWith(PIPE_WITH_ERRORS, i)) i += PIPE_WITH_ERRORS.length - 1;
     } else if (c === OUTPUT_REDIRECT || c === INPUT_REDIRECT) {
       end();
       const duplicate = DESCRIPTOR_DUPLICATE.exec(command.slice(i + 1));
