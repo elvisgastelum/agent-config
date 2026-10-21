@@ -3,7 +3,8 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs, styleText } from "node:util";
 import process$1, { stdin, stdout } from "node:process";
-import l__default, * as l from "node:readline";
+import * as l from "node:readline";
+import l__default, { createInterface } from "node:readline";
 import { ReadStream } from "node:tty";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
@@ -4495,7 +4496,8 @@ const KIND_NAMES = Object.keys(PLAN_KINDS);
 const PLANNING_HINT = `[${KIND_NAMES.join(" | ")}] <what to plan>`;
 /** The plan store: one folder per month and per plan, in the repository root. */
 const PLANS_DIR = ".plans";
-const PLAN_STORE_PATH = `${PLANS_DIR}/<MM-yyyy>/<plan-title>/plan.sqlite`;
+const PLAN_DB = "plan.sqlite";
+const PLAN_STORE_PATH = `${PLANS_DIR}/<MM-yyyy>/<plan-title>/${PLAN_DB}`;
 /** A gap still open when the user asks to write the tickets becomes a ticket with this title. */
 const GAP_TITLE_PREFIX = "Gap: ";
 const GAP_LABEL_COLOR = "#EC4899";
@@ -6879,7 +6881,7 @@ function findStores(paths) {
 	}
 	return [...new Set(found)];
 }
-const message = (error) => error instanceof Error ? error.message : String(error);
+const message$2 = (error) => error instanceof Error ? error.message : String(error);
 function versionOf(db) {
 	return Number(db.prepare("PRAGMA user_version").get().user_version);
 }
@@ -6945,7 +6947,7 @@ async function upgradeStores(stores, dryRun = false) {
 		results.push({
 			path,
 			status: "failed",
-			error: message(error)
+			error: message$2(error)
 		});
 	}
 	return results;
@@ -6992,6 +6994,282 @@ async function readPlan(path) {
 	} finally {
 		db.close();
 	}
+}
+//#endregion
+//#region src/mcp.ts
+/** Protocol versions this server speaks, newest first. */
+const SUPPORTED_VERSIONS = [
+	"2025-11-25",
+	"2025-06-18",
+	"2025-03-26",
+	"2024-11-05"
+];
+const PARSE_ERROR = -32700;
+const INVALID_REQUEST = -32600;
+const METHOD_NOT_FOUND = -32601;
+const INVALID_PARAMS = -32602;
+const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+function typeOf(value) {
+	if (value === null) return "null";
+	if (Array.isArray(value)) return "array";
+	if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
+	return typeof value;
+}
+/** Whether `value` is of JSON type `type` (an integer is also a number). */
+const matchesType = (value, type) => typeOf(value) === type || type === "number" && typeOf(value) === "integer";
+/** Returns the first problem found with `value` against `schema`, or null; `path` names the field. */
+function validate(value, schema, path) {
+	if (schema.type !== void 0) {
+		const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+		if (!types.some((type) => matchesType(value, type))) return `${path} must be of type ${types.join(" or ")}`;
+	}
+	if (schema.enum && !schema.enum.includes(value)) return `${path} must be one of ${schema.enum.map((v) => JSON.stringify(v)).join(", ")}`;
+	if (typeof value === "string" && schema.minLength !== void 0) {
+		if (value.length < schema.minLength) return `${path} must be at least ${schema.minLength} characters`;
+	}
+	if (typeof value === "number" && schema.minimum !== void 0 && value < schema.minimum) return `${path} must be at least ${schema.minimum}`;
+	if (Array.isArray(value) && schema.items) for (const [index, item] of value.entries()) {
+		const problem = validate(item, schema.items, `${path}[${index}]`);
+		if (problem) return problem;
+	}
+	if (isObject(value)) {
+		for (const key of schema.required ?? []) if (!(key in value)) return `${path}.${key} is required`;
+		for (const [key, item] of Object.entries(value)) {
+			const child = schema.properties?.[key];
+			if (child) {
+				const problem = validate(item, child, `${path}.${key}`);
+				if (problem) return problem;
+			} else if (schema.additionalProperties === false) return `${path}.${key} is not an allowed property`;
+		}
+	}
+	return null;
+}
+const message$1 = (error) => error instanceof Error ? error.message : String(error);
+/** Serves `tools` until `options.input` ends. Only JSON-RPC replies are written to `output`. */
+async function serveMcp(tools, options) {
+	const send = (id, body) => {
+		options.output.write(`${JSON.stringify({
+			jsonrpc: "2.0",
+			id,
+			...body
+		})}\n`);
+	};
+	const fail = (id, code, text) => send(id, { error: {
+		code,
+		message: text
+	} });
+	async function callTool(id, params) {
+		const name = isObject(params) ? params.name : void 0;
+		const tool = tools.find((t) => t.name === name);
+		if (!tool) return fail(id, INVALID_PARAMS, `Unknown tool: ${String(name)}`);
+		const args = isObject(params) && params.arguments !== void 0 ? params.arguments : {};
+		try {
+			const problem = validate(args, tool.inputSchema, "arguments");
+			if (problem) throw new Error(problem);
+			const result = await tool.handler(args);
+			send(id, { result: {
+				content: [{
+					type: "text",
+					text: JSON.stringify(result, null, 2)
+				}],
+				structuredContent: result,
+				isError: false
+			} });
+		} catch (error) {
+			send(id, { result: {
+				content: [{
+					type: "text",
+					text: message$1(error)
+				}],
+				isError: true
+			} });
+		}
+	}
+	async function handle(line) {
+		let request;
+		try {
+			request = JSON.parse(line);
+		} catch {
+			return fail(null, PARSE_ERROR, "Parse error");
+		}
+		if (!isObject(request) || typeof request.method !== "string") return fail(null, INVALID_REQUEST, "Invalid request");
+		if (!("id" in request)) return;
+		const { id, method, params } = request;
+		switch (method) {
+			case "initialize": {
+				const asked = isObject(params) ? params.protocolVersion : void 0;
+				const protocolVersion = SUPPORTED_VERSIONS.find((v) => v === asked) ?? SUPPORTED_VERSIONS[0];
+				return send(id, { result: {
+					protocolVersion,
+					capabilities: { tools: { listChanged: false } },
+					serverInfo: {
+						name: options.name,
+						version: options.version
+					},
+					...options.instructions ? { instructions: options.instructions } : {}
+				} });
+			}
+			case "ping": return send(id, { result: {} });
+			case "tools/list": return send(id, { result: { tools: tools.map((t) => ({
+				name: t.name,
+				description: t.description,
+				inputSchema: t.inputSchema,
+				annotations: { readOnlyHint: t.readOnly }
+			})) } });
+			case "tools/call": return callTool(id, params);
+			default: return fail(id, METHOD_NOT_FOUND, `Method not found: ${method}`);
+		}
+	}
+	const lines = createInterface({
+		input: options.input,
+		crlfDelay: Infinity
+	});
+	for await (const line of lines) if (line.trim() !== "") await handle(line);
+}
+//#endregion
+//#region src/plans-mcp.ts
+const PLANS_MCP_INSTRUCTIONS = `Plan stores live at ${PLAN_STORE_PATH} under the repository root. Pass absolute store paths (plan_list returns them). Read with plan_get sections or small plan_query selects, not a full dump.`;
+/** Most rows plan_query returns; more are cut and flagged as truncated. */
+const MAX_QUERY_ROWS = 500;
+const PLAN_SECTIONS = [
+	"plan",
+	"epics",
+	"tickets",
+	"decisions",
+	"facts",
+	"findings",
+	"progress"
+];
+/**
+* Resolves `store` against `cwd` to a plan store: a directory means its plan.sqlite, and the file
+* must exist at `.plans/<month>/<title>/plan.sqlite`.
+*/
+function resolveStore(store, cwd) {
+	let path = isAbsolute(store) ? store : resolve(cwd, store);
+	if (existsSync(path) && statSync(path).isDirectory()) path = join(path, PLAN_DB);
+	const plansDir = basename(dirname(dirname(dirname(path))));
+	if (basename(path) !== "plan.sqlite" || plansDir !== ".plans") throw new Error(`${store} is not a plan store; expected ${PLAN_STORE_PATH}`);
+	if (!existsSync(path)) throw new Error(`${path} does not exist`);
+	return path;
+}
+const message = (error) => error instanceof Error ? error.message : String(error);
+function planTools(cwd) {
+	return [
+		{
+			name: "plan_list",
+			description: `Lists the plan stores under a repository's ${PLANS_DIR} folder with each plan's title, kind, status and ticket progress. Start here to find a store path.`,
+			readOnly: true,
+			inputSchema: {
+				type: "object",
+				properties: { root: {
+					type: "string",
+					description: "Repository root (default: the server's directory)"
+				} },
+				additionalProperties: false
+			},
+			async handler(args) {
+				const root = typeof args.root === "string" ? resolve(cwd, args.root) : cwd;
+				const dir = join(root, PLANS_DIR);
+				const paths = existsSync(dir) ? findStores([dir]) : [];
+				const stores = [];
+				for (const store of paths) try {
+					const { plan, version, progress } = await readPlan(store);
+					stores.push({
+						store,
+						title: plan?.title ?? null,
+						kind: plan?.kind ?? null,
+						status: plan?.status ?? null,
+						version,
+						progress
+					});
+				} catch (error) {
+					stores.push({
+						store,
+						error: message(error)
+					});
+				}
+				return { stores };
+			}
+		},
+		{
+			name: "plan_get",
+			description: "Reads a plan store, optionally only some sections (plan, epics, tickets, decisions, facts, findings, progress). Prefer asking for the sections you need.",
+			readOnly: true,
+			inputSchema: {
+				type: "object",
+				properties: {
+					store: {
+						type: "string",
+						minLength: 1,
+						description: "Absolute path of the plan.sqlite"
+					},
+					sections: {
+						type: "array",
+						items: {
+							type: "string",
+							enum: PLAN_SECTIONS
+						}
+					}
+				},
+				required: ["store"],
+				additionalProperties: false
+			},
+			async handler(args) {
+				const detail = await readPlan(resolveStore(String(args.store), cwd));
+				const wanted = args.sections ?? PLAN_SECTIONS;
+				const result = {
+					store: detail.path,
+					version: detail.version
+				};
+				for (const section of wanted) result[section] = detail[section];
+				return result;
+			}
+		},
+		{
+			name: "plan_query",
+			description: `Runs one read-only SQL statement against a plan store and returns up to ${MAX_QUERY_ROWS} rows. Use small selects, for example SELECT * FROM waves ORDER BY wave.`,
+			readOnly: true,
+			inputSchema: {
+				type: "object",
+				properties: {
+					store: {
+						type: "string",
+						minLength: 1,
+						description: "Absolute path of the plan.sqlite"
+					},
+					sql: {
+						type: "string",
+						minLength: 1
+					},
+					params: {
+						type: "array",
+						items: { type: [
+							"string",
+							"number",
+							"null"
+						] }
+					}
+				},
+				required: ["store", "sql"],
+				additionalProperties: false
+			},
+			async handler(args) {
+				const path = resolveStore(String(args.store), cwd);
+				const { DatabaseSync } = await import("node:sqlite");
+				const db = new DatabaseSync(path, { readOnly: true });
+				try {
+					const params = args.params ?? [];
+					const rows = db.prepare(String(args.sql)).all(...params);
+					return {
+						rows: rows.slice(0, MAX_QUERY_ROWS),
+						truncated: rows.length > MAX_QUERY_ROWS
+					};
+				} finally {
+					db.close();
+				}
+			}
+		}
+	];
 }
 //#endregion
 //#region src/serve.ts
@@ -8356,6 +8634,8 @@ Usage:
   agent-config plans ${PLANS_SERVE} [<path> ...]
                                    serve plan stores read-only as a web page, with a QR code for
                                    a phone on the same network (default: ./.plans)
+  agent-config plans mcp
+                                   stdio MCP server with plan-store tools for agents
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -8812,7 +9092,17 @@ async function main(argv) {
 		}
 		case "plans": {
 			const sub = positionals[1];
-			if (sub !== "upgrade" && sub !== "serve") throw new UsageError(`plans expects "${PLANS_UPGRADE}" or "${PLANS_SERVE}"`);
+			if (sub !== "upgrade" && sub !== "serve" && sub !== "mcp") throw new UsageError(`plans expects "${PLANS_UPGRADE}", "${PLANS_SERVE}" or "mcp"`);
+			if (sub === "mcp") {
+				await serveMcp(planTools(process.cwd()), {
+					name: "agent-config-plans",
+					version: VERSION,
+					instructions: PLANS_MCP_INSTRUCTIONS,
+					input: process.stdin,
+					output: process.stdout
+				});
+				return 0;
+			}
 			const given = positionals.slice(2);
 			const hasStoreDir = existsSync(resolve(PLANS_DIR));
 			if (sub === "serve") {

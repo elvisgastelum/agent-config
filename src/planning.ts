@@ -57,6 +57,9 @@ export const PLANS_UPGRADE = "upgrade";
 /** The `plans` subcommand that serves stores to a browser. */
 export const PLANS_SERVE = "serve";
 
+/** The `plans` subcommand that serves plan tools to an agent over MCP. */
+export const PLANS_MCP_SUBCOMMAND = "mcp";
+
 /**
  * The plan store's schema version, kept in SQLite's `PRAGMA user_version`. A store without one is
  * version 0 (the 0.11.0 shape). A schema change adds `PLAN_SCHEMA_VERSION + 1`, a new entry in

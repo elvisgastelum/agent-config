@@ -41,7 +41,9 @@ import {
 import { EFFORTS, isReviewLens, isRuntime, isTier, type Effort, type Runtime } from "./tiers.ts";
 import { formatPlan, runTui } from "./tui.ts";
 import { MissingPathError, findStores, upgradeStores } from "./plans.ts";
-import { PLANS_DIR, PLANS_SERVE, PLANS_UPGRADE } from "./planning.ts";
+import { PLANS_DIR, PLANS_MCP_SUBCOMMAND, PLANS_SERVE, PLANS_UPGRADE } from "./planning.ts";
+import { serveMcp } from "./mcp.ts";
+import { PLANS_MCP_INSTRUCTIONS, planTools } from "./plans-mcp.ts";
 import { servePlans } from "./serve.ts";
 import { renderUnicodeCompact } from "uqr";
 import { DELEGATED_ENV, LEGACY_DELEGATED_ENV, delegate } from "./delegate.ts";
@@ -88,6 +90,8 @@ Usage:
   agent-config plans ${PLANS_SERVE} [<path> ...]
                                    serve plan stores read-only as a web page, with a QR code for
                                    a phone on the same network (default: ./.plans)
+  agent-config plans ${PLANS_MCP_SUBCOMMAND}
+                                   stdio MCP server with plan-store tools for agents
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -654,8 +658,20 @@ async function main(argv: string[]): Promise<number> {
     }
     case "plans": {
       const sub = positionals[1];
-      if (sub !== PLANS_UPGRADE && sub !== PLANS_SERVE) {
-        throw new UsageError(`plans expects "${PLANS_UPGRADE}" or "${PLANS_SERVE}"`);
+      if (sub !== PLANS_UPGRADE && sub !== PLANS_SERVE && sub !== PLANS_MCP_SUBCOMMAND) {
+        throw new UsageError(
+          `plans expects "${PLANS_UPGRADE}", "${PLANS_SERVE}" or "${PLANS_MCP_SUBCOMMAND}"`,
+        );
+      }
+      if (sub === PLANS_MCP_SUBCOMMAND) {
+        await serveMcp(planTools(process.cwd()), {
+          name: "agent-config-plans",
+          version: VERSION,
+          instructions: PLANS_MCP_INSTRUCTIONS,
+          input: process.stdin,
+          output: process.stdout,
+        });
+        return 0;
       }
       const given = positionals.slice(2);
       const hasStoreDir = existsSync(resolve(PLANS_DIR));
