@@ -8,8 +8,9 @@
 //   are not checked.
 // - A kick-off brief (`agent-config/kick-off/<ID>.md`) must start with /continue and have every
 //   section and phase the loop needs. A Write of a brief is checked before it lands. A Bash
-//   pipeline that copies briefs to the clipboard is checked against each brief on disk, and is
-//   denied when a brief is missing or written by the same command (the guard runs before it).
+//   command that copies to the clipboard and names a brief must be the copy alone
+//   (`pbcopy < <brief>` or `cat <brief> | pbcopy`), since the guard runs before the command and
+//   anything beside the copy could rewrite the brief; the brief on disk must exist and be complete.
 //
 // Any unexpected input or error lets the call through: the guard never breaks a session. Brief
 // paths resolve `$VAR` from the hook's environment, so a variable set inside the same command is
@@ -86,12 +87,17 @@ const CLIPBOARD_TOOLS = new Set([
   "clip.exe",
   "Set-Clipboard",
 ]);
-/** A command that writes its input to every file it names. */
-const TEE = "tee";
+/** The reader allowed in front of a clipboard tool: `cat <brief> | pbcopy`. */
+const CAT = "cat";
+/** How a brief may be copied: alone, so nothing in the same command writes it after the check. */
+const COPY_FORMS = "`pbcopy < <brief>` or `cat <brief> | pbcopy` (or another clipboard tool)";
 /** Commands whose arguments are text they print, not files they read: a brief path there is text. */
 const TEXT_COMMANDS = new Set(["echo", "printf"]);
 /** `NAME=value` before a command sets its environment; it is not the command's name. */
 const ASSIGNMENT = /^\w+=/;
+/** Commands that run the command after them (with their own options first). */
+const WRAPPERS = new Set(["command", "env", "exec", "nohup", "sudo", "time"]);
+const OPTION_PREFIX = "-";
 /** readFileSync's error code for a path that does not exist. */
 const MISSING_FILE = "ENOENT";
 
@@ -293,9 +299,36 @@ function afterHeredocs(command, from, delimiters) {
   return Math.min(at, command.length);
 }
 
-/** A command's name: its first word that is not an environment assignment. */
+/**
+ * A command's name, without its directory: its first word that is not an environment assignment,
+ * a wrapper such as `env` or `sudo`, or a wrapper's option.
+ */
 function commandName(words) {
-  return words.find((w) => !ASSIGNMENT.test(w.text))?.text ?? "";
+  let wrapped = false;
+  for (const { text } of words) {
+    const name = basename(text);
+    if (ASSIGNMENT.test(text)) continue;
+    if (WRAPPERS.has(name)) wrapped = true;
+    else if (!(wrapped && text.startsWith(OPTION_PREFIX))) return name;
+  }
+  return "";
+}
+
+function isClipboard(words) {
+  return CLIPBOARD_TOOLS.has(commandName(words));
+}
+
+/** Whether the command is only `<clipboard tool> < <brief>` or `cat <brief> | <clipboard tool>`. */
+function isCopyForm(pipelines, briefs) {
+  if (pipelines.length !== 1 || briefs.length !== 1) return false;
+  const [brief] = briefs;
+  const [first, second, ...rest] = pipelines[0];
+  if (rest.length > 0) return false;
+  if (!second) return isClipboard(first) && brief.input && first.includes(brief);
+  const reads = first.filter((w) => !w.output);
+  return (
+    commandName(first) === CAT && reads.length === 2 && reads[1] === brief && isClipboard(second)
+  );
 }
 
 /** A brief word's path, resolved against `cwd`; undefined for other words. */
@@ -306,48 +339,34 @@ function briefPath(text, cwd) {
   return typeof cwd === "string" ? join(cwd, path) : undefined;
 }
 
+/**
+ * A command that copies to the clipboard and names a brief must be the copy alone, so nothing in
+ * it can write the brief after this check; the brief on disk must then exist and be complete.
+ */
 function copy(command, cwd) {
-  const pipelines = parse(command);
+  const pipelines = parse(command).filter((p) => p.some((words) => words.length > 0));
   const commands = pipelines.flat();
-  const written = new Set(
-    commands.flatMap((words) =>
-      words
-        .filter((w) => w.output || basename(commandName(words)) === TEE)
-        .map((w) => briefPath(w.text, cwd))
-        .filter(Boolean),
-    ),
-  );
-  const copied = pipelines.filter((p) =>
-    p.some((words) => CLIPBOARD_TOOLS.has(basename(commandName(words)))),
-  );
-  const read = new Set(
-    copied
-      .flat()
-      .flatMap((words) => {
-        const prints = TEXT_COMMANDS.has(basename(commandName(words)));
-        return words.filter((w) => !w.output && (w.input || !prints));
-      })
-      .map((w) => briefPath(w.text, cwd))
-      .filter(Boolean),
-  );
-  const rewritten = [...read].filter((path) => written.has(path));
-  if (rewritten.length > 0) {
-    return `${GUARD}: write the brief and copy it in separate commands (${rewritten.join(", ")}): the guard checks the brief on disk before this command runs.\nWrite it with the Write tool, then copy it.`;
+  if (!commands.some(isClipboard)) return undefined;
+  const briefs = commands.flatMap((words) => {
+    const prints = TEXT_COMMANDS.has(commandName(words));
+    return words.filter((w) => BRIEF_PATH.test(w.text) && (w.input || !prints));
+  });
+  if (briefs.length === 0) return undefined;
+  if (!isCopyForm(pipelines, briefs)) {
+    const named = briefs.map((w) => w.text).join(", ");
+    return `${GUARD}: copy a brief with a command of its own, one brief at a time: ${COPY_FORMS} (${named}).\nThe guard checks the brief on disk before the command runs, so nothing else may run beside the copy.`;
   }
-  for (const path of read) {
-    let text;
-    try {
-      text = readFileSync(path, "utf8");
-    } catch (error) {
-      if (error?.code === MISSING_FILE) {
-        return `${GUARD}: the brief ${path} does not exist yet.\nWrite it with the Write tool, then copy it.`;
-      }
-      continue;
-    }
-    const problems = briefProblems(text);
-    if (problems.length > 0) return notReady(path, problems);
+  const path = briefPath(briefs[0].text, cwd);
+  if (!path) return undefined;
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if (error?.code !== MISSING_FILE) return undefined;
+    return `${GUARD}: the brief ${path} does not exist yet.\nWrite it with the Write tool, then copy it.`;
   }
-  return undefined;
+  const problems = briefProblems(text);
+  return problems.length === 0 ? undefined : notReady(path, problems);
 }
 
 function main() {

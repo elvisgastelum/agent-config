@@ -65,7 +65,7 @@ export function kickOffMarkdown(runtime: Runtime, models: KickOffModels, briefDi
       : "in one message with numbered options";
   const guard =
     runtime === "claude"
-      ? " The kick-off guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or written by the same command."
+      ? " The kick-off guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or not in a command of its own."
       : "";
   const deepRead = agent(DEEP_READER);
   const balancedRead = agent(BALANCED_READER);
@@ -124,7 +124,7 @@ The brief's review routing, from answer 4:
 ## 3. Write the brief and copy it
 
 1. Write the brief to \`${briefDir}/<EPIC-ID>.md\` (create the folder) from the template below. Replace every \`<…>\` and keep the rest as written: the loop, routing and stop sections are what the new session runs on.
-2. Then, in a command of its own, copy it to the clipboard with the first tool that exists: \`pbcopy < <file>\` (macOS), \`wl-copy < <file>\`, \`xclip -selection clipboard < <file>\`, \`xsel --clipboard --input < <file>\` or \`clip.exe < <file>\`. When none exists, say so and give the path.
+2. Then copy it to the clipboard with a command of its own (nothing else in it), using the first tool that exists: \`pbcopy < <file>\` (macOS), \`wl-copy < <file>\`, \`xclip -selection clipboard < <file>\`, \`xsel --clipboard --input < <file>\` or \`clip.exe < <file>\`. When none exists, say so and give the path.
 3. Report the path, whether the brief is on the clipboard, one line per wave, and: open a fresh session in this repository and paste it.
 
 ## Brief template

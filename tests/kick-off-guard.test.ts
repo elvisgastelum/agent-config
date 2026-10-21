@@ -220,13 +220,13 @@ describe("kick-off guard: brief copies", () => {
     expect(bash(`cat ${incomplete} |& pbcopy`)).toContain("FEX-15.md");
     expect(bash(`cat ${incomplete} >&2 | pbcopy`)).toContain("FEX-15.md");
     expect(bash(`cat ${incomplete} &>/dev/null | pbcopy`)).toContain("FEX-15.md");
-    expect(bash(`cat ${incomplete} & echo hi | pbcopy`)).toBeUndefined();
+    expect(bash(`cat ${incomplete} & echo hi | pbcopy`)).toContain("a command of its own");
   });
 
   test("a path-qualified tee writing the brief counts as a write", () => {
     const dir = tempDir();
     const complete = writeBrief(dir, "FEX-16.md", brief());
-    expect(bash(`printf x | /usr/bin/tee ${complete} | pbcopy`)).toContain("separate commands");
+    expect(bash(`printf x | /usr/bin/tee ${complete} | pbcopy`)).toContain("a command of its own");
   });
 
   test("the project skill's portable brief folder expands with its default", () => {
@@ -279,10 +279,12 @@ describe("kick-off guard: brief copies", () => {
     const fresh = join(dir, "agent-config", "kick-off", "FEX-8.md");
     mkdirSync(join(dir, "agent-config", "kick-off"), { recursive: true });
     const heredoc = `cat > ${fresh} <<'EOF'\n${brief()}\nEOF\npbcopy < ${fresh}`;
-    expect(bash(heredoc)).toContain("separate commands");
+    expect(bash(heredoc)).toContain("a command of its own");
     const complete = writeBrief(dir, "FEX-9.md", brief());
-    expect(bash(`printf x > ${complete} && pbcopy < ${complete}`)).toContain("separate commands");
-    expect(bash(`printf x | tee ${complete} | pbcopy`)).toContain("separate commands");
+    expect(bash(`printf x > ${complete} && pbcopy < ${complete}`)).toContain(
+      "a command of its own",
+    );
+    expect(bash(`printf x | tee ${complete} | pbcopy`)).toContain("a command of its own");
   });
 
   test("a heredoc body is input, not shell code", () => {
@@ -290,10 +292,10 @@ describe("kick-off guard: brief copies", () => {
     const fresh = join(dir, "agent-config", "kick-off", "FEX-17.md");
     const body = "the ticket's criteria\n\tand the epic goal";
     expect(bash(`cat > ${fresh} <<'EOF'\n${body}\nEOF\npbcopy < ${fresh}`)).toContain(
-      "separate commands",
+      "a command of its own",
     );
     expect(bash(`cat > ${fresh} <<-EOF\n${body}\n\tEOF\npbcopy < ${fresh}`)).toContain(
-      "separate commands",
+      "a command of its own",
     );
     const incomplete = writeBrief(dir, "FEX-18.md", INCOMPLETE);
     expect(bash(`cat <<EOF\ncat ${incomplete} | pbcopy\nEOF`)).toBeUndefined();
@@ -307,11 +309,24 @@ describe("kick-off guard: brief copies", () => {
     expect(bash(`LANG=C /usr/bin/pbcopy < ${incomplete}`)).toContain("FEX-11.md");
   });
 
-  test("a brief outside the copying pipeline is not checked", () => {
+  test("a clipboard command that names a brief must be the copy alone", () => {
     const dir = tempDir();
-    const incomplete = writeBrief(dir, "FEX-12.md", INCOMPLETE);
-    expect(bash(`cat ${incomplete} > /dev/null; echo hi | pbcopy`)).toBeUndefined();
-    expect(bash(`cat ${incomplete} > /dev/null && echo hi | pbcopy`)).toBeUndefined();
+    const complete = writeBrief(dir, "FEX-12.md", brief());
+    const own = "a command of its own";
+    expect(bash(`cat ${complete} > /dev/null; echo hi | pbcopy`)).toContain(own);
+    expect(bash(`pbcopy < ${complete} && echo copied`)).toContain(own);
+    expect(bash(`cp other.md ${complete} && pbcopy < ${complete}`)).toContain(own);
+    expect(bash(`sed -i '' s/a/b/ ${complete}; pbcopy < ${complete}`)).toContain(own);
+    expect(bash(`sudo tee ${complete} | pbcopy`)).toContain(own);
+    expect(bash(`xclip -selection clipboard ${complete}`)).toContain(own);
+  });
+
+  test("wrapper commands do not hide the clipboard tool", () => {
+    const dir = tempDir();
+    const incomplete = writeBrief(dir, "FEX-22.md", INCOMPLETE);
+    expect(bash(`command pbcopy < ${incomplete}`)).toContain("FEX-22.md");
+    expect(bash(`env LANG=C pbcopy < ${incomplete}`)).toContain("FEX-22.md");
+    expect(bash(`sudo -n pbcopy < ${incomplete}`)).toContain("FEX-22.md");
   });
 
   test("copying a file outside the brief folder is allowed, even under a kick-off folder", () => {
