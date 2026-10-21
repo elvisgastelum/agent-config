@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "vite-plus/test";
 import { WAVE_RULE } from "../src/kaneo.ts";
-import { PHASE_PREFIX } from "../src/kickoff.ts";
+import { PHASE_PREFIX } from "../src/loop.ts";
 import { PLAN_KINDS, PLAN_SCHEMA, PLAN_STORE_PATH, planningMarkdown } from "../src/planning.ts";
 
 const MODELS = { fast: "fast-model", deep: "deep-model" };

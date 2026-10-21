@@ -4235,6 +4235,46 @@ function uninstall(filter, force = false) {
 	return results;
 }
 //#endregion
+//#region src/loop.ts
+/** The line that opens every delegated handoff, so the guard and the user can check its phase. */
+const PHASE_PREFIX = "Phase:";
+const phase = (name) => `${PHASE_PREFIX} ${name}`;
+const agent$1 = (name) => `\`${name}\``;
+const DEEP_READER$2 = agentName("read", "deep");
+const BALANCED_READER$1 = agentName("read", "balanced");
+const FAST_EDITOR = agentName("edit", "fast");
+const BALANCED_EDITOR = agentName("edit", "balanced");
+const DEEP_EDITOR = agentName("edit", "deep");
+/** Kick-off's recommended review routing: the rung follows the diff's risk. */
+const ROUTED_REVIEW = `none and low risk: ${agent$1(BALANCED_READER$1)}; medium and high: ${agent$1(DEEP_READER$2)}`;
+/**
+* The phases one ticket goes through between its branch and its PR: plan, edit, risk, review and
+* fix. The kick-off brief numbers them inside its loop; /continue parallel-wave hands them to
+* every worker.
+*/
+function ticketPhases(branch, review) {
+	const deepRead = agent$1(DEEP_READER$2);
+	return [
+		`**Plan** (\`${phase("plan")}\`, ${deepRead}). Diagnose every change the ticket needs. Return a task list; each task has a spec, its allowed paths, a reference file, a verify command and its edit rung: fast for pattern work (tests, boilerplate, config, mechanical edits), balanced for new logic. Prefer fast.`,
+		`**Edit** (\`${phase("edit")}\`). Run each task on its rung, ${agent$1(FAST_EDITOR)} or ${agent$1(BALANCED_EDITOR)}. Climb one rung on a partial or escalate reply or a failed verify; ${agent$1(DEEP_EDITOR)} only after balanced failed. Run every verify command yourself.`,
+		`**Risk** (\`${phase("risk")}\`, ${deepRead}). Classify the diff (\`git diff origin/${branch}...HEAD\`) as none, low, medium or high per area, one reason each: none for docs and comments; low for tests and isolated internals; medium for behavior other code calls; high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions. The ticket takes the highest.`,
+		`**Review** (\`${phase("review")}\`): ${review}. Give the reviewer the diff, the ticket's criteria and the risk notes; it returns findings (path:line, severity, fix, and the fix's edit rung) or none. A review never runs on a fast agent unless the review routing allows it.`,
+		`**Fix** (\`${phase("fix")}\`). Hand each finding to an edit agent on its rung and verify it. Go back to Risk when a fix changed what the diff touches, otherwise to Review. Repeat until the review has no findings.`
+	];
+}
+/** Which agent runs each phase, and how parallel workers reach a rung without an agent tool. */
+function modelRouting(runtime, models, review) {
+	return `| Phase | Agent |
+| --- | --- |
+| Kaneo reads and writes | ${agent$1(SCRIBE)} (${models.fast}) |
+| plan, risk | ${agent$1(DEEP_READER$2)} (${models.deep}) |
+| edit, fix | ${agent$1(FAST_EDITOR)} (${models.fast}) for pattern work, ${agent$1(BALANCED_EDITOR)} (${models.balanced}) for new logic, ${agent$1(DEEP_EDITOR)} only after balanced failed |
+| review | ${review} |
+| commit titles | ${agent$1(COMMIT_WRITER)} |
+
+Parallel workers cannot start agents: they run each phase on its rung with \`agent-config delegate read|edit --runtime ${runtime} --tier <rung> --no-climb "<handoff>"\`.`;
+}
+//#endregion
 //#region src/kickoff.ts
 const KICK_OFF = "kick-off";
 const KICK_OFF_GUARD_FILE = "kick-off-guard.mjs";
@@ -4246,8 +4286,6 @@ const CALL = {
 	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
 	pi: (agent) => `the subagent tool with the \`${agent}\` agent`
 };
-/** The line that opens every delegated handoff, so the guard and the user can check its phase. */
-const PHASE_PREFIX = "Phase:";
 /** The line a user adds under the phase line to let a review run on the fast rung. */
 const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
 /** The Claude tools the kick-off guard hook checks: agent handoffs, clipboard copies, brief writes. */
@@ -4257,11 +4295,10 @@ const CLAUDE_QUESTION_TOOL$1 = "AskUserQuestion";
 const DEEP_READER$1 = agentName("read", "deep");
 const BALANCED_READER = agentName("read", "balanced");
 const FAST_READER$1 = agentName("read", "fast");
-const FAST_EDITOR = agentName("edit", "fast");
-const BALANCED_EDITOR = agentName("edit", "balanced");
-const DEEP_EDITOR = agentName("edit", "deep");
 const agent = (name) => `\`${name}\``;
-const phase$1 = (name) => `${PHASE_PREFIX} ${name}`;
+/** The brief's placeholders, filled in by the kick-off run that writes it. */
+const BRANCH_PLACEHOLDER = "<branch>";
+const REVIEW_PLACEHOLDER = "<review routing>";
 function kickOffMarkdown(runtime, models, briefDir) {
 	const cmd = actionCommand(runtime, KICK_OFF);
 	const cont = actionCommand(runtime, CONTINUE);
@@ -4271,7 +4308,8 @@ function kickOffMarkdown(runtime, models, briefDir) {
 	const deepRead = agent(DEEP_READER$1);
 	const balancedRead = agent(BALANCED_READER);
 	const fastRead = agent(FAST_READER$1);
-	const routed = `none and low risk: ${balancedRead}; medium and high: ${deepRead}`;
+	const routed = ROUTED_REVIEW;
+	const phases = ticketPhases(BRANCH_PLACEHOLDER, REVIEW_PLACEHOLDER).map((step, i) => `${i + 2}. ${step}`).join("\n");
 	return `${actionFrontmatter(runtime, KICK_OFF, DESCRIPTION$1, KICK_OFF_HINT)}
 
 ## Arguments
@@ -4283,7 +4321,7 @@ ${args} It names one Kaneo epic or ticket: a URL (\`…/task/<id>\`) or an ident
 This session decides; everything bulky runs on an agent and comes back as a short summary. Agents run through ${CALL[runtime]("<name>")}.
 
 - **Kaneo**: every read and write goes through ${agent(SCRIBE)} (${models.fast}). Ask for summaries, never raw Kaneo JSON.
-- **Reasoning**: the diagnosis runs on ${deepRead} (${models.deep}). Every handoff starts with its phase line, \`${phase$1("<phase>")}\`.${guard}
+- **Reasoning**: the diagnosis runs on ${deepRead} (${models.deep}). Every handoff starts with its phase line, \`${phase("<phase>")}\`.${guard}
 - Anything else you read follows the \`model-ladder\` skill.
 
 When one of these agents is not installed, do the step yourself with bounded reads.
@@ -4294,7 +4332,7 @@ When one of these agents is not installed, do the step yourself with bounded rea
 2. Hand that summary to ${deepRead}:
 
    \`\`\`
-   ${phase$1("diagnose")}
+   ${phase("diagnose")}
    Epic: <identifier> <title>, <url>
    Tickets: <the scribe's summary>
    Scope: this repository
@@ -4359,34 +4397,22 @@ Work only these tickets, in this order. Tickets in one wave do not depend on eac
 
 ## Loop per ticket
 
-Agents run through ${CALL[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`${phase$1("plan")}\`, so the run can be checked.
+Agents run through ${CALL[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`${phase("plan")}\`, so the run can be checked.
 
 1. **Pick.** Have ${agent(SCRIBE)} re-read the ticket and its blockers. Still blocked: skip it, say why and take the next. Otherwise move it to In Progress and branch \`<ID>/<short-kebab-description>\` from \`origin/<branch>\`.
-2. **Plan** (\`${phase$1("plan")}\`, ${deepRead}). Diagnose every change the ticket needs. Return a task list; each task has a spec, its allowed paths, a reference file, a verify command and its edit rung: fast for pattern work (tests, boilerplate, config, mechanical edits), balanced for new logic. Prefer fast.
-3. **Edit** (\`${phase$1("edit")}\`). Run each task on its rung, ${agent(FAST_EDITOR)} or ${agent(BALANCED_EDITOR)}. Climb one rung on a partial or escalate reply or a failed verify; ${agent(DEEP_EDITOR)} only after balanced failed. Run every verify command yourself.
-4. **Risk** (\`${phase$1("risk")}\`, ${deepRead}). Classify the diff (\`git diff origin/<branch>...HEAD\`) as none, low, medium or high per area, one reason each: none for docs and comments; low for tests and isolated internals; medium for behavior other code calls; high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions. The ticket takes the highest.
-5. **Review** (\`${phase$1("review")}\`): <review routing>. Give the reviewer the diff, the ticket's criteria and the risk notes; it returns findings (path:line, severity, fix, and the fix's edit rung) or none. A review never runs on a fast agent unless this brief allows it.
-6. **Fix** (\`${phase$1("fix")}\`). Hand each finding to an edit agent on its rung and verify it. Go back to Risk when a fix changed what the diff touches, otherwise to Review. Repeat until the review has no findings.
+${phases}
 7. **Deliver.** Run the project's checks and leave them passing. Commit with the \`${COMMIT_SKILL}\` skill (titles from ${agent(COMMIT_WRITER)}), push, and open the PR into \`<branch>\`: its body starts with the Kaneo ticket link and has no AI attribution. Have the scribe comment the PR URL on the ticket. Wait for CI; read failures through ${fastRead} and fix them through Plan, Edit and Review. Merge, have the scribe move the ticket to Done, then delete the branch and its worktree.
 8. **Next.** Back to Pick. After each wave, have the scribe re-read the epic: tickets added since go to the end of the queue in dependency order.
 
 ## Model routing
 
-| Phase | Agent |
-| --- | --- |
-| Kaneo reads and writes | ${agent(SCRIBE)} (${models.fast}) |
-| plan, risk | ${deepRead} (${models.deep}) |
-| edit, fix | ${agent(FAST_EDITOR)} (${models.fast}) for pattern work, ${agent(BALANCED_EDITOR)} (${models.balanced}) for new logic, ${agent(DEEP_EDITOR)} only after balanced failed |
-| review | <review routing> |
-| commit titles | ${agent(COMMIT_WRITER)} |
-
-Parallel workers cannot start agents: they run each phase on its rung with \`agent-config delegate read|edit --runtime ${runtime} --tier <rung> --no-climb "<handoff>"\`.
+${modelRouting(runtime, models, REVIEW_PLACEHOLDER)}
 
 ## Stop and report
 
 Stop and ask the user when a ticket stays blocked, the review still has findings after 3 rounds, CI fails twice after fixes, a merge conflict cannot be resolved with confidence, a PR cannot merge (required review, branch protection), or the epic's criteria are ambiguous.
 
-When the queue is empty, have ${deepRead} check the epic's "Done when" list against the merged code (\`${phase$1("review")}\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
+When the queue is empty, have ${deepRead} check the epic's "Done when" list against the merged code (\`${phase("review")}\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
 \`\`\`\`
 `;
 }
@@ -4526,7 +4552,6 @@ const ROUND_SIZE = 4;
 const DEEP_READER = agentName("read", "deep");
 const FAST_READER = agentName("read", "fast");
 const code = (text) => `\`${text}\``;
-const phase = (name) => `${PHASE_PREFIX} ${name}`;
 function planningMarkdown(runtime, models) {
 	const cmd = actionCommand(runtime, PLANNING);
 	const cont = actionCommand(runtime, CONTINUE);

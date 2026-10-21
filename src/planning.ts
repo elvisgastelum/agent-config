@@ -12,7 +12,8 @@ import {
   TOUCHES_LINE,
   WAVE_RULE,
 } from "./kaneo.ts";
-import { KICK_OFF, PHASE_PREFIX } from "./kickoff.ts";
+import { KICK_OFF } from "./kickoff.ts";
+import { phase } from "./loop.ts";
 import { LADDER_ITEM } from "./ops.ts";
 import { agentName, type Runtime } from "./tiers.ts";
 
@@ -171,7 +172,6 @@ export interface PlanningModels {
 }
 
 const code = (text: string): string => `\`${text}\``;
-const phase = (name: string): string => `${PHASE_PREFIX} ${name}`;
 
 export function planningMarkdown(runtime: Runtime, models: PlanningModels): string {
   const cmd = actionCommand(runtime, PLANNING);
