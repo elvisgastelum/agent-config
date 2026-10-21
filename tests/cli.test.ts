@@ -288,6 +288,62 @@ test("install continue --project writes each runtime's action into the repositor
   }
 });
 
+const PLANNER_TIERS = [
+  ["fast", "claude-haiku-5-5", "low"],
+  ["balanced", "claude-sonnet-5-5", "medium"],
+  ["deep", "claude-opus-5-5", "high"],
+] as const;
+
+/** Where each runtime keeps the planner agents, relative to a user home or a repository. */
+function plannerDirs(project: boolean) {
+  return project
+    ? {
+        claude: ".claude/agents",
+        opencode: ".opencode/agents",
+        codex: ".codex/agents",
+        pi: ".pi/agents",
+      }
+    : {
+        claude: ".claude/agents",
+        opencode: ".config/opencode/agents",
+        codex: ".codex/agents",
+        pi: ".pi/agent/agents",
+      };
+}
+
+function expectPlanners(root: string, project: boolean) {
+  const dirs = plannerDirs(project);
+  for (const [tier, model, effort] of PLANNER_TIERS) {
+    const name = `planner-${tier}`;
+    const claude = read(join(root, dirs.claude, `${name}.md`));
+    expect(claude).toContain(`name: ${name}`);
+    expect(claude).toContain(`model: ${model}`);
+    expect(claude).toContain("tools: Read, Grep, Glob, Bash");
+    const opencode = read(join(root, dirs.opencode, `${name}.md`));
+    expect(opencode).toContain("mode: subagent");
+    expect(opencode).toContain("  edit: deny");
+    expect(opencode).toContain("  task: deny");
+    expect(opencode).not.toContain("bash: deny");
+    const codex = read(join(root, dirs.codex, `${name}.toml`));
+    expect(codex).toContain('sandbox_mode = "workspace-write"');
+    expect(codex).toContain(`model_reasoning_effort = "${effort}"`);
+    const pi = read(join(root, dirs.pi, `${name}.md`));
+    expect(pi).toContain("  - bash");
+    expect(pi).toContain(`thinking: ${effort}`);
+  }
+}
+
+function expectNoPlanners(root: string, project: boolean) {
+  const dirs = plannerDirs(project);
+  for (const [tier] of PLANNER_TIERS) {
+    const name = `planner-${tier}`;
+    expect(existsSync(join(root, dirs.claude, `${name}.md`))).toBe(false);
+    expect(existsSync(join(root, dirs.opencode, `${name}.md`))).toBe(false);
+    expect(existsSync(join(root, dirs.codex, `${name}.toml`))).toBe(false);
+    expect(existsSync(join(root, dirs.pi, `${name}.md`))).toBe(false);
+  }
+}
+
 test("install planning adds a manual-only action per runtime", () => {
   const skill = join(home, ".claude/skills/planning/SKILL.md");
   mkdirSync(dirname(skill), { recursive: true });
@@ -305,6 +361,7 @@ test("install planning adds a manual-only action per runtime", () => {
   expect(codex).toContain("$planning");
   expect(existsSync(join(home, ".codex/skills/planning/agents/openai.yaml"))).toBe(true);
   expect(read(join(home, ".pi/agent/prompts/planning.md"))).toContain("/planning");
+  expectPlanners(home, false);
 
   expect(JSON.parse(run("install", "planning", "--yes", "--json").stdout).applied).toBe(false);
 
@@ -313,6 +370,7 @@ test("install planning adds a manual-only action per runtime", () => {
   expect(existsSync(join(home, ".config/opencode/commands/planning.md"))).toBe(false);
   expect(existsSync(join(home, ".codex/skills/planning"))).toBe(false);
   expect(existsSync(join(home, ".pi/agent/prompts/planning.md"))).toBe(false);
+  expectNoPlanners(home, false);
 });
 
 test("install planning --project writes each runtime's action into the repository", () => {
@@ -329,9 +387,11 @@ test("install planning --project writes each runtime's action into the repositor
     ]) {
       expect(existsSync(join(repo, path))).toBe(true);
     }
+    expectPlanners(repo, true);
     expect(existsSync(join(home, ".claude"))).toBe(false);
     expect(run("uninstall", "planning", "--project", repo, "--yes").code).toBe(0);
     expect(existsSync(join(repo, ".pi/prompts/planning.md"))).toBe(false);
+    expectNoPlanners(repo, true);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

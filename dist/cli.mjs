@@ -3012,20 +3012,20 @@ FAILED: <"none", or one line per failed call:>
 const PHASE_PREFIX = "Phase:";
 const phase = (name) => `${PHASE_PREFIX} ${name}`;
 const agent$1 = (name) => `\`${name}\``;
-const DEEP_READER$2 = agentName("read", "deep");
+const DEEP_READER$1 = agentName("read", "deep");
 const BALANCED_READER$1 = agentName("read", "balanced");
 const FAST_EDITOR = agentName("edit", "fast");
 const BALANCED_EDITOR = agentName("edit", "balanced");
 const DEEP_EDITOR = agentName("edit", "deep");
 /** Kick-off's recommended review routing: the rung follows the diff's risk. */
-const ROUTED_REVIEW = `none and low risk: ${agent$1(BALANCED_READER$1)}; medium and high: ${agent$1(DEEP_READER$2)}`;
+const ROUTED_REVIEW = `none and low risk: ${agent$1(BALANCED_READER$1)}; medium and high: ${agent$1(DEEP_READER$1)}`;
 /**
 * The phases one ticket goes through between its branch and its PR: plan, edit, risk, review and
 * fix. The kick-off brief numbers them inside its loop; /continue parallel-wave hands them to
 * every worker.
 */
 function ticketPhases(branch, review) {
-	const deepRead = agent$1(DEEP_READER$2);
+	const deepRead = agent$1(DEEP_READER$1);
 	return [
 		`**Plan** (\`${phase("plan")}\`, ${deepRead}). Diagnose every change the ticket needs. Return a task list; each task has a spec, its allowed paths, a reference file, a verify command and its edit rung: fast for pattern work (tests, boilerplate, config, mechanical edits), balanced for new logic. Prefer fast.`,
 		`**Edit** (\`${phase("edit")}\`). Run each task on its rung, ${agent$1(FAST_EDITOR)} or ${agent$1(BALANCED_EDITOR)}. Climb one rung on a partial or escalate reply or a failed verify; ${agent$1(DEEP_EDITOR)} only after balanced failed. Run every verify command yourself.`,
@@ -3039,7 +3039,7 @@ function modelRouting(runtime, models, review) {
 	return `| Phase | Agent |
 | --- | --- |
 | Kaneo reads and writes | ${agent$1(SCRIBE)} (${models.fast}) |
-| plan, risk | ${agent$1(DEEP_READER$2)} (${models.deep}) |
+| plan, risk | ${agent$1(DEEP_READER$1)} (${models.deep}) |
 | edit, fix | ${agent$1(FAST_EDITOR)} (${models.fast}) for pattern work, ${agent$1(BALANCED_EDITOR)} (${models.balanced}) for new logic, ${agent$1(DEEP_EDITOR)} only after balanced failed |
 | review | ${review} |
 | commit titles | ${agent$1(COMMIT_WRITER)} |
@@ -4339,7 +4339,7 @@ const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
 const KICK_OFF_GUARD_MATCHER = "Agent|Task|Bash|Write";
 /** Claude's tool for asking the user a question with options. */
 const CLAUDE_QUESTION_TOOL$1 = "AskUserQuestion";
-const DEEP_READER$1 = agentName("read", "deep");
+const DEEP_READER = agentName("read", "deep");
 const BALANCED_READER = agentName("read", "balanced");
 const FAST_READER$1 = agentName("read", "fast");
 const agent = (name) => `\`${name}\``;
@@ -4352,7 +4352,7 @@ function kickOffMarkdown(runtime, models, briefDir) {
 	const args = runtime === "codex" ? `Argument: the user's message after \`${cmd}\`.` : "Argument: `$ARGUMENTS`.";
 	const ask = runtime === "claude" ? `with the ${CLAUDE_QUESTION_TOOL$1} tool` : "in one message with numbered options";
 	const guard = runtime === "claude" ? " The kick-off guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or not in a command of its own." : "";
-	const deepRead = agent(DEEP_READER$1);
+	const deepRead = agent(DEEP_READER);
 	const balancedRead = agent(BALANCED_READER);
 	const fastRead = agent(FAST_READER$1);
 	const routed = ROUTED_REVIEW;
@@ -4467,13 +4467,28 @@ When the queue is empty, have ${deepRead} check the epic's "Done when" list agai
 //#region src/planning.ts
 const PLANNING = "planning";
 const DESCRIPTION = "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed).";
-/** The plan kinds and how many sub-agents may run at once for each. */
+/** The plan kinds: how many sub-agents may run at once, and the planner rung a draft starts on. */
 const PLAN_KINDS = {
-	fix: 1,
-	ticket: 1,
-	feat: 2,
-	epic: 3,
-	project: 5
+	fix: {
+		fanOut: 1,
+		start: "fast"
+	},
+	ticket: {
+		fanOut: 1,
+		start: "fast"
+	},
+	feat: {
+		fanOut: 2,
+		start: "balanced"
+	},
+	epic: {
+		fanOut: 3,
+		start: "balanced"
+	},
+	project: {
+		fanOut: 5,
+		start: "deep"
+	}
 };
 const KIND_NAMES = Object.keys(PLAN_KINDS);
 const PLANNING_HINT = `[${KIND_NAMES.join(" | ")}] <what to plan>`;
@@ -4599,8 +4614,64 @@ const LENSES = [
 const CLAUDE_QUESTION_TOOL = "AskUserQuestion";
 /** The most questions one round asks, which is also what one AskUserQuestion call holds. */
 const ROUND_SIZE = 4;
-const DEEP_READER = agentName("read", "deep");
 const FAST_READER = agentName("read", "fast");
+/** The planner sub-agents this action installs, one per rung: `planner-fast` and so on. */
+const PLANNER_PREFIX = "planner-";
+const plannerName = (tier) => `${PLANNER_PREFIX}${tier}`;
+/** Drafting handoffs open with this phase: any rung may draft, so the kick-off guard allows it. */
+const DRAFT_PHASE = "draft";
+/** The first line of a planner's draft reply, and of a review's. */
+const DRAFT_STATUS = {
+	done: "STATUS: done",
+	escalate: "STATUS: escalate"
+};
+const REVIEW_VERDICT = {
+	pass: "Verdict: pass",
+	revise: "Verdict: revise"
+};
+/** Review findings about a draft are recorded under this lens. */
+const DRAFT_LENS = "draft";
+const PLANNER_ROLE = {
+	fast: "First rung for fix and ticket plans.",
+	balanced: "First rung for feat and epic plans; second after the fast planner's draft failed review.",
+	deep: "Classifies requests and reviews every plan; drafts projects, and other plans after the balanced planner's draft failed review."
+};
+const PLANNER_TIER_NOTE = {
+	fast: `You are the fast planner. When the plan needs more reasoning than a small change, reply \`${DRAFT_STATUS.escalate}\` early: that costs less than a weak draft.`,
+	balanced: "You are the balanced planner. When the handoff lists issues from an earlier draft, fix each one and avoid repeating its cause.",
+	deep: "You are the deep planner, the last rung: cheaper planners may already have failed this draft. Read every issue the handoff lists, be thorough, and still keep the reply short."
+};
+function plannerDescription(tier, model) {
+	return `Planning specialist for the ${PLANNING} action (${model || "session model"}). Drafts ticket plans into the plan store and reviews them. ${PLANNER_ROLE[tier]}`;
+}
+function plannerBody(tier) {
+	return `You are a planner, a sub-agent of the \`${PLANNING}\` action. The parent session runs the interview with the user and keeps every decision; you do the reasoning it hands you and reply briefly.
+
+Every handoff opens with a phase line and names the plan store, a SQLite file. Read it with small \`sqlite3\` selects (or \`python3 -m sqlite3\`) and the code with bounded reads (line ranges, \`grep\`); never dump a whole table or file.
+
+## Phases
+
+- \`${phase("plan")}\`: answer what the handoff asks (such as classifying a request) in its answer shape. Change nothing.
+- \`${phase(DRAFT_PHASE)}\`: write the draft into the store yourself, following the draft rules. Start every write with \`${STORE_WRITE_PREFIX}\`, and first delete any earlier draft (its blocks, tickets and epics). When the handoff lists issues from earlier drafts, fix every one.
+- \`${phase("review")}\`: check what the handoff names against its lenses, the decisions in the store and the draft rules. Change nothing.
+
+## Draft rules
+
+- A project splits into epics; every epic splits into stories; a feat, fix or ticket that fits \`${MAX_STORY_SIZE}\` stays one story.
+- Every story has a specific title, its outcome, "done when" criteria a test or a person can check, a size (${STORY_SIZES.map(code).join(", ")}) and \`touches\`: the areas or paths it changes.
+- Every decision and every "done when" criterion in the store is covered by a story.
+- Shared foundations (schemas, contracts, scaffolding, design tokens) come first; after them, stories in separate areas that do not wait on each other. A \`blocks\` row only where one story needs another's result.
+- ${WAVE_RULE} \`SELECT * FROM waves ORDER BY wave\` shows them; an open ticket missing from it sits in a dependency cycle or behind one, so break that cycle.
+
+## Reply
+
+- **plan**: the answer, within the handoff's budget.
+- **draft**: first line \`${DRAFT_STATUS.done}\`, or \`${DRAFT_STATUS.escalate}\` with the reason when the plan needs more than you can settle. Then the epics, the ticket count, one line per wave (wave: ticket IDs), how each listed issue was fixed, and what you could not settle.
+- **review**: first line \`${REVIEW_VERDICT.pass}\` or \`${REVIEW_VERDICT.revise}\`, then one line per finding: kind (gap / red_flag / smell / risk), lens, what, why it matters in plain words, recommended fix. Only findings tied to the plan or to code (path:line). A draft passes when no finding would leave a story unbuildable, unverifiable or in the wrong order.
+
+${PLANNER_TIER_NOTE[tier]}
+`;
+}
 const code = (text) => `\`${text}\``;
 function planningMarkdown(runtime, models) {
 	const cmd = actionCommand(runtime, PLANNING);
@@ -4608,9 +4679,15 @@ function planningMarkdown(runtime, models) {
 	const kickOff = actionCommand(runtime, KICK_OFF);
 	const args = runtime === "codex" ? `Argument: the user's message after ${code(cmd)}.` : "Argument: `$ARGUMENTS`.";
 	const ask = runtime === "claude" ? `with the ${CLAUDE_QUESTION_TOOL} tool` : "in one message, numbered, with lettered options";
-	const deep = code(DEEP_READER);
+	const deep = code(plannerName("deep"));
 	const fast = code(FAST_READER);
-	const caps = KIND_NAMES.map((k) => `${k} ${PLAN_KINDS[k]}`).join(", ");
+	const planners = [
+		"fast",
+		"balanced",
+		"deep"
+	].map((tier) => `${code(plannerName(tier))} (${models[tier]})`).join(", ");
+	const caps = KIND_NAMES.map((k) => `${k} ${PLAN_KINDS[k].fanOut}`).join(", ");
+	const starts = KIND_NAMES.map((k) => `${k} ${code(plannerName(PLAN_KINDS[k].start))}`).join(", ");
 	const lenses = LENSES.map(([name, focus]) => `   - **${name}**: ${focus}.`).join("\n");
 	return `${actionFrontmatter(runtime, PLANNING, DESCRIPTION, PLANNING_HINT)}
 
@@ -4629,7 +4706,7 @@ ${args} Its first word may name the kind of plan: ${KIND_NAMES.map(code).join(",
 
 This session runs the interview and keeps the decisions. Reasoning over the whole plan and bulky reads run on agents through ${CALL$1[runtime]("<name>")} and come back as short answers.
 
-- **Reasoning**: classification, gap reviews, ticket drafting and the final review run on ${deep} (${models.deep}). Each handoff starts with its phase line: ${code(phase("plan"))} to classify or draft, ${code(phase("review"))} to review.
+- **Planners**: this action installs one planning specialist per rung: ${planners}. Classification, gap reviews and every review run on ${deep}; drafting climbs the planner ladder (step 5). Each handoff starts with its phase line: ${code(phase("plan"))} to classify, ${code(phase(DRAFT_PHASE))} to draft, ${code(phase("review"))} to review.
 - **Code facts**: ${fast} (${models.fast}) answers with \`path:line\` bullets.
 - **Kaneo**: every read and write goes through ${code(SCRIBE)} (${models.fast}).
 - **Fan-out**: at most this many sub-agents run at once, by kind: ${caps}.
@@ -4647,7 +4724,7 @@ When one of these agents is not installed, do the step yourself with bounded rea
 | ${code(KANEO_ITEM)} with a working MCP | Tickets become Kaneo epics and stories, as the ${code(KANEO_SKILL)} skill says. |
 | ${code(CONTINUE)} | Stories are cut to run in parallel waves; the report names ${code(`${cont} ${PARALLEL_WAVE}`)}. |
 | ${code(KICK_OFF)} | The report offers ${code(`${kickOff} <EPIC-ID>`)} to prepare a brief for a fresh session. |
-| ${code(LADDER_ITEM)} | Reasoning and reads run on the ladder agents above. |
+| ${code(LADDER_ITEM)} | Code facts come from ${fast}. |
 
 A missing item costs nothing: say in one line what it would add, then go on.
 
@@ -4704,14 +4781,16 @@ ${lenses}
 3. Record the findings. Each open gap joins the frontier as a question; each red flag and smell is shown in plain words with its recommended fix, and the user's call on it is recorded.
 4. Go back to step 3. The loop ends when a review finds nothing new.
 
-## 5. Draft the tickets
+## 5. Draft the tickets on the planner ladder
 
-Hand the store to ${deep} (${code(phase("plan"))}, task: draft the tickets) and record its draft:
+The draft starts on the kind's planner: ${starts}. The planners know the draft rules (stories of ${code(MAX_STORY_SIZE)} or less, checkable criteria, ${code(TOUCHES_LINE)} areas, foundations first, waves). Each attempt is one draft and one review:
 
-- A project splits into epics; every epic splits into stories; a feat, fix or ticket that fits ${code(MAX_STORY_SIZE)} stays one story.
-- Every story has a specific title, its outcome, "done when" criteria, a size (${STORY_SIZES.map(code).join(", ")}) and its ${code(TOUCHES_LINE)} areas or paths.
-- Cut for parallel work: shared foundations (schemas, contracts, scaffolding, design tokens) come first; after them, stories in separate areas that do not wait on each other. Add a \`blocks\` edge only where one story needs another's result.
-- ${WAVE_RULE} Check the waves with the store's \`waves\` view: an open ticket missing from it sits in a dependency cycle or behind one, and the draft breaks that cycle.
+1. **Draft**: hand the planner \`${phase(DRAFT_PHASE)}\`, the store path, the task "draft the tickets", and every finding earlier reviews of a draft raised, so it learns from them. It writes the draft into the store and replies \`${DRAFT_STATUS.done}\` with a summary, or \`${DRAFT_STATUS.escalate}\` with the reason.
+2. **Review**: after \`${DRAFT_STATUS.done}\`, hand ${deep} \`${phase("review")}\`, the store path and the task "check the draft's quality". It replies \`${REVIEW_VERDICT.pass}\` or \`${REVIEW_VERDICT.revise}\` with its findings; record them in \`findings\` with the lens \`${DRAFT_LENS}\`, and mark resolved the earlier ones this draft fixed.
+3. **Climb**: on \`${REVIEW_VERDICT.revise}\` or \`${DRAFT_STATUS.escalate}\`, go back to 1 one rung up (fast, then balanced, then deep), one attempt per rung.
+4. When the deep planner's draft still fails its review, stop climbing: its open findings go to the user in step 6.
+
+Climb on a failed review, never for speed: a cheap draft that the review checks still costs less than starting high.
 
 ## 6. Final review
 
@@ -5319,9 +5398,9 @@ function modelName(runtime, tiers, effort = tiers.fast.effort, tier = "fast") {
 	if (runtime === "codex" || !model) return `${model || "session model"}, ${effort} effort`;
 	return model;
 }
-function cheapAgent(runtime, dir, tiers, agent) {
-	const { model } = tiers.fast;
-	const effort = agent.effort ?? tiers.fast.effort;
+function catalogAgent(runtime, dir, tiers, agent) {
+	const { model } = tiers[agent.tier ?? "fast"];
+	const effort = agent.effort ?? tiers[agent.tier ?? "fast"].effort;
 	const { name, body } = agent;
 	const description = JSON.stringify(agent.description);
 	switch (runtime) {
@@ -5487,7 +5566,7 @@ const kaneo = {
 	ops: (entry, runtime, config) => {
 		const tiers = config.tiers[runtime];
 		const where = layout(runtime, entry.project);
-		const scribe = cheapAgent(runtime, where.agents, tiers, SCRIBE_AGENT);
+		const scribe = catalogAgent(runtime, where.agents, tiers, SCRIBE_AGENT);
 		const ops = [
 			{
 				runtime,
@@ -5621,7 +5700,7 @@ const commit = {
 	ops: (entry, runtime, config) => {
 		const tiers = config.tiers[runtime];
 		const where = layout(runtime, entry.project);
-		const writer = cheapAgent(runtime, where.agents, tiers, WRITER_AGENT);
+		const writer = catalogAgent(runtime, where.agents, tiers, WRITER_AGENT);
 		const model = modelName(runtime, tiers, WRITER_EFFORT);
 		const ops = [
 			{
@@ -5745,13 +5824,51 @@ function kickOffOps(runtime, project, config) {
 	if (runtime === "claude") ops.push(...kickOffGuardOps(project));
 	return ops;
 }
+/** What the planner agents may use: read the repository and run commands, never edit it. */
+const PLANNER_CLAUDE_TOOLS = [
+	"Read",
+	"Grep",
+	"Glob",
+	"Bash"
+];
+const PLANNER_OPENCODE_DENY = ["edit", "task"];
+const PLANNER_PI_TOOLS = [
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"bash"
+];
 function planningOps(runtime, project, config) {
 	const tiers = config.tiers[runtime];
 	const content = planningMarkdown(runtime, {
 		fast: modelName(runtime, tiers),
+		balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
 		deep: modelName(runtime, tiers, tiers.deep.effort, "deep")
 	});
-	return actionOps(runtime, project, PLANNING, content, "planning");
+	const ops = actionOps(runtime, project, PLANNING, content, "planning");
+	for (const tier of TIERS) {
+		const name = plannerName(tier);
+		const agent = catalogAgent(runtime, layout(runtime, project).agents, tiers, {
+			name,
+			description: plannerDescription(tier, tiers[tier].model),
+			body: plannerBody(tier),
+			tier,
+			claudeTools: PLANNER_CLAUDE_TOOLS,
+			opencodeDeny: PLANNER_OPENCODE_DENY,
+			codexSandbox: "workspace-write",
+			piTools: PLANNER_PI_TOOLS
+		});
+		ops.push({
+			runtime,
+			component: "catalog",
+			kind: "file",
+			path: agent.path,
+			content: agent.content,
+			label: `planning agent ${name} (${modelName(runtime, tiers, tiers[tier].effort, tier)})`
+		});
+	}
+	return ops;
 }
 const STATUSLINE_FILE = "statusline.sh";
 const CATALOG = [
@@ -5777,7 +5894,7 @@ const CATALOG = [
 	{
 		id: PLANNING,
 		title: "Plan work with you",
-		description: "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed",
+		description: "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed, and installs the planner-fast, planner-balanced and planner-deep agents, one per rung",
 		settings: [],
 		discover: () => ({}),
 		ops: (entry, runtime, config) => planningOps(runtime, entry.project, config)

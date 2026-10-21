@@ -46,9 +46,15 @@ import {
   opencodeDir,
   piDir,
 } from "./paths.ts";
-import { PLANNING, planningMarkdown } from "./planning.ts";
+import {
+  PLANNING,
+  plannerBody,
+  plannerDescription,
+  plannerName,
+  planningMarkdown,
+} from "./planning.ts";
 import { assetSource, opencodeConfigPath, runtimeOps, tomlMultiline } from "./runtimes.ts";
-import type { Effort, Runtime, Tier, TierMap } from "./tiers.ts";
+import { TIERS, type Effort, type Runtime, type Tier, type TierMap } from "./tiers.ts";
 
 export type Scope = "user" | "project";
 
@@ -179,12 +185,14 @@ function modelName(
   return model;
 }
 
-/** A catalog agent on the fast rung, and what it may do in each runtime. */
-interface CheapAgent {
+/** A catalog agent on one rung (fast unless `tier` says otherwise), and what it may do in each runtime. */
+interface CatalogAgent {
   name: string;
   description: string;
   body: string;
-  /** Thinking effort; defaults to the fast rung's. */
+  /** The rung whose model and effort it runs on; fast when unset. */
+  tier?: Tier;
+  /** Thinking effort; defaults to the rung's. */
   effort?: Effort;
   claudeTools: string[];
   /** OpenCode permissions, each denied. */
@@ -193,14 +201,14 @@ interface CheapAgent {
   piTools: string[];
 }
 
-function cheapAgent(
+function catalogAgent(
   runtime: Runtime,
   dir: string,
   tiers: TierMap,
-  agent: CheapAgent,
+  agent: CatalogAgent,
 ): { path: string; content: string } {
-  const { model } = tiers.fast;
-  const effort = agent.effort ?? tiers.fast.effort;
+  const { model } = tiers[agent.tier ?? "fast"];
+  const effort = agent.effort ?? tiers[agent.tier ?? "fast"].effort;
   const { name, body } = agent;
   const description = JSON.stringify(agent.description);
   switch (runtime) {
@@ -251,7 +259,7 @@ const KANEO_LEGACY_BLOCK: [string, string] = [
   "<!-- END kaneo-work-tracking-skill -->",
 ];
 
-const SCRIBE_AGENT: CheapAgent = {
+const SCRIBE_AGENT: CatalogAgent = {
   name: SCRIBE,
   description: SCRIBE_DESCRIPTION,
   body: SCRIBE_BODY,
@@ -346,7 +354,7 @@ const kaneo: CatalogItem = {
   ops: (entry, runtime, config) => {
     const tiers = config.tiers[runtime];
     const where = layout(runtime, entry.project);
-    const scribe = cheapAgent(runtime, where.agents, tiers, SCRIBE_AGENT);
+    const scribe = catalogAgent(runtime, where.agents, tiers, SCRIBE_AGENT);
     const ops: Op[] = [
       {
         runtime,
@@ -397,7 +405,7 @@ const COMMIT_LEGACY_BLOCK: [string, string] = [
 /** Commit titles are short pattern work: the fast model, always at low effort. */
 const WRITER_EFFORT: Effort = "low";
 
-const WRITER_AGENT: CheapAgent = {
+const WRITER_AGENT: CatalogAgent = {
   name: COMMIT_WRITER,
   description: WRITER_DESCRIPTION,
   body: WRITER_BODY,
@@ -498,7 +506,7 @@ const commit: CatalogItem = {
   ops: (entry, runtime, config) => {
     const tiers = config.tiers[runtime];
     const where = layout(runtime, entry.project);
-    const writer = cheapAgent(runtime, where.agents, tiers, WRITER_AGENT);
+    const writer = catalogAgent(runtime, where.agents, tiers, WRITER_AGENT);
     const model = modelName(runtime, tiers, WRITER_EFFORT);
     const ops: Op[] = [
       {
@@ -639,13 +647,41 @@ function kickOffOps(runtime: Runtime, project: string | undefined, config: Confi
   return ops;
 }
 
+/** What the planner agents may use: read the repository and run commands, never edit it. */
+const PLANNER_CLAUDE_TOOLS = ["Read", "Grep", "Glob", "Bash"];
+const PLANNER_OPENCODE_DENY = ["edit", "task"];
+const PLANNER_PI_TOOLS = ["read", "grep", "find", "ls", "bash"];
+
 function planningOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
   const tiers = config.tiers[runtime];
   const content = planningMarkdown(runtime, {
     fast: modelName(runtime, tiers),
+    balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
     deep: modelName(runtime, tiers, tiers.deep.effort, "deep"),
   });
-  return actionOps(runtime, project, PLANNING, content, "planning");
+  const ops = actionOps(runtime, project, PLANNING, content, "planning");
+  for (const tier of TIERS) {
+    const name = plannerName(tier);
+    const agent = catalogAgent(runtime, layout(runtime, project).agents, tiers, {
+      name,
+      description: plannerDescription(tier, tiers[tier].model),
+      body: plannerBody(tier),
+      tier,
+      claudeTools: PLANNER_CLAUDE_TOOLS,
+      opencodeDeny: PLANNER_OPENCODE_DENY,
+      codexSandbox: "workspace-write",
+      piTools: PLANNER_PI_TOOLS,
+    });
+    ops.push({
+      runtime,
+      component: "catalog",
+      kind: "file",
+      path: agent.path,
+      content: agent.content,
+      label: `planning agent ${name} (${modelName(runtime, tiers, tiers[tier].effort, tier)})`,
+    });
+  }
+  return ops;
 }
 
 // ---------------------------------------------------------------- statusline
@@ -710,7 +746,7 @@ const planningItem: CatalogItem = {
   id: PLANNING,
   title: "Plan work with you",
   description:
-    "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed",
+    "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed, and installs the planner-fast, planner-balanced and planner-deep agents, one per rung",
   settings: [],
   discover: () => ({}),
   ops: (entry, runtime, config) => planningOps(runtime, entry.project, config),

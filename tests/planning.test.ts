@@ -3,14 +3,21 @@ import { describe, expect, test } from "vite-plus/test";
 import { WAVE_RULE } from "../src/kaneo.ts";
 import { PHASE_PREFIX } from "../src/loop.ts";
 import {
+  DRAFT_PHASE,
+  DRAFT_STATUS,
   PLAN_KINDS,
   PLAN_SCHEMA,
   PLAN_STORE_PATH,
+  REVIEW_VERDICT,
   STORE_WRITE_PREFIX,
+  plannerBody,
+  plannerDescription,
+  plannerName,
   planningMarkdown,
 } from "../src/planning.ts";
+import { TIERS } from "../src/tiers.ts";
 
-const MODELS = { fast: "fast-model", deep: "deep-model" };
+const MODELS = { fast: "fast-model", balanced: "balanced-model", deep: "deep-model" };
 
 function store(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -97,15 +104,28 @@ describe("PLAN_SCHEMA", () => {
 });
 
 describe("planningMarkdown", () => {
-  test("keeps reasoning on the deep rung with phase lines and caps the fan-out by kind", () => {
+  test("names every planner with its model, reviews on planner-deep and caps the fan-out", () => {
     const text = planningMarkdown("claude", MODELS);
     expect(text).toContain(`${PHASE_PREFIX} plan`);
+    expect(text).toContain(`${PHASE_PREFIX} ${DRAFT_PHASE}`);
     expect(text).toContain(`${PHASE_PREFIX} review`);
-    expect(text).toContain("`ladder-read-deep` (deep-model)");
-    for (const [kind, cap] of Object.entries(PLAN_KINDS)) expect(text).toContain(`${kind} ${cap}`);
+    for (const tier of TIERS) expect(text).toContain(`\`${plannerName(tier)}\` (${MODELS[tier]})`);
+    expect(text).toContain("Classification, gap reviews and every review run on `planner-deep`");
+    for (const [kind, { fanOut }] of Object.entries(PLAN_KINDS))
+      expect(text).toContain(`${kind} ${fanOut}`);
     expect(text).toContain(PLAN_STORE_PATH);
-    expect(text).toContain(WAVE_RULE);
     expect(text).toContain(`\`${STORE_WRITE_PREFIX}\``);
+  });
+
+  test("starts each kind's draft on its planner and climbs one rung on a failed review", () => {
+    const section = planningMarkdown("claude", MODELS).split("## 5. ")[1]!.split("\n## ")[0]!;
+    for (const [kind, { start }] of Object.entries(PLAN_KINDS))
+      expect(section).toContain(`${kind} \`${plannerName(start)}\``);
+    expect(section).toContain(`on \`${REVIEW_VERDICT.revise}\` or \`${DRAFT_STATUS.escalate}\``);
+    expect(section).toContain("every finding earlier reviews of a draft raised");
+    expect(section).toContain(
+      "When the deep planner's draft still fails its review, stop climbing",
+    );
   });
 
   test("asks with the question tool on Claude and in a numbered message elsewhere", () => {
@@ -116,5 +136,26 @@ describe("planningMarkdown", () => {
   test("names the next commands in each runtime's form", () => {
     expect(planningMarkdown("codex", MODELS)).toContain("`$continue parallel-wave`");
     expect(planningMarkdown("pi", MODELS)).toContain("`/kick-off <EPIC-ID>`");
+  });
+});
+
+describe("planner agents", () => {
+  test("share the draft rules and differ only in their rung note", () => {
+    const [fast, balanced, deep] = TIERS.map(plannerBody);
+    for (const body of [fast!, balanced!, deep!]) {
+      expect(body).toContain(WAVE_RULE);
+      expect(body).toContain(`\`${STORE_WRITE_PREFIX}\``);
+      expect(body).toContain(`\`${PHASE_PREFIX} ${DRAFT_PHASE}\``);
+      expect(body).toContain(REVIEW_VERDICT.revise);
+    }
+    expect(fast).toContain(`reply \`${DRAFT_STATUS.escalate}\` early`);
+    expect(deep).toContain("the last rung");
+    expect(new Set([fast, balanced, deep]).size).toBe(3);
+  });
+
+  test("describe their model and when each rung runs", () => {
+    expect(plannerDescription("fast", "haiku")).toContain("(haiku)");
+    expect(plannerDescription("fast", "")).toContain("(session model)");
+    expect(plannerDescription("deep", "opus")).toContain("reviews every plan");
   });
 });
