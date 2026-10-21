@@ -4492,7 +4492,9 @@ const PLAN_KINDS = {
 };
 const KIND_NAMES = Object.keys(PLAN_KINDS);
 const PLANNING_HINT = `[${KIND_NAMES.join(" | ")}] <what to plan>`;
-const PLAN_STORE_PATH = `.plans/<MM-yyyy>/<plan-title>/plan.sqlite`;
+/** The plan store: one folder per month and per plan, in the repository root. */
+const PLANS_DIR = ".plans";
+const PLAN_STORE_PATH = `${PLANS_DIR}/<MM-yyyy>/<plan-title>/plan.sqlite`;
 /** A gap still open when the user asks to write the tickets becomes a ticket with this title. */
 const GAP_TITLE_PREFIX = "Gap: ";
 const GAP_LABEL_COLOR = "#EC4899";
@@ -6833,6 +6835,69 @@ async function runTui() {
 	return 0;
 }
 //#endregion
+//#region src/plans.ts
+/** Directories a store search never enters. */
+const SKIPPED_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git"]);
+var MissingPathError = class extends Error {};
+function collect(dir, found) {
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const path = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			if (!SKIPPED_DIRS.has(entry.name)) collect(path, found);
+		} else if (entry.name === "plan.sqlite") found.push(path);
+	}
+}
+/** A file is one store; a directory is searched for stores. A missing path throws. */
+function findStores(paths) {
+	const found = [];
+	for (const given of paths) {
+		const path = resolve(given);
+		let isDir;
+		try {
+			isDir = statSync(path).isDirectory();
+		} catch {
+			throw new MissingPathError(`${given} does not exist`);
+		}
+		if (isDir) collect(path, found);
+		else found.push(path);
+	}
+	return [...new Set(found)];
+}
+/** Runs the schema on each store in one transaction; a store that fails does not stop the rest. */
+async function upgradeStores(stores, dryRun = false) {
+	const result = {
+		upgraded: [],
+		failed: []
+	};
+	if (dryRun) return {
+		...result,
+		upgraded: [...stores]
+	};
+	const { DatabaseSync } = await import("node:sqlite");
+	for (const path of stores) try {
+		const db = new DatabaseSync(path);
+		try {
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				db.exec(PLAN_SCHEMA);
+				db.exec("COMMIT");
+			} catch (error) {
+				db.exec("ROLLBACK");
+				throw error;
+			}
+		} finally {
+			db.close();
+		}
+		result.upgraded.push(path);
+	} catch (error) {
+		result.failed.push({
+			path,
+			error: error instanceof Error ? error.message : String(error)
+		});
+	}
+	return result;
+}
+//#endregion
 //#region src/delegate.ts
 /** Set in every process `delegate` starts; its presence means "already delegated". */
 const DELEGATED_ENV = "AGENT_CONFIG_DELEGATED";
@@ -7134,6 +7199,9 @@ Usage:
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
+  agent-config plans upgrade [<path> ...]
+                                   upgrade /planning plan stores (default: ./.plans; a directory is
+                                   searched for plan.sqlite; --dry-run lists them)
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -7167,6 +7235,7 @@ Delegate flags:
 Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
 3 uninstall kept files you edited (re-run with --force) / delegate ended partial or escalate,
 4 delegate refused: already running inside a agent-config delegated agent, 130 cancelled.`;
+const PLANS_SUBCOMMAND = "upgrade";
 var UsageError = class extends Error {};
 const DELEGATE_ONLY = [
 	"tier",
@@ -7587,6 +7656,22 @@ async function main(argv) {
 			}, last?.reply ?? "");
 			if (!last || last.status === "error") return 1;
 			return last.status === "done" ? 0 : 3;
+		}
+		case "plans": {
+			if (positionals[1] !== PLANS_SUBCOMMAND) throw new UsageError(`plans expects "${PLANS_SUBCOMMAND}"`);
+			const given = positionals.slice(2);
+			let stores;
+			try {
+				stores = findStores(given.length > 0 ? given : [resolve(PLANS_DIR)]);
+			} catch (error) {
+				if (error instanceof MissingPathError) throw new UsageError(error.message);
+				throw error;
+			}
+			const dryRun = values["dry-run"] === true;
+			const result = await upgradeStores(stores, dryRun);
+			const lines = [...result.upgraded.map((path) => `${dryRun ? "would upgrade" : "upgraded"} ${path}`), ...result.failed.map((f) => `failed ${f.path}: ${f.error}`)];
+			out(json, result, lines.length > 0 ? lines.join("\n") : "No plan stores found.");
+			return result.failed.length > 0 ? 1 : 0;
 		}
 		case "update":
 		case "self-update": {

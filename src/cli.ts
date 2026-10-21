@@ -40,6 +40,8 @@ import {
 } from "./ops.ts";
 import { EFFORTS, isReviewLens, isRuntime, isTier, type Effort, type Runtime } from "./tiers.ts";
 import { formatPlan, runTui } from "./tui.ts";
+import { MissingPathError, findStores, upgradeStores } from "./plans.ts";
+import { PLANS_DIR } from "./planning.ts";
 import { DELEGATED_ENV, LEGACY_DELEGATED_ENV, delegate } from "./delegate.ts";
 import {
   checkForUpdate,
@@ -78,6 +80,9 @@ Usage:
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
+  agent-config plans upgrade [<path> ...]
+                                   upgrade /planning plan stores (default: ./.plans; a directory is
+                                   searched for plan.sqlite; --dry-run lists them)
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -111,6 +116,8 @@ Delegate flags:
 Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
 3 uninstall kept files you edited (re-run with --force) / delegate ended partial or escalate,
 4 delegate refused: already running inside a agent-config delegated agent, 130 cancelled.`;
+
+const PLANS_SUBCOMMAND = "upgrade";
 
 class UsageError extends Error {}
 
@@ -641,6 +648,27 @@ async function main(argv: string[]): Promise<number> {
       );
       if (!last || last.status === "error") return 1;
       return last.status === "done" ? 0 : 3;
+    }
+    case "plans": {
+      if (positionals[1] !== PLANS_SUBCOMMAND) {
+        throw new UsageError(`plans expects "${PLANS_SUBCOMMAND}"`);
+      }
+      const given = positionals.slice(2);
+      let stores: string[];
+      try {
+        stores = findStores(given.length > 0 ? given : [resolve(PLANS_DIR)]);
+      } catch (error) {
+        if (error instanceof MissingPathError) throw new UsageError(error.message);
+        throw error;
+      }
+      const dryRun = values["dry-run"] === true;
+      const result = await upgradeStores(stores, dryRun);
+      const lines = [
+        ...result.upgraded.map((path) => `${dryRun ? "would upgrade" : "upgraded"} ${path}`),
+        ...result.failed.map((f) => `failed ${f.path}: ${f.error}`),
+      ];
+      out(json, result, lines.length > 0 ? lines.join("\n") : "No plan stores found.");
+      return result.failed.length > 0 ? 1 : 0;
     }
     case "update":
     case "self-update": {
