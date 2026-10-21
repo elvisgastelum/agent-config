@@ -24,7 +24,12 @@ const PHASE_RUNGS = {
 };
 const FAST_REVIEW = /^\s*Fast review:\s*approved by the user\b/im;
 const LADDER = /^ladder-(?:read|edit)-(fast|balanced|deep)$/;
-const MODEL_RUNGS = { haiku: "fast", sonnet: "balanced", opus: "deep" };
+const MODEL_RUNGS = [
+  ["haiku", "fast"],
+  ["sonnet", "balanced"],
+  ["opus", "deep"],
+];
+const VARIABLE = /^\$(?:\{(\w+)\}|(\w+))/;
 
 // The brief folder is <state dir>/agent-config/kick-off; the skill's own kick-off folder is not.
 const BRIEF_PATH = /(^|\/)agent-config\/kick-off\/[^/]+\.md$/;
@@ -52,11 +57,14 @@ export function decide(input) {
 }
 
 /**
- * The rung a handoff runs on: its known model override, else its ladder agent's rung. An override
- * with no known rung (fable) defers to the ladder agent; on any other agent it is denied.
+ * The rung a handoff runs on: its model override's family (an alias or a full ID), else its ladder
+ * agent's rung. An override with no known family (fable) defers to the ladder agent; on any other
+ * agent it is denied.
  */
 function rungOf(type, model) {
-  return MODEL_RUNGS[model] ?? LADDER.exec(type ?? "")?.[1];
+  const name = typeof model === "string" ? model.toLowerCase() : "";
+  const family = MODEL_RUNGS.find(([f]) => name.includes(f));
+  return family?.[1] ?? LADDER.exec(type ?? "")?.[1];
 }
 
 function handoff({ prompt, subagent_type: type, model }) {
@@ -77,11 +85,40 @@ function handoff({ prompt, subagent_type: type, model }) {
   return `kick-off-guard: a \`Phase: ${phase}\` handoff runs on the ${allowed.join(" or ")} rung, not ${ran}.\nUse ${allowed.map((r) => `ladder-read-${r}`).join(" or ")} without a model override.${fast}`;
 }
 
+/** The command's words as the shell passes them: quotes removed, escapes and variables resolved. */
+function words(command) {
+  const out = [];
+  let word = "";
+  let quote = "";
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    const variable = c === "$" && quote !== "'" ? VARIABLE.exec(command.slice(i)) : null;
+    if (variable) {
+      word += process.env[variable[1] ?? variable[2]] ?? "";
+      i += variable[0].length - 1;
+    } else if (c === "\\" && quote !== "'" && i + 1 < command.length) {
+      word += command[++i];
+    } else if (quote) {
+      if (c === quote) quote = "";
+      else word += c;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+    } else if (/[\s<>|;&()]/.test(c)) {
+      if (word) out.push(word);
+      word = "";
+    } else {
+      word += c;
+    }
+  }
+  if (word) out.push(word);
+  return out;
+}
+
 /** The brief a clipboard command reads, resolved against `cwd`. */
 function briefPath(command, cwd) {
-  const token = command.split(/[\s'"<>|;&()]+/).find((t) => BRIEF_PATH.test(t));
-  if (!token) return undefined;
-  const path = token.replace(/^(~|\$HOME|\$\{HOME\})(?=\/)/, homedir());
+  const word = words(command).find((w) => BRIEF_PATH.test(w));
+  if (!word) return undefined;
+  const path = word.replace(/^~(?=\/)/, homedir());
   if (isAbsolute(path)) return path;
   return typeof cwd === "string" ? join(cwd, path) : undefined;
 }

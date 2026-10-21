@@ -16,8 +16,8 @@ const bash = (command: string, cwd?: string) =>
   decide({ tool_name: "Bash", cwd, tool_input: { command } });
 
 const dirs: string[] = [];
-const tempDir = () => {
-  const dir = mkdtempSync(join(tmpdir(), "kick-off-"));
+const tempDir = (prefix = "kick-off-") => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
   dirs.push(dir);
   return dir;
 };
@@ -55,6 +55,9 @@ describe("kick-off guard: phase rungs", () => {
     expect(agent(prompt, "general-purpose", "fable")).toBeDefined();
     expect(agent(prompt, "ladder-read-deep", "fable")).toBeUndefined();
     expect(agent(prompt, "ladder-read-fast", "fable")).toContain("fast rung");
+    expect(agent(prompt, "ladder-read-deep", "claude-haiku-5-5")).toContain("fast rung");
+    expect(agent(prompt, "general-purpose", "claude-opus-5-5")).toBeUndefined();
+    expect(agent("Phase: review", "ladder-read-fast", "claude-sonnet-5-5")).toBeUndefined();
   });
 
   test("Phase: risk is deep-only", () => {
@@ -165,6 +168,28 @@ describe("kick-off guard: brief copies", () => {
     } finally {
       if (original === undefined) delete process.env.HOME;
       else process.env.HOME = original;
+    }
+  });
+
+  test("a brief path with spaces is checked, quoted or escaped", () => {
+    const dir = tempDir("kick off ");
+    const path = writeBrief(dir, "FEX-6.md", INCOMPLETE);
+    expect(bash(`pbcopy < "${path}"`)).toContain("/continue");
+    expect(bash(`cat '${path}' | pbcopy`)).toContain("/continue");
+    expect(bash(`pbcopy < ${path.replaceAll(" ", "\\ ")}`)).toContain("/continue");
+  });
+
+  test("environment variables in the brief path expand", () => {
+    const dir = tempDir();
+    writeBrief(dir, "FEX-7.md", INCOMPLETE);
+    const original = process.env.XDG_STATE_HOME;
+    try {
+      process.env.XDG_STATE_HOME = dir;
+      expect(bash('pbcopy < "${XDG_STATE_HOME}/agent-config/kick-off/FEX-7.md"')).toBeDefined();
+      expect(bash("pbcopy < $XDG_STATE_HOME/agent-config/kick-off/FEX-7.md")).toBeDefined();
+    } finally {
+      if (original === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = original;
     }
   });
 
