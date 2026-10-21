@@ -4419,10 +4419,10 @@ const STORY_SIZES = [
 ];
 /**
 * The plan store's schema. Every statement is idempotent, so running it on an existing store is
-* safe. The `waves` view layers open tickets by their unfinished blockers.
+* safe. The `waves` view layers open tickets by their unfinished blockers and leaves out every
+* ticket in a dependency cycle or behind one (`stuck`), since none of them can start.
 */
-const PLAN_SCHEMA = `PRAGMA foreign_keys = ON;
-CREATE TABLE IF NOT EXISTS plan (
+const PLAN_SCHEMA = `CREATE TABLE IF NOT EXISTS plan (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   title TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN (${KIND_NAMES.map((k) => `'${k}'`).join(", ")})),
@@ -4484,16 +4484,29 @@ CREATE TABLE IF NOT EXISTS findings (
   ticket_id TEXT REFERENCES tickets(id)
 );
 CREATE VIEW IF NOT EXISTS waves AS
-WITH RECURSIVE layer(ticket_id, wave) AS (
-  SELECT t.id, 1 FROM tickets t
-  WHERE t.status <> 'done' AND NOT EXISTS (
-    SELECT 1 FROM blocks b JOIN tickets p ON p.id = b.blocker
-    WHERE b.blocked = t.id AND p.status <> 'done')
-  UNION
-  SELECT b.blocked, layer.wave + 1 FROM layer
-  JOIN blocks b ON b.blocker = layer.ticket_id
+WITH RECURSIVE
+open_blocks(blocker, blocked) AS (
+  SELECT b.blocker, b.blocked FROM blocks b
+  JOIN tickets p ON p.id = b.blocker
   JOIN tickets t ON t.id = b.blocked
-  WHERE t.status <> 'done' AND layer.wave < (SELECT COUNT(*) FROM tickets)
+  WHERE p.status <> 'done' AND t.status <> 'done'
+),
+reach(src, dst) AS (
+  SELECT blocker, blocked FROM open_blocks
+  UNION
+  SELECT reach.src, o.blocked FROM reach JOIN open_blocks o ON o.blocker = reach.dst
+),
+stuck(id) AS (
+  SELECT DISTINCT r.dst FROM reach r JOIN reach c ON c.src = r.src AND c.dst = c.src
+),
+layer(ticket_id, wave) AS (
+  SELECT t.id, 1 FROM tickets t
+  WHERE t.status <> 'done'
+    AND NOT EXISTS (SELECT 1 FROM open_blocks o WHERE o.blocked = t.id)
+  UNION
+  SELECT o.blocked, layer.wave + 1 FROM layer
+  JOIN open_blocks o ON o.blocker = layer.ticket_id
+  WHERE o.blocked NOT IN (SELECT id FROM stuck)
 )
 SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
 FROM layer JOIN tickets t ON t.id = layer.ticket_id
@@ -4623,7 +4636,7 @@ Hand the store to ${deep} (${code(phase("plan"))}, task: draft the tickets) and 
 - A project splits into epics; every epic splits into stories; a feat, fix or ticket that fits ${code(MAX_STORY_SIZE)} stays one story.
 - Every story has a specific title, its outcome, "done when" criteria, a size (${STORY_SIZES.map(code).join(", ")}) and its ${code(TOUCHES_LINE)} areas or paths.
 - Cut for parallel work: shared foundations (schemas, contracts, scaffolding, design tokens) come first; after them, stories in separate areas that do not wait on each other. Add a \`blocks\` edge only where one story needs another's result.
-- ${WAVE_RULE} Check the waves with the store's \`waves\` view: tickets missing from it sit in a dependency cycle, which the draft breaks.
+- ${WAVE_RULE} Check the waves with the store's \`waves\` view: an open ticket missing from it sits in a dependency cycle or behind one, and the draft breaks that cycle.
 
 ## 6. Final review
 

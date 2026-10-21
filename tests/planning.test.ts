@@ -59,6 +59,19 @@ describe("PLAN_SCHEMA", () => {
     expect(waves(db)).toEqual([]);
   });
 
+  test("leaves tickets behind a cycle out even when an open ticket also leads to them", () => {
+    const db = store();
+    for (const id of ["A", "C", "Y", "D", "E"]) addTicket(db, id);
+    block(db, "A", "C");
+    block(db, "C", "Y");
+    block(db, "Y", "C");
+    block(db, "C", "D");
+    expect(waves(db)).toEqual([
+      { ticket_id: "A", wave: 1 },
+      { ticket_id: "E", wave: 1 },
+    ]);
+  });
+
   test("rejects a story larger than P5", () => {
     expect(() => addTicket(store(), "BIG", "todo", "P8")).toThrow();
   });
