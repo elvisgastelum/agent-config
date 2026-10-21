@@ -229,6 +229,26 @@ describe("kick-off guard: brief copies", () => {
     expect(bash(`printf x | /usr/bin/tee ${complete} | pbcopy`)).toContain("separate commands");
   });
 
+  test("the project skill's portable brief folder expands with its default", () => {
+    const dir = tempDir();
+    writeBrief(join(dir, ".local", "state"), "FEX-19.md", brief());
+    writeBrief(dir, "FEX-19.md", INCOMPLETE);
+    const copy = 'pbcopy < "${XDG_STATE_HOME:-~/.local/state}/agent-config/kick-off/FEX-19.md"';
+    const original = { HOME: process.env.HOME, XDG_STATE_HOME: process.env.XDG_STATE_HOME };
+    try {
+      process.env.HOME = dir;
+      delete process.env.XDG_STATE_HOME;
+      expect(bash(copy)).toBeUndefined();
+      process.env.XDG_STATE_HOME = dir;
+      expect(bash(copy)).toContain("FEX-19.md");
+    } finally {
+      for (const [name, value] of Object.entries(original)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   test("environment variables in the brief path expand", () => {
     const dir = tempDir();
     writeBrief(dir, "FEX-7.md", INCOMPLETE);

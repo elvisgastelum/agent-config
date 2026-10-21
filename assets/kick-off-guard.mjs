@@ -98,8 +98,8 @@ const SINGLE_QUOTE = "'";
 const DOUBLE_QUOTE = '"';
 const ESCAPE = "\\";
 const VARIABLE_SIGIL = "$";
-/** `$NAME` or `${NAME}`. */
-const SHELL_VARIABLE = /^\$(?:\{(\w+)\}|(\w+))/;
+/** `$NAME`, `${NAME}`, or `${NAME:-default}` (the default when NAME is unset or empty). */
+const SHELL_VARIABLE = /^\$(?:\{(\w+)(?::?-([^}]*))?\}|(\w+))/;
 const NEWLINE = "\n";
 /** Operators that end a pipeline (`&&` and `||` before `&` and `|`, which they start with). */
 const LIST_OPERATORS = ["&&", "||", ";", "&", NEWLINE];
@@ -232,7 +232,8 @@ function parse(command) {
     const list =
       quote || allOutput ? undefined : LIST_OPERATORS.find((op) => command.startsWith(op, i));
     if (variable) {
-      word += process.env[variable[1] ?? variable[2]] ?? "";
+      const [, braced, fallback, bare] = variable;
+      word += process.env[braced ?? bare] || (fallback ?? "");
       i += variable[0].length - 1;
     } else if (expands && c === ESCAPE && i + 1 < command.length) {
       word += command[++i];
