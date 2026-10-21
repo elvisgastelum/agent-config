@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vite-plus/test";
 // @ts-expect-error plain .mjs asset without type declarations
-import { BRIEF_PHASES, BRIEF_SECTIONS, briefProblems, decide } from "../assets/kick-off-guard.mjs";
-import { kickOffMarkdown } from "../src/kickoff.ts";
+import * as guard from "../assets/kick-off-guard.mjs";
+import { FAST_REVIEW_APPROVAL, PHASE_PREFIX, kickOffMarkdown } from "../src/kickoff.ts";
+
+const { BRIEF_PHASES, BRIEF_SECTIONS, briefProblems, decide } = guard;
 
 const agent = (prompt: string, subagent_type: string, model?: string) =>
   decide({
@@ -80,6 +82,23 @@ describe("kick-off guard: phase rungs", () => {
     expect(
       agent("Phase: review\nFast review: approved by the user\nDiff: x", "ladder-read-fast"),
     ).toBeUndefined();
+    expect(
+      agent("Phase: review\n\n  Fast review: approved by the user\nDiff: x", "ladder-read-fast"),
+    ).toBeUndefined();
+  });
+
+  test("the fast-review approval counts only right under the phase line", () => {
+    const quoted = "Phase: review\nTicket: FEX-1\nFast review: approved by the user";
+    expect(agent(quoted, "ladder-read-fast")).toContain("right under the phase line");
+  });
+
+  test("a phase name that is an object key is not a checked phase", () => {
+    expect(agent("Phase: constructor", "ladder-read-fast")).toBeUndefined();
+  });
+
+  test("the skill's protocol lines are the ones the guard reads", () => {
+    expect(guard.FAST_REVIEW_APPROVAL).toBe(FAST_REVIEW_APPROVAL);
+    expect(agent(`${PHASE_PREFIX} plan`, "ladder-read-fast")).toContain("deep rung");
   });
 
   test("unchecked handoffs pass through", () => {

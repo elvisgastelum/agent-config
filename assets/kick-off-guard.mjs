@@ -4,9 +4,10 @@
 // Holds a /kick-off run to its structure:
 // - A delegated handoff whose prompt starts with `Phase: <phase>` runs on the rung that phase
 //   allows: diagnose, plan and risk on deep; review on deep or balanced, and on fast only when the
-//   handoff carries `Fast review: approved by the user`. Edit and fix handoffs are not checked.
-// - A Bash command that copies a kick-off brief (`agent-config/kick-off/<ID>.md`) to the clipboard is denied
-//   until the brief starts with /continue and has every section and phase the loop needs.
+//   line right under the phase line is `Fast review: approved by the user`. Edit and fix handoffs
+//   are not checked.
+// - A Bash command that copies a kick-off brief (`agent-config/kick-off/<ID>.md`) to the clipboard
+//   is denied until the brief starts with /continue and has every section and phase the loop needs.
 //
 // Any unexpected input or error lets the call through: the guard never breaks a session.
 
@@ -15,26 +16,54 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const PHASE = /^Phase:\s*([a-z]+)/i;
-const PHASE_RUNGS = {
-  diagnose: ["deep"],
-  plan: ["deep"],
-  risk: ["deep"],
-  review: ["deep", "balanced"],
-};
-const FAST_REVIEW = /^\s*Fast review:\s*approved by the user\b/im;
-const LADDER = /^ladder-(?:read|edit)-(fast|balanced|deep)$/;
-const MODEL_RUNGS = [
+const GUARD = "kick-off-guard";
+
+// ---------------------------------------------------------------- handoffs
+
+/** Claude tools that start a delegated agent; their prompt is the handoff. */
+const HANDOFF_TOOLS = new Set(["Agent", "Task"]);
+
+/** A handoff's first non-empty line names its phase, e.g. `Phase: plan`. */
+const PHASE_LINE = /^Phase:\s*([a-z]+)/i;
+
+/** The rungs each checked phase may run on; edit and fix are absent, so they are not checked. */
+const PHASE_RUNGS = new Map([
+  ["diagnose", ["deep"]],
+  ["plan", ["deep"]],
+  ["risk", ["deep"]],
+  ["review", ["deep", "balanced"]],
+]);
+const REVIEW_PHASE = "review";
+const FAST_RUNG = "fast";
+
+/** The line, right under the phase line, that lets a review run on the fast rung. */
+export const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
+
+/** Ladder agents carry their rung in their name: ladder-read-deep, ladder-edit-fast. */
+const LADDER_AGENT = /^ladder-(?:read|edit)-(fast|balanced|deep)$/;
+const READ_AGENT_PREFIX = "ladder-read-";
+
+/** Model families and their rung; an alias (haiku) or a full ID (claude-haiku-5-5) names one. */
+const MODEL_FAMILY_RUNGS = [
   ["haiku", "fast"],
   ["sonnet", "balanced"],
   ["opus", "deep"],
 ];
-const VARIABLE = /^\$(?:\{(\w+)\}|(\w+))/;
 
-// The brief folder is <state dir>/agent-config/kick-off; the skill's own kick-off folder is not.
-const BRIEF_PATH = /(^|\/)agent-config\/kick-off\/[^/]+\.md$/;
-const CLIPBOARD =
+// ---------------------------------------------------------------- brief copies
+
+const SHELL_TOOL = "Bash";
+
+/** A clipboard tool run as a command, not as part of a longer word. */
+const CLIPBOARD_COMMAND =
   /(^|[\s|;&(])(pbcopy|wl-copy|xclip|xsel|clip(\.exe)?|Set-Clipboard)(?=[\s;&|<>)]|$)/;
+
+/** Briefs live in <state dir>/agent-config/kick-off; the skill's own kick-off folder does not match. */
+const BRIEF_PATH = /(^|\/)agent-config\/kick-off\/[^/]+\.md$/;
+
+/** The command a brief opens with: `/continue` or `/continue parallel <n>`. */
+const CONTINUE_COMMAND = /^\/continue(\s|$)/;
+
 export const BRIEF_SECTIONS = [
   "# Kick-off:",
   "## Epic",
@@ -45,44 +74,68 @@ export const BRIEF_SECTIONS = [
 ];
 export const BRIEF_PHASES = ["Phase: plan", "Phase: risk", "Phase: review"];
 
+// Shell syntax the brief-path reader resolves.
+const SINGLE_QUOTE = "'";
+const DOUBLE_QUOTE = '"';
+const ESCAPE = "\\";
+const VARIABLE_SIGIL = "$";
+/** `$NAME` or `${NAME}`. */
+const SHELL_VARIABLE = /^\$(?:\{(\w+)\}|(\w+))/;
+/** Characters that end an unquoted shell word: whitespace, redirects, pipes, separators, subshells. */
+const WORD_BREAK = /[\s<>|;&()]/;
+/** A leading `~/`, which the shell expands to the home directory. */
+const HOME_TILDE = /^~(?=\/)/;
+
+// ---------------------------------------------------------------- hook protocol
+
+const HOOK_EVENT = "PreToolUse";
+const DENY = "deny";
+
 /** Returns the reason to deny a tool call, or undefined to let it through. */
 export function decide(input) {
   const tool = input?.tool_name;
   const args = input?.tool_input;
-  if ((tool === "Agent" || tool === "Task") && typeof args?.prompt === "string") {
-    return handoff(args);
+  if (HANDOFF_TOOLS.has(tool) && typeof args?.prompt === "string") return handoff(args);
+  if (tool === SHELL_TOOL && typeof args?.command === "string") {
+    return copy(args.command, input.cwd);
   }
-  if (tool === "Bash" && typeof args?.command === "string") return copy(args.command, input.cwd);
   return undefined;
 }
 
+function nonEmptyLines(text) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+}
+
 /**
- * The rung a handoff runs on: its model override's family (an alias or a full ID), else its ladder
- * agent's rung. An override with no known family (fable) defers to the ladder agent; on any other
- * agent it is denied.
+ * The rung a handoff runs on: its model override's family, else its ladder agent's rung. An
+ * override with no known family (fable) defers to the ladder agent; on any other agent it is denied.
  */
 function rungOf(type, model) {
   const name = typeof model === "string" ? model.toLowerCase() : "";
-  const family = MODEL_RUNGS.find(([f]) => name.includes(f));
-  return family?.[1] ?? LADDER.exec(type ?? "")?.[1];
+  const family = MODEL_FAMILY_RUNGS.find(([f]) => name.includes(f));
+  return family?.[1] ?? LADDER_AGENT.exec(type ?? "")?.[1];
 }
 
 function handoff({ prompt, subagent_type: type, model }) {
-  const first = prompt.split("\n").find((line) => line.trim() !== "") ?? "";
-  const phase = PHASE.exec(first.trim())?.[1]?.toLowerCase();
-  const allowed = PHASE_RUNGS[phase];
+  const [first = "", second = ""] = nonEmptyLines(prompt);
+  const phase = PHASE_LINE.exec(first)?.[1]?.toLowerCase();
+  const allowed = PHASE_RUNGS.get(phase);
   if (!allowed) return undefined;
   const rung = rungOf(type, model);
   if (rung && allowed.includes(rung)) return undefined;
-  if (phase === "review" && rung === "fast" && FAST_REVIEW.test(prompt)) return undefined;
+  const review = phase === REVIEW_PHASE;
+  if (review && rung === FAST_RUNG && second.startsWith(FAST_REVIEW_APPROVAL)) return undefined;
   const ran = rung
     ? `the ${rung} rung`
     : `\`${type ?? "the default agent"}\`${model ? ` with model "${model}"` : ""}`;
-  const fast =
-    phase === "review"
-      ? ' A fast review needs the line "Fast review: approved by the user", and only when the user asked for it.'
-      : "";
-  return `kick-off-guard: a \`Phase: ${phase}\` handoff runs on the ${allowed.join(" or ")} rung, not ${ran}.\nUse ${allowed.map((r) => `ladder-read-${r}`).join(" or ")} without a model override.${fast}`;
+  const agents = allowed.map((r) => `${READ_AGENT_PREFIX}${r}`).join(" or ");
+  const fast = review
+    ? ` A fast review needs the line "${FAST_REVIEW_APPROVAL}" right under the phase line, and only when the user asked for it.`
+    : "";
+  return `${GUARD}: a \`Phase: ${phase}\` handoff runs on the ${allowed.join(" or ")} rung, not ${ran}.\nUse ${agents} without a model override.${fast}`;
 }
 
 /** The command's words as the shell passes them: quotes removed, escapes and variables resolved. */
@@ -92,18 +145,19 @@ function words(command) {
   let quote = "";
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
-    const variable = c === "$" && quote !== "'" ? VARIABLE.exec(command.slice(i)) : null;
+    const expands = quote !== SINGLE_QUOTE;
+    const variable = expands && c === VARIABLE_SIGIL ? SHELL_VARIABLE.exec(command.slice(i)) : null;
     if (variable) {
       word += process.env[variable[1] ?? variable[2]] ?? "";
       i += variable[0].length - 1;
-    } else if (c === "\\" && quote !== "'" && i + 1 < command.length) {
+    } else if (expands && c === ESCAPE && i + 1 < command.length) {
       word += command[++i];
     } else if (quote) {
       if (c === quote) quote = "";
       else word += c;
-    } else if (c === "'" || c === '"') {
+    } else if (c === SINGLE_QUOTE || c === DOUBLE_QUOTE) {
       quote = c;
-    } else if (/[\s<>|;&()]/.test(c)) {
+    } else if (WORD_BREAK.test(c)) {
       if (word) out.push(word);
       word = "";
     } else {
@@ -118,7 +172,7 @@ function words(command) {
 function briefPath(command, cwd) {
   const word = words(command).find((w) => BRIEF_PATH.test(w));
   if (!word) return undefined;
-  const path = word.replace(/^~(?=\/)/, homedir());
+  const path = word.replace(HOME_TILDE, homedir());
   if (isAbsolute(path)) return path;
   return typeof cwd === "string" ? join(cwd, path) : undefined;
 }
@@ -126,9 +180,9 @@ function briefPath(command, cwd) {
 /** What a brief is missing; empty when it is complete. */
 export function briefProblems(text) {
   const lines = text.split("\n");
-  const first = lines.find((line) => line.trim() !== "")?.trim() ?? "";
+  const [first = ""] = nonEmptyLines(text);
   const problems = [];
-  if (!/^\/continue(\s|$)/.test(first)) {
+  if (!CONTINUE_COMMAND.test(first)) {
     problems.push("its first line must be `/continue` or `/continue parallel <n>`");
   }
   const sections = BRIEF_SECTIONS.filter((s) => !lines.some((line) => line.startsWith(s)));
@@ -139,7 +193,7 @@ export function briefProblems(text) {
 }
 
 function copy(command, cwd) {
-  if (!CLIPBOARD.test(command)) return undefined;
+  if (!CLIPBOARD_COMMAND.test(command)) return undefined;
   const path = briefPath(command, cwd);
   if (!path) return undefined;
   let text;
@@ -150,7 +204,7 @@ function copy(command, cwd) {
   }
   const problems = briefProblems(text);
   if (problems.length === 0) return undefined;
-  return `kick-off-guard: the brief ${path} is not ready to copy: ${problems.join("; ")}.\nFix it from the template in the kick-off skill, then copy it again.`;
+  return `${GUARD}: the brief ${path} is not ready to copy: ${problems.join("; ")}.\nFix it from the template in the kick-off skill, then copy it again.`;
 }
 
 function main() {
@@ -164,8 +218,8 @@ function main() {
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
+        hookEventName: HOOK_EVENT,
+        permissionDecision: DENY,
         permissionDecisionReason: reason,
       },
     }),

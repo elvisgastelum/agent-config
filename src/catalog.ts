@@ -30,7 +30,12 @@ import {
   kaneoUrlWarning,
 } from "./kaneo.ts";
 import { LADDER_ITEM, opKey, type Op } from "./ops.ts";
-import { KICK_OFF, KICK_OFF_GUARD_FILE, kickOffMarkdown } from "./kickoff.ts";
+import {
+  KICK_OFF,
+  KICK_OFF_GUARD_FILE,
+  KICK_OFF_GUARD_MATCHER,
+  kickOffMarkdown,
+} from "./kickoff.ts";
 import {
   claudeDir,
   claudeJsonPath,
@@ -580,11 +585,14 @@ function continueOps(runtime: Runtime, project: string | undefined, config: Conf
 
 // ---------------------------------------------------------------- kick-off
 
+/** How the skill shows the home directory. */
+const HOME_SHORTHAND = "~";
+
 /** The brief folder as the skill shows it: under the home directory it reads `~/...`. */
 function briefDirText(): string {
   const dir = kickOffDir();
   const root = home();
-  return dir.startsWith(`${root}/`) ? `~${dir.slice(root.length)}` : dir;
+  return dir.startsWith(`${root}/`) ? `${HOME_SHORTHAND}${dir.slice(root.length)}` : dir;
 }
 
 /** Claude only: the guard that keeps phase rungs and the brief structure honest. */
@@ -592,9 +600,9 @@ function kickOffGuardOps(project: string | undefined): Op[] {
   return guardHookOps(
     project,
     KICK_OFF_GUARD_FILE,
-    "Agent|Task|Bash",
+    KICK_OFF_GUARD_MATCHER,
     "kick-off-guard hook script",
-    "PreToolUse hook (Agent|Task|Bash) kick-off guard",
+    `PreToolUse hook (${KICK_OFF_GUARD_MATCHER}) kick-off guard`,
   );
 }
 
