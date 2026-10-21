@@ -264,6 +264,20 @@ describe("kick-off guard: brief copies", () => {
     expect(bash(`printf x | tee ${complete} | pbcopy`)).toContain("separate commands");
   });
 
+  test("a heredoc body is input, not shell code", () => {
+    const dir = tempDir();
+    const fresh = join(dir, "agent-config", "kick-off", "FEX-17.md");
+    const body = "the ticket's criteria\n\tand the epic goal";
+    expect(bash(`cat > ${fresh} <<'EOF'\n${body}\nEOF\npbcopy < ${fresh}`)).toContain(
+      "separate commands",
+    );
+    expect(bash(`cat > ${fresh} <<-EOF\n${body}\n\tEOF\npbcopy < ${fresh}`)).toContain(
+      "separate commands",
+    );
+    const incomplete = writeBrief(dir, "FEX-18.md", INCOMPLETE);
+    expect(bash(`cat <<EOF\ncat ${incomplete} | pbcopy\nEOF`)).toBeUndefined();
+  });
+
   test("every brief a clipboard pipeline reads is checked", () => {
     const dir = tempDir();
     const complete = writeBrief(dir, "FEX-10.md", brief());

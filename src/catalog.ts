@@ -588,8 +588,18 @@ function continueOps(runtime: Runtime, project: string | undefined, config: Conf
 /** How the skill shows the home directory. */
 const HOME_SHORTHAND = "~";
 
-/** The brief folder as the skill shows it: under the home directory it reads `~/...`. */
-function briefDirText(): string {
+/**
+ * `kickOffDir()` as a shell path, for a committed project skill that other machines run: it names
+ * no one's state directory.
+ */
+const PORTABLE_BRIEF_DIR = "${XDG_STATE_HOME:-~/.local/state}/agent-config/kick-off";
+
+/**
+ * The brief folder as the skill shows it: portable in a project, and under the home directory it
+ * reads `~/...`.
+ */
+function briefDirText(project: string | undefined): string {
+  if (project) return PORTABLE_BRIEF_DIR;
   const dir = kickOffDir();
   const root = home();
   return dir.startsWith(`${root}/`) ? `${HOME_SHORTHAND}${dir.slice(root.length)}` : dir;
@@ -615,7 +625,7 @@ function kickOffOps(runtime: Runtime, project: string | undefined, config: Confi
       balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
       deep: modelName(runtime, tiers, tiers.deep.effort, "deep"),
     },
-    briefDirText(),
+    briefDirText(project),
   );
   const ops = actionOps(runtime, project, KICK_OFF, content, "kick-off");
   if (runtime === "claude") ops.push(...kickOffGuardOps(project));

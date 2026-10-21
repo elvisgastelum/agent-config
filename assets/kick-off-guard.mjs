@@ -100,8 +100,13 @@ const ESCAPE = "\\";
 const VARIABLE_SIGIL = "$";
 /** `$NAME` or `${NAME}`. */
 const SHELL_VARIABLE = /^\$(?:\{(\w+)\}|(\w+))/;
+const NEWLINE = "\n";
 /** Operators that end a pipeline (`&&` and `||` before `&` and `|`, which they start with). */
-const LIST_OPERATORS = ["&&", "||", ";", "&", "\n"];
+const LIST_OPERATORS = ["&&", "||", ";", "&", NEWLINE];
+/** `<<EOF` or `<<-EOF` (not the `<<<` here-string): the next lines up to `EOF` are input, not code. */
+const HEREDOC = /^<<(?!<)-?/;
+/** `<<-` lets the closing delimiter line start with tabs. */
+const LEADING_TABS = /^\t+/;
 /** Joins the commands of one pipeline. */
 const PIPE = "|";
 const OUTPUT_REDIRECT = ">";
@@ -199,22 +204,28 @@ function write({ file_path: path, content }) {
  */
 function parse(command) {
   const pipelines = [[[]]];
+  const heredocs = [];
   let word = "";
   let quote = "";
   let redirect = "";
+  let delimiterNext = false;
   const end = () => {
-    if (word)
+    if (!word) return;
+    if (delimiterNext) heredocs.push(word);
+    else
       pipelines
         .at(-1)
         .at(-1)
         .push({ text: word, output: redirect === OUTPUT_REDIRECT });
-    if (word) redirect = "";
+    delimiterNext = false;
+    redirect = "";
     word = "";
   };
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
     const expands = quote !== SINGLE_QUOTE;
     const variable = expands && c === VARIABLE_SIGIL ? SHELL_VARIABLE.exec(command.slice(i)) : null;
+    const heredoc = !quote && c === INPUT_REDIRECT ? HEREDOC.exec(command.slice(i)) : null;
     const allOutput = !quote && command.startsWith(ALL_OUTPUT_REDIRECT, i);
     const list =
       quote || allOutput ? undefined : LIST_OPERATORS.find((op) => command.startsWith(op, i));
@@ -230,10 +241,15 @@ function parse(command) {
       quote = c;
     } else if (allOutput) {
       end();
+    } else if (heredoc) {
+      end();
+      delimiterNext = true;
+      i += heredoc[0].length - 1;
     } else if (list) {
       end();
       pipelines.push([[]]);
       i += list.length - 1;
+      if (list === NEWLINE) i = afterHeredocs(command, i + 1, heredocs.splice(0)) - 1;
     } else if (c === PIPE) {
       end();
       pipelines.at(-1).push([]);
@@ -250,6 +266,21 @@ function parse(command) {
   }
   end();
   return pipelines;
+}
+
+/** Where the heredoc bodies starting at `from` end: each runs through a line holding its delimiter. */
+function afterHeredocs(command, from, delimiters) {
+  let at = from;
+  for (const delimiter of delimiters) {
+    while (at < command.length) {
+      const next = command.indexOf(NEWLINE, at);
+      const lineEnd = next === -1 ? command.length : next;
+      const line = command.slice(at, lineEnd).replace(LEADING_TABS, "");
+      at = lineEnd + 1;
+      if (line === delimiter) break;
+    }
+  }
+  return Math.min(at, command.length);
 }
 
 /** A command's name: its first word that is not an environment assignment. */
