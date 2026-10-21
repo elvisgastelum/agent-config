@@ -2,7 +2,13 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "vite-plus/test";
 import { WAVE_RULE } from "../src/kaneo.ts";
 import { PHASE_PREFIX } from "../src/loop.ts";
-import { PLAN_KINDS, PLAN_SCHEMA, PLAN_STORE_PATH, planningMarkdown } from "../src/planning.ts";
+import {
+  PLAN_KINDS,
+  PLAN_SCHEMA,
+  PLAN_STORE_PATH,
+  STORE_WRITE_PREFIX,
+  planningMarkdown,
+} from "../src/planning.ts";
 
 const MODELS = { fast: "fast-model", deep: "deep-model" };
 
@@ -72,6 +78,19 @@ describe("PLAN_SCHEMA", () => {
     ]);
   });
 
+  test("refuses a blocker that names no ticket when a write starts with the prefix", () => {
+    const db = store();
+    addTicket(db, "A");
+    // A new sqlite3 call starts with the checks off, as every connection does.
+    db.exec("PRAGMA foreign_keys = OFF;");
+    expect(() =>
+      db.exec("INSERT INTO blocks (blocker, blocked) VALUES ('UNCHECKED', 'A');"),
+    ).not.toThrow();
+    expect(() =>
+      db.exec(`${STORE_WRITE_PREFIX} INSERT INTO blocks (blocker, blocked) VALUES ('GHOST', 'A');`),
+    ).toThrow();
+  });
+
   test("rejects a story larger than P5", () => {
     expect(() => addTicket(store(), "BIG", "todo", "P8")).toThrow();
   });
@@ -86,6 +105,7 @@ describe("planningMarkdown", () => {
     for (const [kind, cap] of Object.entries(PLAN_KINDS)) expect(text).toContain(`${kind} ${cap}`);
     expect(text).toContain(PLAN_STORE_PATH);
     expect(text).toContain(WAVE_RULE);
+    expect(text).toContain(`\`${STORE_WRITE_PREFIX}\``);
   });
 
   test("asks with the question tool on Claude and in a numbered message elsewhere", () => {

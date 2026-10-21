@@ -49,7 +49,11 @@ const STORY_SIZES = [GAP_SIZE, "P2", "P3", MAX_STORY_SIZE] as const;
  * safe. The `waves` view layers open tickets by their unfinished blockers and leaves out every
  * ticket in a dependency cycle or behind one (`stuck`), since none of them can start.
  */
-export const PLAN_SCHEMA = `CREATE TABLE IF NOT EXISTS plan (
+/** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
+export const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
+
+export const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
+CREATE TABLE IF NOT EXISTS plan (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   title TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN (${KIND_NAMES.map((k) => `'${k}'`).join(", ")})),
@@ -322,7 +326,7 @@ Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is
 ${PLAN_SCHEMA}
 \`\`\`
 
-Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
 ## Design system standard
 

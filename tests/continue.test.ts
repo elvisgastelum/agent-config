@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vite-plus/test";
 import { PARALLEL_WAVE, continueMarkdown } from "../src/continue.ts";
 import { WAVE_RULE } from "../src/kaneo.ts";
+import { kickOffMarkdown } from "../src/kickoff.ts";
 import { ROUTED_REVIEW, ticketPhases } from "../src/loop.ts";
 
 const MODELS = { fast: "fast-model", balanced: "balanced-model", deep: "deep-model" };
@@ -44,6 +45,15 @@ describe("continueMarkdown", () => {
     );
     expect(waveSection(continueMarkdown("pi", MODELS, BRIEF_DIR))).toContain(
       `\`/continue ${PARALLEL_WAVE}\` builds it`,
+    );
+  });
+});
+
+describe("kickOffMarkdown", () => {
+  test("numbers the shared ticket phases inside the brief's loop", () => {
+    const text = kickOffMarkdown("claude", MODELS, BRIEF_DIR);
+    ticketPhases("<branch>", "<review routing>").forEach((step, i) =>
+      expect(text).toContain(`${i + 2}. ${step}`),
     );
   });
 });
