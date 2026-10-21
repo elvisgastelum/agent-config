@@ -119,6 +119,7 @@ agi install kaneo --project .                   # one repository, committed with
 agi install commit                              # title-only commits, drafted by a cheap model
 agi install continue                            # /continue: work the next Kaneo ticket end to end
 agi install kick-off                            # /kick-off: brief a whole Kaneo epic for /continue
+agi install planning                            # /planning: plan work with you, then tickets for /continue
 agi install statusline                          # compact Claude Code status line
 agi uninstall kaneo [--project .]               # remove that copy only
 ```
@@ -133,7 +134,7 @@ The ladder agents, routing skill, instructions block, read guard and review mode
 
 [Kaneo](https://kaneo.app) work tracking, moved here from [kaneo-work-tracking-skill](https://github.com/elvisgastelum/kaneo-work-tracking-skill):
 
-- `kaneo-work-tracking` skill: stories, Fibonacci point labels, splitting with `blocks` relations, ticket identifiers such as `FEX-2`, branch names `FEX-2/short-description`, and PR bodies that link the ticket.
+- `kaneo-work-tracking` skill: stories, Fibonacci point labels, splitting with `blocks` relations, ticket identifiers such as `FEX-2`, branch names `FEX-2/short-description`, PR bodies that link the ticket, and epics: a task titled `Epic: <outcome>` labelled `epic`, with stories starting `Epic: <EPIC-ID>` and `Touches: <areas>` lines.
 - Cheap models: the skill gathers ticket context with `ladder-read-fast` and hands ticket writes and board summaries to **`kaneo-scribe`**, an agent on your fast rung that only has the Kaneo MCP tools, so Kaneo JSON never fills the main session.
 - An always-on instructions block, and the `kaneo` MCP server at `<base-url>/api/mcp`. A pasted dashboard or MCP link is cut back to the base URL, and a non-local `http://` URL gets a warning. When you omit `--url`, the URL is reused from an existing `kaneo` entry in `~/.claude.json`, OpenCode or Pi; for `--project` installs agent-config says so, because the URL lands in files you commit.
 
@@ -171,7 +172,8 @@ A block left by the old standalone installer (`BEGIN claude-commit-skill`) is re
 A manual action that works Kaneo tickets end to end, moved here from [claude-continue-skill](https://github.com/elvisgastelum/claude-continue-skill). Install `kaneo` and `commit` with it (and the model ladder for its read and edit agents).
 
 - `/continue` (`$continue` in Codex) picks the next unblocked ticket, moves it to In Progress, branches `<IDENTIFIER>/<description>`, implements it with tests and docs, commits with the `commit` skill and opens the PR.
-- `/continue parallel [n]` (default 4) picks up to n tickets that do not block each other or touch the same area, builds each in its own worktree at `<repo-parent>/<repo-name>-worktrees/` with one sub-agent per ticket, then merges the PRs one at a time, bringing each branch up to date with the default branch first.
+- `/continue [parallel [n] | parallel-wave]` (`$continue` with the same argument in Codex). `parallel [n]` (default 4) picks up to n tickets that do not block each other or touch the same area, builds each in its own worktree at `<repo-parent>/<repo-name>-worktrees/` with one sub-agent per ticket, then merges the PRs one at a time, bringing each branch up to date with the default branch first.
+- `/continue parallel-wave` picks an open Kaneo epic (it asks which one when several can start in any order, and takes the recommendation when you skip), splits the epic's open stories into waves (no unfinished blocker; stories whose `Touches:` areas overlap move to the next wave), and builds the first wave in parallel worktrees through the kick-off phases: plan and risk on the deep rung, cheap edits, risk-routed review. It merges one by one into the integration branch (the epic's kick-off brief, else `dev` when `origin/dev` exists, else the default branch) and ends with a plain-language summary of what changed and what the next wave holds. One wave per run.
 - Cheap models: Kaneo reads and writes go through `kaneo-scribe`, file, log and CI reads through `ladder-read-fast`, mechanical edits through the ladder edit agents and commit titles through `commit-writer`. Parallel workers run on your balanced rung instead of the session model. The main session keeps only the decisions.
 - Never invoked by the model on its own: a Claude skill with `disable-model-invocation: true`, an OpenCode command, a Codex skill with `allow_implicit_invocation: false` in `agents/openai.yaml`, a Pi prompt template.
 
@@ -202,6 +204,26 @@ A manual action that reads a whole Kaneo epic, finds what is missing and writes 
 | Codex        | `~/.codex/skills/kick-off/` (with `agents/openai.yaml`)                      | `.agents/skills/kick-off/`                                               |
 | Pi           | `~/.pi/agent/prompts/kick-off.md`                                            | `.pi/prompts/kick-off.md`                                                |
 | Claude guard | `~/.claude/hooks/agent-config/kick-off-guard.mjs`, `~/.claude/settings.json` | `.claude/hooks/agent-config/kick-off-guard.mjs`, `.claude/settings.json` |
+
+### planning
+
+A manual action that plans a project, epic, feature, fix or ticket with you before any work starts, keeping the plan in a SQLite store. Install `kaneo` with it to write Kaneo tickets, and `continue` and `kick-off` to run them (and the model ladder for its deep rung).
+
+- `/planning [project | epic | feat | fix | ticket] <what to plan>` (`$planning` in Codex) is never invoked by the model on its own.
+- It checks what agi installed (`agent-config catalog --json`) and whether the Kaneo MCP answers, then classifies the request on the deep rung.
+- It interviews you in rounds of up to four questions. Each has a recommended answer and why it matters, in plain words; skipping a question takes the recommendation.
+- Deep reviewers look for gaps, red flags and code smells through scope, design, risk, delivery and experience lenses, with at most 1 sub-agent at once for a fix or ticket, 2 for a feat, 3 for an epic and 5 for a project. For an epic or project the findings are reviewed again before you are asked about them.
+- A final review repeats until nothing is open, or until you ask to write the tickets. Then each open gap becomes a `Gap:` ticket that blocks the work depending on it.
+- The plan lives in a SQLite store at `.plans/<MM-yyyy>/<plan-title>/plan.sqlite`: facts, decisions, findings, epics, tickets, blocks, and a `waves` view, so agents query exactly what they need.
+- With Kaneo it writes `Epic:` tasks and P5-or-smaller stories with `blocks` relations and `Touches:` lines, ready for `/continue parallel-wave` or `/kick-off`.
+- Plans with a UI follow a design-system standard: every size token a multiple of 4 px, WCAG 2.2 AA accessibility, and scroll-driven motion as first-party components that animate only transform and opacity and honor `prefers-reduced-motion`.
+
+| Runtime  | User scope                                              | Project scope (`--project <dir>`)  |
+| -------- | ------------------------------------------------------- | ---------------------------------- |
+| Claude   | `~/.claude/skills/planning/SKILL.md`                    | `.claude/skills/planning/SKILL.md` |
+| OpenCode | `~/.config/opencode/commands/planning.md`               | `.opencode/commands/planning.md`   |
+| Codex    | `~/.codex/skills/planning/` (with `agents/openai.yaml`) | `.agents/skills/planning/`         |
+| Pi       | `~/.pi/agent/prompts/planning.md`                       | `.pi/prompts/planning.md`          |
 
 ### statusline
 
