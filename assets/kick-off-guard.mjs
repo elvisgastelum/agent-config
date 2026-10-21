@@ -88,6 +88,8 @@ const CLIPBOARD_TOOLS = new Set([
 ]);
 /** A command that writes its input to every file it names. */
 const TEE = "tee";
+/** Commands whose arguments are text they print, not files they read: a brief path there is text. */
+const TEXT_COMMANDS = new Set(["echo", "printf"]);
 /** `NAME=value` before a command sets its environment; it is not the command's name. */
 const ASSIGNMENT = /^\w+=/;
 /** readFileSync's error code for a path that does not exist. */
@@ -218,7 +220,11 @@ function parse(command) {
       pipelines
         .at(-1)
         .at(-1)
-        .push({ text: word, output: redirect === OUTPUT_REDIRECT });
+        .push({
+          text: word,
+          output: redirect === OUTPUT_REDIRECT,
+          input: redirect === INPUT_REDIRECT,
+        });
     delimiterNext = false;
     redirect = "";
     word = "";
@@ -316,8 +322,11 @@ function copy(command, cwd) {
   );
   const read = new Set(
     copied
-      .flat(2)
-      .filter((w) => !w.output)
+      .flat()
+      .flatMap((words) => {
+        const prints = TEXT_COMMANDS.has(basename(commandName(words)));
+        return words.filter((w) => !w.output && (w.input || !prints));
+      })
       .map((w) => briefPath(w.text, cwd))
       .filter(Boolean),
   );

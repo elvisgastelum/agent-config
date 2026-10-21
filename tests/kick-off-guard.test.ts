@@ -323,6 +323,15 @@ describe("kick-off guard: brief copies", () => {
     }
   });
 
+  test("copying a brief's path as text is allowed", () => {
+    const dir = tempDir();
+    const incomplete = writeBrief(dir, "FEX-20.md", INCOMPLETE);
+    const missing = join(dir, "agent-config", "kick-off", "FEX-21.md");
+    expect(bash(`echo ${incomplete} | pbcopy`)).toBeUndefined();
+    expect(bash(`printf '%s' ${missing} | pbcopy`)).toBeUndefined();
+    expect(bash(`echo hi < ${incomplete} | pbcopy`)).toContain("FEX-20.md");
+  });
+
   test("copying other text is allowed", () => {
     expect(bash("echo hi | pbcopy")).toBeUndefined();
   });

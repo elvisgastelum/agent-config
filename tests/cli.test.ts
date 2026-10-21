@@ -360,6 +360,9 @@ test("install kick-off --project writes into the repository with a project-roote
     expect(existsSync(join(home, ".claude"))).toBe(false);
     expect(run("uninstall", "kick-off", "--project", repo, "--yes").code).toBe(0);
     expect(existsSync(join(repo, ".pi/prompts/kick-off.md"))).toBe(false);
+    expect(existsSync(join(repo, ".claude/hooks/agent-config/kick-off-guard.mjs"))).toBe(false);
+    const settings = join(repo, ".claude/settings.json");
+    expect(existsSync(settings) ? read(settings) : "").not.toContain("kick-off-guard");
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
