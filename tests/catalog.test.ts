@@ -12,7 +12,17 @@ import {
 } from "../src/catalog.ts";
 import { buildPlan, restoreShared, status, uninstallSelection } from "../src/commands.ts";
 import { defaultConfig, loadConfig, saveConfig, type Config } from "../src/config.ts";
-import { kaneoBaseUrl, kaneoSkillMarkdown, kaneoUrlWarning, SCRIBE_BODY } from "../src/kaneo.ts";
+import {
+  EPIC_LABEL,
+  EPIC_LINE,
+  EPIC_TITLE_PREFIX,
+  kaneoBaseUrl,
+  kaneoSkillMarkdown,
+  kaneoUrlWarning,
+  SCRIBE_BODY,
+  TOUCHES_LINE,
+  WAVE_RULE,
+} from "../src/kaneo.ts";
 import { applyPlan, uninstall } from "../src/ops.ts";
 import { configPath } from "../src/paths.ts";
 import type { Runtime } from "../src/tiers.ts";
@@ -384,6 +394,16 @@ describe("kaneoSkillMarkdown", () => {
     expect(text).not.toContain("List workspace labels");
     expect(text).toContain("create each label on the task with `create_label`");
     expect(text).toContain("a failed `create_label` is never retried");
+  });
+
+  test("marks an epic by title and label, and ties every story to it", () => {
+    const text = kaneoSkillMarkdown("claude", "m");
+    const section = text.split("## Plan an epic")[1]!.split("\n## ")[0]!;
+    expect(section).toContain(`titled \`${EPIC_TITLE_PREFIX}<outcome>\``);
+    expect(section).toContain(`\`${EPIC_LABEL}\``);
+    expect(section).toContain(`\`${EPIC_LINE} <EPIC-ID>\``);
+    expect(section).toContain(`\`${TOUCHES_LINE} <`);
+    expect(section).toContain(WAVE_RULE);
   });
 });
 

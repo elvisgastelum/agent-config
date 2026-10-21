@@ -7,6 +7,17 @@ export const KANEO_SKILL = "kaneo-work-tracking";
 export const SCRIBE = "kaneo-scribe";
 export const KANEO_MCP = "kaneo";
 
+/** Kaneo has no epic type: an epic is a task whose title starts with this. */
+export const EPIC_TITLE_PREFIX = "Epic: ";
+export const EPIC_LABEL = "epic";
+const EPIC_LABEL_COLOR = "#8B5CF6";
+/** First line of every story description in an epic: `Epic: FEX-1`. */
+export const EPIC_LINE = "Epic:";
+/** Story description line naming the areas or paths it changes, so waves avoid overlap. */
+export const TOUCHES_LINE = "Touches:";
+/** How the stories of an epic split into waves that can run in parallel. */
+export const WAVE_RULE = `The next wave is every open story with no unfinished blocker; when two of them share an area in their \`${TOUCHES_LINE}\` lines, the later one in priority order moves to the following wave.`;
+
 /** The Kaneo MCP tools the scribe may call (Claude Code lists them by name). */
 export const KANEO_TOOLS = [
   "whoami",
@@ -135,6 +146,18 @@ For each resulting story:
 - For work that can proceed simultaneously, create \`related\` relations and state the parallel group in every participating task description.
 
 Use the dependency graph as the execution order. A task with no unresolved prerequisite may run in parallel with other ready tasks. Report the ordered sequence, parallel groups, and blocking edges after creating the split.
+
+## Plan an epic
+
+An epic groups the stories of one outcome. Kaneo has no epic type, so mark it this way:
+
+1. Create the epic as a task titled \`${EPIC_TITLE_PREFIX}<outcome>\`. Its description holds the goal and a "Done when" list of acceptance criteria. Label it \`made_by_agent\` and \`${EPIC_LABEL}\` (color \`${EPIC_LABEL_COLOR}\`), with no point label: an epic is never worked directly.
+2. Split its scope into stories as above. Start every story description with these two lines, then its outcome and completion criteria:
+   - \`${EPIC_LINE} <EPIC-ID>\`
+   - \`${TOUCHES_LINE} <areas or paths it changes>\`
+3. Create a \`related\` relation from the epic to each story, and a \`blocks\` relation for every prerequisite between stories.
+
+A story's epic is the one its \`${EPIC_LINE}\` line names; an epic's stories are its \`related\` tasks that carry that line. ${WAVE_RULE}
 
 ## Update existing work
 
