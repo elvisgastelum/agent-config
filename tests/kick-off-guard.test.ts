@@ -108,6 +108,7 @@ describe("kick-off guard: phase rungs", () => {
     expect(agent("Phase: review\nTask: draft quality", "planner-deep")).toBeUndefined();
     expect(agent("Phase: plan\nTask: classify", "planner-fast")).toContain("fast rung");
     expect(agent("Phase: review\nTask: draft quality", "planner-balanced")).toBeUndefined();
+    expect(agent("Phase: review\nTask: draft quality", "planner-fast")).toContain("fast");
     expect(agent("Phase: draft\nTask: draft the tickets", "planner-fast")).toBeUndefined();
   });
 
