@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// agent-config kick-off guard: a Claude Code PreToolUse hook (Agent, Task, Bash).
+// agent-config kick-off guard: a Claude Code PreToolUse hook (Agent, Task, Bash, Write).
 //
 // Holds a /kick-off run to its structure:
 // - A delegated handoff whose prompt starts with `Phase: <phase>` runs on the rung that phase
 //   allows: diagnose, plan and risk on deep; review on deep or balanced, and on fast only when the
 //   line right under the phase line is `Fast review: approved by the user`. Edit and fix handoffs
 //   are not checked.
-// - A Bash command that copies a kick-off brief (`agent-config/kick-off/<ID>.md`) to the clipboard
-//   is denied until the brief starts with /continue and has every section and phase the loop needs.
+// - A kick-off brief (`agent-config/kick-off/<ID>.md`) must start with /continue and have every
+//   section and phase the loop needs. A Write of a brief is checked before it lands. A Bash
+//   pipeline that copies briefs to the clipboard is checked against each brief on disk, and is
+//   denied when a brief is missing or written by the same command (the guard runs before it).
 //
 // Any unexpected input or error lets the call through: the guard never breaks a session. Brief
 // paths resolve `$VAR` from the hook's environment, so a variable set inside the same command is
@@ -15,7 +17,7 @@
 
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const GUARD = "kick-off-guard";
@@ -38,7 +40,7 @@ const PHASE_RUNGS = new Map([
 const REVIEW_PHASE = "review";
 const FAST_RUNG = "fast";
 
-/** The line, right under the phase line, that lets a review run on the fast rung. */
+/** The exact line, right under the phase line, that lets a review run on the fast rung. */
 export const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
 
 /** Ladder agents carry their rung in their name: ladder-read-deep, ladder-edit-fast. */
@@ -52,13 +54,11 @@ const MODEL_FAMILY_RUNGS = [
   ["opus", "deep"],
 ];
 
-// ---------------------------------------------------------------- brief copies
+// ---------------------------------------------------------------- briefs
 
 const SHELL_TOOL = "Bash";
-
-/** A clipboard tool run as a command, not as part of a longer word. */
-const CLIPBOARD_COMMAND =
-  /(^|[\s|;&(])(pbcopy|wl-copy|xclip|xsel|clip(\.exe)?|Set-Clipboard)(?=[\s;&|<>)]|$)/;
+/** Claude's file-writing tool; a brief written with it is checked before it lands. */
+const WRITE_TOOL = "Write";
 
 /** Briefs live in <state dir>/agent-config/kick-off; the skill's own kick-off folder does not match. */
 const BRIEF_PATH = /(^|\/)agent-config\/kick-off\/[^/]+\.md$/;
@@ -76,15 +76,38 @@ export const BRIEF_SECTIONS = [
 ];
 export const BRIEF_PHASES = ["Phase: plan", "Phase: risk", "Phase: review"];
 
-// Shell syntax the brief-path reader resolves.
+/** Commands that put their input on the clipboard, matched on the command's name. */
+const CLIPBOARD_TOOLS = new Set([
+  "pbcopy",
+  "wl-copy",
+  "xclip",
+  "xsel",
+  "clip",
+  "clip.exe",
+  "Set-Clipboard",
+]);
+/** A command that writes its input to every file it names. */
+const TEE = "tee";
+/** `NAME=value` before a command sets its environment; it is not the command's name. */
+const ASSIGNMENT = /^\w+=/;
+/** readFileSync's error code for a path that does not exist. */
+const MISSING_FILE = "ENOENT";
+
+// Shell syntax the command reader resolves.
 const SINGLE_QUOTE = "'";
 const DOUBLE_QUOTE = '"';
 const ESCAPE = "\\";
 const VARIABLE_SIGIL = "$";
 /** `$NAME` or `${NAME}`. */
 const SHELL_VARIABLE = /^\$(?:\{(\w+)\}|(\w+))/;
-/** Characters that end an unquoted shell word: whitespace, redirects, pipes, separators, subshells. */
-const WORD_BREAK = /[\s<>|;&()]/;
+/** Operators that end a pipeline (`&&` and `||` before `&` and `|`, which they start with). */
+const LIST_OPERATORS = ["&&", "||", ";", "&", "\n"];
+/** Joins the commands of one pipeline. */
+const PIPE = "|";
+const OUTPUT_REDIRECT = ">";
+const INPUT_REDIRECT = "<";
+/** Characters that end a word without other meaning here: whitespace and subshell parentheses. */
+const WORD_BREAK = /[\s()]/;
 /** A leading `~/`, which the shell expands to the home directory. */
 const HOME_TILDE = /^~(?=\/)/;
 
@@ -101,6 +124,7 @@ export function decide(input) {
   if (tool === SHELL_TOOL && typeof args?.command === "string") {
     return copy(args.command, input.cwd);
   }
+  if (tool === WRITE_TOOL && typeof args?.file_path === "string") return write(args);
   return undefined;
 }
 
@@ -140,45 +164,6 @@ function handoff({ prompt, subagent_type: type, model }) {
   return `${GUARD}: a \`Phase: ${phase}\` handoff runs on the ${allowed.join(" or ")} rung, not ${ran}.\nUse ${agents} without a model override.${fast}`;
 }
 
-/** The command's words as the shell passes them: quotes removed, escapes and variables resolved. */
-function words(command) {
-  const out = [];
-  let word = "";
-  let quote = "";
-  for (let i = 0; i < command.length; i++) {
-    const c = command[i];
-    const expands = quote !== SINGLE_QUOTE;
-    const variable = expands && c === VARIABLE_SIGIL ? SHELL_VARIABLE.exec(command.slice(i)) : null;
-    if (variable) {
-      word += process.env[variable[1] ?? variable[2]] ?? "";
-      i += variable[0].length - 1;
-    } else if (expands && c === ESCAPE && i + 1 < command.length) {
-      word += command[++i];
-    } else if (quote) {
-      if (c === quote) quote = "";
-      else word += c;
-    } else if (c === SINGLE_QUOTE || c === DOUBLE_QUOTE) {
-      quote = c;
-    } else if (WORD_BREAK.test(c)) {
-      if (word) out.push(word);
-      word = "";
-    } else {
-      word += c;
-    }
-  }
-  if (word) out.push(word);
-  return out;
-}
-
-/** The brief a clipboard command reads, resolved against `cwd`. */
-function briefPath(command, cwd) {
-  const word = words(command).find((w) => BRIEF_PATH.test(w));
-  if (!word) return undefined;
-  const path = word.replace(HOME_TILDE, homedir());
-  if (isAbsolute(path)) return path;
-  return typeof cwd === "string" ? join(cwd, path) : undefined;
-}
-
 /** What a brief is missing; empty when it is complete. */
 export function briefProblems(text) {
   const lines = text.split("\n");
@@ -194,19 +179,121 @@ export function briefProblems(text) {
   return problems;
 }
 
-function copy(command, cwd) {
-  if (!CLIPBOARD_COMMAND.test(command)) return undefined;
-  const path = briefPath(command, cwd);
-  if (!path) return undefined;
-  let text;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return undefined;
+function notReady(path, problems) {
+  return `${GUARD}: the brief ${path} is not ready: ${problems.join("; ")}.\nFix it from the template in the kick-off skill.`;
+}
+
+function write({ file_path: path, content }) {
+  if (!BRIEF_PATH.test(path) || typeof content !== "string") return undefined;
+  const problems = briefProblems(content);
+  return problems.length === 0 ? undefined : notReady(path, problems);
+}
+
+/**
+ * Splits a command line the way the shell does: pipelines of commands of words, with quotes
+ * removed, escapes and variables resolved, and each output redirect's target marked.
+ */
+function parse(command) {
+  const pipelines = [[[]]];
+  let word = "";
+  let quote = "";
+  let redirect = "";
+  const end = () => {
+    if (word)
+      pipelines
+        .at(-1)
+        .at(-1)
+        .push({ text: word, output: redirect === OUTPUT_REDIRECT });
+    if (word) redirect = "";
+    word = "";
+  };
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    const expands = quote !== SINGLE_QUOTE;
+    const variable = expands && c === VARIABLE_SIGIL ? SHELL_VARIABLE.exec(command.slice(i)) : null;
+    const list = quote ? undefined : LIST_OPERATORS.find((op) => command.startsWith(op, i));
+    if (variable) {
+      word += process.env[variable[1] ?? variable[2]] ?? "";
+      i += variable[0].length - 1;
+    } else if (expands && c === ESCAPE && i + 1 < command.length) {
+      word += command[++i];
+    } else if (quote) {
+      if (c === quote) quote = "";
+      else word += c;
+    } else if (c === SINGLE_QUOTE || c === DOUBLE_QUOTE) {
+      quote = c;
+    } else if (list) {
+      end();
+      pipelines.push([[]]);
+      i += list.length - 1;
+    } else if (c === PIPE) {
+      end();
+      pipelines.at(-1).push([]);
+    } else if (c === OUTPUT_REDIRECT || c === INPUT_REDIRECT) {
+      end();
+      redirect = c;
+    } else if (WORD_BREAK.test(c)) {
+      end();
+    } else {
+      word += c;
+    }
   }
-  const problems = briefProblems(text);
-  if (problems.length === 0) return undefined;
-  return `${GUARD}: the brief ${path} is not ready to copy: ${problems.join("; ")}.\nFix it from the template in the kick-off skill, then copy it again.`;
+  end();
+  return pipelines;
+}
+
+/** A command's name: its first word that is not an environment assignment. */
+function commandName(words) {
+  return words.find((w) => !ASSIGNMENT.test(w.text))?.text ?? "";
+}
+
+/** A brief word's path, resolved against `cwd`; undefined for other words. */
+function briefPath(text, cwd) {
+  if (!BRIEF_PATH.test(text)) return undefined;
+  const path = text.replace(HOME_TILDE, homedir());
+  if (isAbsolute(path)) return path;
+  return typeof cwd === "string" ? join(cwd, path) : undefined;
+}
+
+function copy(command, cwd) {
+  const pipelines = parse(command);
+  const commands = pipelines.flat();
+  const written = new Set(
+    commands.flatMap((words) =>
+      words
+        .filter((w) => w.output || commandName(words) === TEE)
+        .map((w) => briefPath(w.text, cwd))
+        .filter(Boolean),
+    ),
+  );
+  const copied = pipelines.filter((p) =>
+    p.some((words) => CLIPBOARD_TOOLS.has(basename(commandName(words)))),
+  );
+  const read = new Set(
+    copied
+      .flat(2)
+      .filter((w) => !w.output)
+      .map((w) => briefPath(w.text, cwd))
+      .filter(Boolean),
+  );
+  const rewritten = [...read].filter((path) => written.has(path));
+  if (rewritten.length > 0) {
+    return `${GUARD}: write the brief and copy it in separate commands (${rewritten.join(", ")}): the guard checks the brief on disk before this command runs.\nWrite it with the Write tool, then copy it.`;
+  }
+  for (const path of read) {
+    let text;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch (error) {
+      if (error?.code === MISSING_FILE) {
+        return `${GUARD}: the brief ${path} does not exist yet.\nWrite it with the Write tool, then copy it.`;
+      }
+      continue;
+    }
+    const problems = briefProblems(text);
+    if (problems.length > 0) return notReady(path, problems);
+  }
+  return undefined;
 }
 
 function main() {

@@ -309,7 +309,7 @@ test("install kick-off adds a manual-only action per runtime and a Claude guard 
     hooks: { command: string }[];
   }[];
   const guard = entries.find((e) => e.hooks.some((h) => h.command.includes("kick-off-guard.mjs")));
-  expect(guard?.matcher).toBe("Agent|Task|Bash");
+  expect(guard?.matcher).toBe("Agent|Task|Bash|Write");
 
   expect(existsSync(join(home, ".config/opencode/commands/kick-off.md"))).toBe(true);
   expect(read(join(home, ".codex/skills/kick-off/SKILL.md"))).toContain("$continue parallel <N>");

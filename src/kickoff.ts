@@ -35,8 +35,8 @@ export const PHASE_PREFIX = "Phase:";
 /** The line a user adds under the phase line to let a review run on the fast rung. */
 export const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
 
-/** The Claude tools the kick-off guard hook checks: agent handoffs and clipboard copies. */
-export const KICK_OFF_GUARD_MATCHER = "Agent|Task|Bash";
+/** The Claude tools the kick-off guard hook checks: agent handoffs, clipboard copies, brief writes. */
+export const KICK_OFF_GUARD_MATCHER = "Agent|Task|Bash|Write";
 
 /** Claude's tool for asking the user a question with options. */
 const CLAUDE_QUESTION_TOOL = "AskUserQuestion";
@@ -65,7 +65,7 @@ export function kickOffMarkdown(runtime: Runtime, models: KickOffModels, briefDi
       : "in one message with numbered options";
   const guard =
     runtime === "claude"
-      ? " The kick-off guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, and a clipboard copy of an incomplete brief."
+      ? " The kick-off guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or written by the same command."
       : "";
   const deepRead = agent(DEEP_READER);
   const balancedRead = agent(BALANCED_READER);
@@ -124,7 +124,7 @@ The brief's review routing, from answer 4:
 ## 3. Write the brief and copy it
 
 1. Write the brief to \`${briefDir}/<EPIC-ID>.md\` (create the folder) from the template below. Replace every \`<…>\` and keep the rest as written: the loop, routing and stop sections are what the new session runs on.
-2. Copy it to the clipboard with the first tool that exists: \`pbcopy < <file>\` (macOS), \`wl-copy < <file>\`, \`xclip -selection clipboard < <file>\`, \`xsel --clipboard --input < <file>\` or \`clip.exe < <file>\`. When none exists, say so and give the path.
+2. Then, in a command of its own, copy it to the clipboard with the first tool that exists: \`pbcopy < <file>\` (macOS), \`wl-copy < <file>\`, \`xclip -selection clipboard < <file>\`, \`xsel --clipboard --input < <file>\` or \`clip.exe < <file>\`. When none exists, say so and give the path.
 3. Report the path, whether the brief is on the clipboard, one line per wave, and: open a fresh session in this repository and paste it.
 
 ## Brief template

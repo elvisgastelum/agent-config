@@ -220,9 +220,35 @@ describe("kick-off guard: brief copies", () => {
     expect(bash(`cat ${path}`)).toBeUndefined();
   });
 
-  test("copying a missing brief is allowed", () => {
+  test("copying a brief that does not exist yet is denied", () => {
     const dir = tempDir();
-    expect(bash(`pbcopy < ${dir}/agent-config/kick-off/missing.md`)).toBeUndefined();
+    expect(bash(`pbcopy < ${dir}/agent-config/kick-off/missing.md`)).toContain("does not exist");
+  });
+
+  test("writing and copying a brief in one command is denied", () => {
+    const dir = tempDir();
+    const fresh = join(dir, "agent-config", "kick-off", "FEX-8.md");
+    mkdirSync(join(dir, "agent-config", "kick-off"), { recursive: true });
+    const heredoc = `cat > ${fresh} <<'EOF'\n${brief()}\nEOF\npbcopy < ${fresh}`;
+    expect(bash(heredoc)).toContain("separate commands");
+    const complete = writeBrief(dir, "FEX-9.md", brief());
+    expect(bash(`printf x > ${complete} && pbcopy < ${complete}`)).toContain("separate commands");
+    expect(bash(`printf x | tee ${complete} | pbcopy`)).toContain("separate commands");
+  });
+
+  test("every brief a clipboard pipeline reads is checked", () => {
+    const dir = tempDir();
+    const complete = writeBrief(dir, "FEX-10.md", brief());
+    const incomplete = writeBrief(dir, "FEX-11.md", INCOMPLETE);
+    expect(bash(`cat ${complete} ${incomplete} | pbcopy`)).toContain("FEX-11.md");
+    expect(bash(`LANG=C /usr/bin/pbcopy < ${incomplete}`)).toContain("FEX-11.md");
+  });
+
+  test("a brief outside the copying pipeline is not checked", () => {
+    const dir = tempDir();
+    const incomplete = writeBrief(dir, "FEX-12.md", INCOMPLETE);
+    expect(bash(`cat ${incomplete} > /dev/null; echo hi | pbcopy`)).toBeUndefined();
+    expect(bash(`cat ${incomplete} > /dev/null && echo hi | pbcopy`)).toBeUndefined();
   });
 
   test("copying a file outside the brief folder is allowed, even under a kick-off folder", () => {
@@ -236,6 +262,21 @@ describe("kick-off guard: brief copies", () => {
 
   test("copying other text is allowed", () => {
     expect(bash("echo hi | pbcopy")).toBeUndefined();
+  });
+});
+
+describe("kick-off guard: brief writes", () => {
+  const write = (file_path: string, content: string) =>
+    decide({ tool_name: "Write", tool_input: { file_path, content } });
+  const path = join(tmpdir(), "state", "agent-config", "kick-off", "FEX-13.md");
+
+  test("an incomplete brief is denied before it is written", () => {
+    expect(write(path, INCOMPLETE)).toContain("/continue");
+  });
+
+  test("a complete brief and other files are written", () => {
+    expect(write(path, brief())).toBeUndefined();
+    expect(write(join(tmpdir(), "notes.md"), INCOMPLETE)).toBeUndefined();
   });
 });
 
