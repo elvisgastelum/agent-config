@@ -8,7 +8,8 @@ import type { Runtime } from "./tiers.ts";
 
 export const CONTINUE = "continue";
 
-const CALL: Record<Runtime, (agent: string) => string> = {
+/** How each runtime's skill text tells the model to start a named sub-agent. */
+export const CALL: Record<Runtime, (agent: string) => string> = {
   claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
   opencode: (agent) => `the task tool with the \`${agent}\` agent`,
   codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,

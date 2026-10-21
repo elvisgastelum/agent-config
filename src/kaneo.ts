@@ -3,6 +3,8 @@
 
 import { RUNTIME_LABELS, type Runtime } from "./tiers.ts";
 
+/** The catalog item that installs this skill, the scribe and the MCP server. */
+export const KANEO_ITEM = "kaneo";
 export const KANEO_SKILL = "kaneo-work-tracking";
 export const SCRIBE = "kaneo-scribe";
 export const KANEO_MCP = "kaneo";

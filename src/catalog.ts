@@ -17,6 +17,7 @@ import {
 import type { Config } from "./config.ts";
 import { CODEX_POLICY, CONTINUE, continueMarkdown } from "./continue.ts";
 import {
+  KANEO_ITEM,
   KANEO_MCP,
   KANEO_SKILL,
   KANEO_TOOLS,
@@ -45,6 +46,7 @@ import {
   opencodeDir,
   piDir,
 } from "./paths.ts";
+import { PLANNING, planningMarkdown } from "./planning.ts";
 import { assetSource, opencodeConfigPath, runtimeOps, tomlMultiline } from "./runtimes.ts";
 import type { Effort, Runtime, Tier, TierMap } from "./tiers.ts";
 
@@ -318,7 +320,7 @@ const modelLadder: CatalogItem = {
 };
 
 const kaneo: CatalogItem = {
-  id: "kaneo",
+  id: KANEO_ITEM,
   title: "Kaneo work tracking",
   description:
     "kaneo-work-tracking skill, always-on rules, the kaneo MCP server and a cheap kaneo-scribe agent that saves tickets",
@@ -632,6 +634,15 @@ function kickOffOps(runtime: Runtime, project: string | undefined, config: Confi
   return ops;
 }
 
+function planningOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
+  const tiers = config.tiers[runtime];
+  const content = planningMarkdown(runtime, {
+    fast: modelName(runtime, tiers),
+    deep: modelName(runtime, tiers, tiers.deep.effort, "deep"),
+  });
+  return actionOps(runtime, project, PLANNING, content, "planning");
+}
+
 // ---------------------------------------------------------------- statusline
 
 export const STATUSLINE_FILE = "statusline.sh";
@@ -690,12 +701,23 @@ const kickOff: CatalogItem = {
   ops: (entry, runtime, config) => kickOffOps(runtime, entry.project, config),
 };
 
+const planningItem: CatalogItem = {
+  id: PLANNING,
+  title: "Plan work with you",
+  description:
+    "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed",
+  settings: [],
+  discover: () => ({}),
+  ops: (entry, runtime, config) => planningOps(runtime, entry.project, config),
+};
+
 export const CATALOG: CatalogItem[] = [
   modelLadder,
   kaneo,
   commit,
   continueItem,
   kickOff,
+  planningItem,
   statusline,
 ];
 

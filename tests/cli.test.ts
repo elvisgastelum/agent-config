@@ -288,6 +288,55 @@ test("install continue --project writes each runtime's action into the repositor
   }
 });
 
+test("install planning adds a manual-only action per runtime", () => {
+  const skill = join(home, ".claude/skills/planning/SKILL.md");
+  mkdirSync(dirname(skill), { recursive: true });
+  writeFileSync(skill, "old planning skill\n");
+
+  const rt = ["claude", "opencode", "codex", "pi"].flatMap((r) => ["--runtime", r]);
+  const installed = run("install", "planning", ...rt, "--yes", "--json");
+  expect(installed.code).toBe(0);
+  const plan = JSON.parse(installed.stdout).plan as { item: string }[];
+  expect(plan.every((x) => x.item === "planning@user")).toBe(true);
+
+  expect(read(skill)).toContain("/planning");
+  expect(read(join(home, ".config/opencode/commands/planning.md"))).toContain("/planning");
+  const codex = read(join(home, ".codex/skills/planning/SKILL.md"));
+  expect(codex).toContain("$planning");
+  expect(existsSync(join(home, ".codex/skills/planning/agents/openai.yaml"))).toBe(true);
+  expect(read(join(home, ".pi/agent/prompts/planning.md"))).toContain("/planning");
+
+  expect(JSON.parse(run("install", "planning", "--yes", "--json").stdout).applied).toBe(false);
+
+  expect(run("uninstall", "planning", "--yes").code).toBe(0);
+  expect(read(skill)).toBe("old planning skill\n");
+  expect(existsSync(join(home, ".config/opencode/commands/planning.md"))).toBe(false);
+  expect(existsSync(join(home, ".codex/skills/planning"))).toBe(false);
+  expect(existsSync(join(home, ".pi/agent/prompts/planning.md"))).toBe(false);
+});
+
+test("install planning --project writes each runtime's action into the repository", () => {
+  const repo = mkdtempSync(join(tmpdir(), "agent-config-repo-"));
+  try {
+    const rt = ["claude", "opencode", "codex", "pi"].flatMap((r) => ["--runtime", r]);
+    expect(run("install", "planning", "--project", repo, ...rt, "--yes").code).toBe(0);
+    for (const path of [
+      ".claude/skills/planning/SKILL.md",
+      ".opencode/commands/planning.md",
+      ".agents/skills/planning/SKILL.md",
+      ".agents/skills/planning/agents/openai.yaml",
+      ".pi/prompts/planning.md",
+    ]) {
+      expect(existsSync(join(repo, path))).toBe(true);
+    }
+    expect(existsSync(join(home, ".claude"))).toBe(false);
+    expect(run("uninstall", "planning", "--project", repo, "--yes").code).toBe(0);
+    expect(existsSync(join(repo, ".pi/prompts/planning.md"))).toBe(false);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("install kick-off adds a manual-only action per runtime and a Claude guard hook", () => {
   const rt = ["claude", "opencode", "codex", "pi"].flatMap((r) => ["--runtime", r]);
   const settingsPath = join(home, ".claude/settings.json");
@@ -396,6 +445,7 @@ test("install model-ladder installs only the ladder; uninstall model-ladder keep
     "commit",
     "continue",
     "kick-off",
+    "planning",
     "statusline",
   ]);
   expect(listed.items[0].entries).toMatchObject([{ scope: "user", runtimes: ["claude"] }]);

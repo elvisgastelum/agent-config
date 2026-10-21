@@ -2776,6 +2776,8 @@ TITLE: <the one-line title>
 `;
 //#endregion
 //#region src/kaneo.ts
+/** The catalog item that installs this skill, the scribe and the MCP server. */
+const KANEO_ITEM = "kaneo";
 const KANEO_SKILL = "kaneo-work-tracking";
 const SCRIBE = "kaneo-scribe";
 const KANEO_MCP = "kaneo";
@@ -3007,6 +3009,7 @@ FAILED: <"none", or one line per failed call:>
 //#endregion
 //#region src/continue.ts
 const CONTINUE = "continue";
+/** How each runtime's skill text tells the model to start a named sub-agent. */
 const CALL$1 = {
 	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
 	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
@@ -3020,7 +3023,7 @@ function actionCommand(runtime, name) {
 function continueCommand(runtime) {
 	return actionCommand(runtime, CONTINUE);
 }
-const DESCRIPTION$1 = "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one.";
+const DESCRIPTION$2 = "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one.";
 const ARGUMENT_HINT = "[parallel [n]]";
 /** Frontmatter for the file each runtime reads; every one keeps the action manual-only. */
 function actionFrontmatter(runtime, name, summary, argumentHint) {
@@ -3039,7 +3042,7 @@ function continueMarkdown(runtime, models) {
 	const cmd = continueCommand(runtime);
 	const args = runtime === "codex" ? `Arguments passed to this run: the user's message after \`${cmd}\` (none means no arguments).` : "Arguments passed to this run: `$ARGUMENTS` (empty means no arguments).";
 	const scribe = CALL$1[runtime](SCRIBE);
-	return `${actionFrontmatter(runtime, CONTINUE, DESCRIPTION$1, ARGUMENT_HINT)}
+	return `${actionFrontmatter(runtime, CONTINUE, DESCRIPTION$2, ARGUMENT_HINT)}
 
 ## Arguments
 
@@ -4235,7 +4238,7 @@ function uninstall(filter, force = false) {
 //#region src/kickoff.ts
 const KICK_OFF = "kick-off";
 const KICK_OFF_GUARD_FILE = "kick-off-guard.mjs";
-const DESCRIPTION = "Kick off a Kaneo epic: diagnose what it is missing, ask how to run it, and copy a /continue brief to the clipboard that works the whole epic in a fresh session.";
+const DESCRIPTION$1 = "Kick off a Kaneo epic: diagnose what it is missing, ask how to run it, and copy a /continue brief to the clipboard that works the whole epic in a fresh session.";
 const KICK_OFF_HINT = "<kaneo-epic-or-ticket-url | ticket-code>";
 const CALL = {
 	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
@@ -4250,26 +4253,26 @@ const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
 /** The Claude tools the kick-off guard hook checks: agent handoffs, clipboard copies, brief writes. */
 const KICK_OFF_GUARD_MATCHER = "Agent|Task|Bash|Write";
 /** Claude's tool for asking the user a question with options. */
-const CLAUDE_QUESTION_TOOL = "AskUserQuestion";
-const DEEP_READER = agentName("read", "deep");
+const CLAUDE_QUESTION_TOOL$1 = "AskUserQuestion";
+const DEEP_READER$1 = agentName("read", "deep");
 const BALANCED_READER = agentName("read", "balanced");
-const FAST_READER = agentName("read", "fast");
+const FAST_READER$1 = agentName("read", "fast");
 const FAST_EDITOR = agentName("edit", "fast");
 const BALANCED_EDITOR = agentName("edit", "balanced");
 const DEEP_EDITOR = agentName("edit", "deep");
 const agent = (name) => `\`${name}\``;
-const phase = (name) => `${PHASE_PREFIX} ${name}`;
+const phase$1 = (name) => `${PHASE_PREFIX} ${name}`;
 function kickOffMarkdown(runtime, models, briefDir) {
 	const cmd = actionCommand(runtime, KICK_OFF);
 	const cont = actionCommand(runtime, CONTINUE);
 	const args = runtime === "codex" ? `Argument: the user's message after \`${cmd}\`.` : "Argument: `$ARGUMENTS`.";
-	const ask = runtime === "claude" ? `with the ${CLAUDE_QUESTION_TOOL} tool` : "in one message with numbered options";
+	const ask = runtime === "claude" ? `with the ${CLAUDE_QUESTION_TOOL$1} tool` : "in one message with numbered options";
 	const guard = runtime === "claude" ? " The kick-off guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or not in a command of its own." : "";
-	const deepRead = agent(DEEP_READER);
+	const deepRead = agent(DEEP_READER$1);
 	const balancedRead = agent(BALANCED_READER);
-	const fastRead = agent(FAST_READER);
+	const fastRead = agent(FAST_READER$1);
 	const routed = `none and low risk: ${balancedRead}; medium and high: ${deepRead}`;
-	return `${actionFrontmatter(runtime, KICK_OFF, DESCRIPTION, KICK_OFF_HINT)}
+	return `${actionFrontmatter(runtime, KICK_OFF, DESCRIPTION$1, KICK_OFF_HINT)}
 
 ## Arguments
 
@@ -4280,7 +4283,7 @@ ${args} It names one Kaneo epic or ticket: a URL (\`…/task/<id>\`) or an ident
 This session decides; everything bulky runs on an agent and comes back as a short summary. Agents run through ${CALL[runtime]("<name>")}.
 
 - **Kaneo**: every read and write goes through ${agent(SCRIBE)} (${models.fast}). Ask for summaries, never raw Kaneo JSON.
-- **Reasoning**: the diagnosis runs on ${deepRead} (${models.deep}). Every handoff starts with its phase line, \`${phase("<phase>")}\`.${guard}
+- **Reasoning**: the diagnosis runs on ${deepRead} (${models.deep}). Every handoff starts with its phase line, \`${phase$1("<phase>")}\`.${guard}
 - Anything else you read follows the \`model-ladder\` skill.
 
 When one of these agents is not installed, do the step yourself with bounded reads.
@@ -4291,7 +4294,7 @@ When one of these agents is not installed, do the step yourself with bounded rea
 2. Hand that summary to ${deepRead}:
 
    \`\`\`
-   ${phase("diagnose")}
+   ${phase$1("diagnose")}
    Epic: <identifier> <title>, <url>
    Tickets: <the scribe's summary>
    Scope: this repository
@@ -4356,14 +4359,14 @@ Work only these tickets, in this order. Tickets in one wave do not depend on eac
 
 ## Loop per ticket
 
-Agents run through ${CALL[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`${phase("plan")}\`, so the run can be checked.
+Agents run through ${CALL[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`${phase$1("plan")}\`, so the run can be checked.
 
 1. **Pick.** Have ${agent(SCRIBE)} re-read the ticket and its blockers. Still blocked: skip it, say why and take the next. Otherwise move it to In Progress and branch \`<ID>/<short-kebab-description>\` from \`origin/<branch>\`.
-2. **Plan** (\`${phase("plan")}\`, ${deepRead}). Diagnose every change the ticket needs. Return a task list; each task has a spec, its allowed paths, a reference file, a verify command and its edit rung: fast for pattern work (tests, boilerplate, config, mechanical edits), balanced for new logic. Prefer fast.
-3. **Edit** (\`${phase("edit")}\`). Run each task on its rung, ${agent(FAST_EDITOR)} or ${agent(BALANCED_EDITOR)}. Climb one rung on a partial or escalate reply or a failed verify; ${agent(DEEP_EDITOR)} only after balanced failed. Run every verify command yourself.
-4. **Risk** (\`${phase("risk")}\`, ${deepRead}). Classify the diff (\`git diff origin/<branch>...HEAD\`) as none, low, medium or high per area, one reason each: none for docs and comments; low for tests and isolated internals; medium for behavior other code calls; high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions. The ticket takes the highest.
-5. **Review** (\`${phase("review")}\`): <review routing>. Give the reviewer the diff, the ticket's criteria and the risk notes; it returns findings (path:line, severity, fix, and the fix's edit rung) or none. A review never runs on a fast agent unless this brief allows it.
-6. **Fix** (\`${phase("fix")}\`). Hand each finding to an edit agent on its rung and verify it. Go back to Risk when a fix changed what the diff touches, otherwise to Review. Repeat until the review has no findings.
+2. **Plan** (\`${phase$1("plan")}\`, ${deepRead}). Diagnose every change the ticket needs. Return a task list; each task has a spec, its allowed paths, a reference file, a verify command and its edit rung: fast for pattern work (tests, boilerplate, config, mechanical edits), balanced for new logic. Prefer fast.
+3. **Edit** (\`${phase$1("edit")}\`). Run each task on its rung, ${agent(FAST_EDITOR)} or ${agent(BALANCED_EDITOR)}. Climb one rung on a partial or escalate reply or a failed verify; ${agent(DEEP_EDITOR)} only after balanced failed. Run every verify command yourself.
+4. **Risk** (\`${phase$1("risk")}\`, ${deepRead}). Classify the diff (\`git diff origin/<branch>...HEAD\`) as none, low, medium or high per area, one reason each: none for docs and comments; low for tests and isolated internals; medium for behavior other code calls; high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions. The ticket takes the highest.
+5. **Review** (\`${phase$1("review")}\`): <review routing>. Give the reviewer the diff, the ticket's criteria and the risk notes; it returns findings (path:line, severity, fix, and the fix's edit rung) or none. A review never runs on a fast agent unless this brief allows it.
+6. **Fix** (\`${phase$1("fix")}\`). Hand each finding to an edit agent on its rung and verify it. Go back to Risk when a fix changed what the diff touches, otherwise to Review. Repeat until the review has no findings.
 7. **Deliver.** Run the project's checks and leave them passing. Commit with the \`${COMMIT_SKILL}\` skill (titles from ${agent(COMMIT_WRITER)}), push, and open the PR into \`<branch>\`: its body starts with the Kaneo ticket link and has no AI attribution. Have the scribe comment the PR URL on the ticket. Wait for CI; read failures through ${fastRead} and fix them through Plan, Edit and Review. Merge, have the scribe move the ticket to Done, then delete the branch and its worktree.
 8. **Next.** Back to Pick. After each wave, have the scribe re-read the epic: tickets added since go to the end of the queue in dependency order.
 
@@ -4383,8 +4386,287 @@ Parallel workers cannot start agents: they run each phase on its rung with \`age
 
 Stop and ask the user when a ticket stays blocked, the review still has findings after 3 rounds, CI fails twice after fixes, a merge conflict cannot be resolved with confidence, a PR cannot merge (required review, branch protection), or the epic's criteria are ambiguous.
 
-When the queue is empty, have ${deepRead} check the epic's "Done when" list against the merged code (\`${phase("review")}\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
+When the queue is empty, have ${deepRead} check the epic's "Done when" list against the merged code (\`${phase$1("review")}\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
 \`\`\`\`
+`;
+}
+//#endregion
+//#region src/planning.ts
+const PLANNING = "planning";
+const DESCRIPTION = "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed).";
+/** The plan kinds and how many sub-agents may run at once for each. */
+const PLAN_KINDS = {
+	fix: 1,
+	ticket: 1,
+	feat: 2,
+	epic: 3,
+	project: 5
+};
+const KIND_NAMES = Object.keys(PLAN_KINDS);
+const PLANNING_HINT = `[${KIND_NAMES.join(" | ")}] <what to plan>`;
+const PLAN_STORE_PATH = `.plans/<MM-yyyy>/<plan-title>/plan.sqlite`;
+/** A gap still open when the user asks to write the tickets becomes a ticket with this title. */
+const GAP_TITLE_PREFIX = "Gap: ";
+const GAP_LABEL_COLOR = "#EC4899";
+/** Story sizes on the kaneo-work-tracking point scale: anything larger is split first. */
+const GAP_SIZE = "P1";
+const MAX_STORY_SIZE = "P5";
+const STORY_SIZES = [
+	GAP_SIZE,
+	"P2",
+	"P3",
+	MAX_STORY_SIZE
+];
+/**
+* The plan store's schema. Every statement is idempotent, so running it on an existing store is
+* safe. The `waves` view layers open tickets by their unfinished blockers.
+*/
+const PLAN_SCHEMA = `PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS plan (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN (${KIND_NAMES.map((k) => `'${k}'`).join(", ")})),
+  request TEXT NOT NULL,
+  outcome TEXT,
+  status TEXT NOT NULL DEFAULT 'interview' CHECK (status IN ('interview', 'review', 'written')),
+  tracker TEXT NOT NULL DEFAULT 'store' CHECK (tracker IN ('store', 'kaneo')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS facts (
+  id INTEGER PRIMARY KEY,
+  topic TEXT NOT NULL,
+  fact TEXT NOT NULL,
+  source TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decisions (
+  id INTEGER PRIMARY KEY,
+  topic TEXT NOT NULL,
+  question TEXT NOT NULL,
+  answer TEXT NOT NULL,
+  why TEXT,
+  decided_by TEXT NOT NULL CHECK (decided_by IN ('user', 'recommendation'))
+);
+CREATE TABLE IF NOT EXISTS epics (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  goal TEXT NOT NULL,
+  done_when TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  tracker_id TEXT
+);
+CREATE TABLE IF NOT EXISTS tickets (
+  id TEXT PRIMARY KEY,
+  epic_id TEXT REFERENCES epics(id),
+  kind TEXT NOT NULL DEFAULT 'story' CHECK (kind IN ('story', 'gap')),
+  title TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  done_when TEXT NOT NULL,
+  size TEXT NOT NULL CHECK (size IN (${STORY_SIZES.map((s) => `'${s}'`).join(", ")})),
+  touches TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
+  tracker_id TEXT
+);
+CREATE TABLE IF NOT EXISTS blocks (
+  blocker TEXT NOT NULL REFERENCES tickets(id),
+  blocked TEXT NOT NULL REFERENCES tickets(id),
+  PRIMARY KEY (blocker, blocked),
+  CHECK (blocker <> blocked)
+);
+CREATE TABLE IF NOT EXISTS findings (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('gap', 'red_flag', 'smell', 'risk')),
+  lens TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  why TEXT NOT NULL,
+  recommendation TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'dismissed', 'ticketed')),
+  resolution TEXT,
+  ticket_id TEXT REFERENCES tickets(id)
+);
+CREATE VIEW IF NOT EXISTS waves AS
+WITH RECURSIVE layer(ticket_id, wave) AS (
+  SELECT t.id, 1 FROM tickets t
+  WHERE t.status <> 'done' AND NOT EXISTS (
+    SELECT 1 FROM blocks b JOIN tickets p ON p.id = b.blocker
+    WHERE b.blocked = t.id AND p.status <> 'done')
+  UNION
+  SELECT b.blocked, layer.wave + 1 FROM layer
+  JOIN blocks b ON b.blocker = layer.ticket_id
+  JOIN tickets t ON t.id = b.blocked
+  WHERE t.status <> 'done' AND layer.wave < (SELECT COUNT(*) FROM tickets)
+)
+SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
+FROM layer JOIN tickets t ON t.id = layer.ticket_id
+GROUP BY layer.ticket_id;`;
+/** What the gap reviewers look at; a capped fan-out gives one reviewer several lenses. */
+const LENSES = [
+	["scope", "the outcome, who it is for, what is in and out, criteria a test or a person can check"],
+	["design", "architecture, data model, the layer each change belongs to, coupling, code smells in the code it touches, migrations"],
+	["risk", "security, permissions, privacy, data loss, money, concurrency, public contracts"],
+	["delivery", "tests, CI, rollout and feature flags, rollback, observability, ticket sizes, dependency cycles"],
+	["experience", "UI, the design system, accessibility, motion, performance as users feel it"]
+];
+/** Claude's tool for asking the user a question with options. */
+const CLAUDE_QUESTION_TOOL = "AskUserQuestion";
+/** The most questions one round asks, which is also what one AskUserQuestion call holds. */
+const ROUND_SIZE = 4;
+const DEEP_READER = agentName("read", "deep");
+const FAST_READER = agentName("read", "fast");
+const code = (text) => `\`${text}\``;
+const phase = (name) => `${PHASE_PREFIX} ${name}`;
+function planningMarkdown(runtime, models) {
+	const cmd = actionCommand(runtime, PLANNING);
+	const cont = actionCommand(runtime, CONTINUE);
+	const kickOff = actionCommand(runtime, KICK_OFF);
+	const args = runtime === "codex" ? `Argument: the user's message after ${code(cmd)}.` : "Argument: `$ARGUMENTS`.";
+	const ask = runtime === "claude" ? `with the ${CLAUDE_QUESTION_TOOL} tool` : "in one message, numbered, with lettered options";
+	const deep = code(DEEP_READER);
+	const fast = code(FAST_READER);
+	const caps = KIND_NAMES.map((k) => `${k} ${PLAN_KINDS[k]}`).join(", ");
+	const lenses = LENSES.map(([name, focus]) => `   - **${name}**: ${focus}.`).join("\n");
+	return `${actionFrontmatter(runtime, PLANNING, DESCRIPTION, PLANNING_HINT)}
+
+## Arguments
+
+${args} Its first word may name the kind of plan: ${KIND_NAMES.map(code).join(", ")}; the rest says what to plan, as free text, a Kaneo URL or a ticket identifier. When it is empty, ask what to plan and wait.
+
+## Ground rules
+
+- **Facts are yours, decisions are the user's.** Look up whatever the code, the board or the tools can answer; ask the user only what they alone can decide.
+- **Plain words.** Write every question and summary so someone new to the field can answer it: name the concept, say in one line why it matters, and give the trade-off of each option. Match the user's vocabulary when they use technical terms.
+- **Recommend.** Every question carries your recommended answer and why. When the user skips a question or says to choose, take the recommendation and record it as decided by recommendation.
+- **The store is the memory.** Record every fact, decision, finding and ticket in the plan store the moment it settles. Read it back with small queries instead of scrolling the conversation, and hand sub-agents the store path instead of the plan.
+
+## Save context
+
+This session runs the interview and keeps the decisions. Reasoning over the whole plan and bulky reads run on agents through ${CALL$1[runtime]("<name>")} and come back as short answers.
+
+- **Reasoning**: classification, gap reviews, ticket drafting and the final review run on ${deep} (${models.deep}). Each handoff starts with its phase line: ${code(phase("plan"))} to classify or draft, ${code(phase("review"))} to review.
+- **Code facts**: ${fast} (${models.fast}) answers with \`path:line\` bullets.
+- **Kaneo**: every read and write goes through ${code(SCRIBE)} (${models.fast}).
+- **Fan-out**: at most this many sub-agents run at once, by kind: ${caps}.
+
+When one of these agents is not installed, do the step yourself with bounded reads.
+
+## 1. Know what is installed
+
+1. Run \`agent-config catalog --json\`. An item counts when it has an entry at user scope or for this repository's path. When the command is missing, count only the skills and tools this session shows.
+2. When ${code(KANEO_ITEM)} is installed, have the scribe call the Kaneo MCP \`whoami\`. A reply means the tickets go to Kaneo; anything else means they stay in the store, and the report says why.
+3. Shape the plan by what is there:
+
+| Installed | Effect on the plan |
+| --- | --- |
+| ${code(KANEO_ITEM)} with a working MCP | Tickets become Kaneo epics and stories, as the ${code(KANEO_SKILL)} skill says. |
+| ${code(CONTINUE)} | Stories are cut to run in parallel waves; the report names ${code(`${cont} parallel-wave`)}. |
+| ${code(KICK_OFF)} | The report offers ${code(`${kickOff} <EPIC-ID>`)} to prepare a brief for a fresh session. |
+| ${code(LADDER_ITEM)} | Reasoning and reads run on the ladder agents above. |
+
+A missing item costs nothing: say in one line what it would add, then go on.
+
+## 2. Classify the request
+
+1. Create the plan store (see "Plan store" below) and insert the plan row with the request and a short kebab-case title.
+2. Hand the request to ${deep}:
+
+   \`\`\`
+   ${phase("plan")}
+   Task: classify a planning request
+   Request: <the argument>
+   Store: <store path>
+   Scope: this repository
+   Answer shape: kind (${KIND_NAMES.join(" / ")}) and why; the outcome in one sentence; a size guess; facts found (stack, existing design system, test runner, CI, code the request touches as path:line); unknowns that block planning.
+   Budget: <= 400 words
+   \`\`\`
+
+   A project is a new product or several epics; an epic is one outcome too big for one ticket (over ${code(MAX_STORY_SIZE)}); a feat is one new behavior; a fix corrects existing behavior; a ticket is one change already scoped.
+3. Record the kind, the outcome and the facts. A kind named in the argument stands unless the analysis contradicts it; then ask. The kind sets the fan-out cap and the branches the interview covers.
+
+## 3. Interview in rounds
+
+Map the plan as a **design tree**: every decision branches into the decisions that hang off it. The **frontier** is every open decision whose prerequisites are settled.
+
+Each round asks the frontier's ${ROUND_SIZE} most consequential questions ${ask}, each with its options, the recommended one first, and one line on why it matters. A question that depends on another still open waits for a later round. Record every answer in \`decisions\`, recompute the frontier, and ask the next round. When a question needs a fact, send ${fast} for it and ask the rest of the frontier meanwhile.
+
+Branches the tree visits, by kind:
+
+- **Every kind**: the outcome and who it is for; "done when" criteria a test or a person can check; what is out of scope.
+- **fix**: how to reproduce it, expected versus actual behavior, where the behavior lives and the suspected cause, the regression test.
+- **feat**: the behavior and its edge cases, the interfaces it changes (API, UI, data), rollout or feature flag, tests.
+- **epic**: everything a feat covers, plus the areas of code it touches, data migrations, delivery order, and dependencies on other epics.
+- **project**: the users and their problem, the stack (language, framework, data store, hosting), whether it has a UI and a design system (then the "Design system standard" below), authentication and data handling, testing, CI and deployment, observability, and the epics in order.
+
+The interview is done when the frontier is empty: every branch visited, nothing silently assumed.
+
+## 4. Find gaps and red flags
+
+1. Hand the store to reviewers on ${deep}, up to the fan-out cap at once. Each takes one or more lenses (with fewer reviewers than lenses, a reviewer takes several; skip **experience** without a UI):
+${lenses}
+
+   \`\`\`
+   ${phase("review")}
+   Task: find gaps, red flags and code smells in a plan
+   Store: <store path> (query it with sqlite3; change nothing)
+   Lenses: <lenses>
+   Scope: this repository
+   Answer shape: one line per finding: kind (gap / red_flag / smell / risk), lens, what, why it matters in plain words, recommended fix. Only findings tied to the plan or to code (path:line).
+   Budget: <= 500 words
+   \`\`\`
+
+2. For an epic or a project, review the findings before asking about them: one more ${deep} reviewer (${code(phase("review"))}) drops duplicates and findings the store already answers, checks each remaining one against the code, and ranks them by impact.
+3. Record the findings. Each open gap joins the frontier as a question; each red flag and smell is shown in plain words with its recommended fix, and the user's call on it is recorded.
+4. Go back to step 3. The loop ends when a review finds nothing new.
+
+## 5. Draft the tickets
+
+Hand the store to ${deep} (${code(phase("plan"))}, task: draft the tickets) and record its draft:
+
+- A project splits into epics; every epic splits into stories; a feat, fix or ticket that fits ${code(MAX_STORY_SIZE)} stays one story.
+- Every story has a specific title, its outcome, "done when" criteria, a size (${STORY_SIZES.map(code).join(", ")}) and its ${code(TOUCHES_LINE)} areas or paths.
+- Cut for parallel work: shared foundations (schemas, contracts, scaffolding, design tokens) come first; after them, stories in separate areas that do not wait on each other. Add a \`blocks\` edge only where one story needs another's result.
+- ${WAVE_RULE} Check the waves with the store's \`waves\` view: tickets missing from it sit in a dependency cycle, which the draft breaks.
+
+## 6. Final review
+
+1. Hand the whole store to ${deep} (${code(phase("review"))}, every lens) for one last pass: open gaps, red flags, smells, criteria nobody can check, stories over ${code(MAX_STORY_SIZE)}, cycles, waves with overlapping areas, decisions that contradict each other.
+2. Show the user the plan in plain words: the outcome, the epics, a table of waves (wave, ticket, size, touches), the decisions taken on recommendation, and the open findings.
+3. Ask about every open gap in step 3's format, update the plan, and repeat this step until the review finds nothing open.
+4. When the user asks to write the tickets while gaps are still open, write them: each open gap becomes a ticket titled ${code(`${GAP_TITLE_PREFIX}<question>`)} with the question, why it matters, the options and the recommended answer, sized ${code(GAP_SIZE)}, labelled ${code("gap")} (color ${code(GAP_LABEL_COLOR)}), and blocking the tickets whose work depends on its answer.
+
+## 7. Write the tickets
+
+- **Kaneo**: load the ${code(KANEO_SKILL)} skill and follow its "Plan an epic" section; epics are titled ${code(`${EPIC_TITLE_PREFIX}<outcome>`)}. Have the scribe create each epic, then its stories and gap tickets with their labels and relations, in batches. Check each reply against the store, record every Kaneo identifier in \`tracker_id\`, and set the plan's tracker to \`kaneo\`.
+- **Store only**: the tickets already live in the store.
+
+Set the plan's status to \`written\`.
+
+## 8. Report
+
+In plain words: what will be built, the epics, the waves and the widest wave's size, the decisions taken on recommendation, the gap tickets, the store path, and what to run next, naming only commands whose item is installed:
+
+- ${code(`${cont} parallel-wave`)} builds the next wave of an epic in parallel;
+- ${code(`${cont} parallel <N>`)} works up to N tickets at once, ${code(cont)} one at a time;
+- ${code(`${kickOff} <EPIC-ID>`)} prepares a brief that works a whole epic in a fresh session.
+
+With none installed, say how to work the tickets by hand from the store.
+
+## Plan store
+
+Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is the current month (\`10-2026\`). Create it with \`sqlite3\` (or \`python3 -m sqlite3\` when \`sqlite3\` is missing) from this schema:
+
+\`\`\`sql
+${PLAN_SCHEMA}
+\`\`\`
+
+Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+
+## Design system standard
+
+Applies to every plan with a UI and a design system; each rule becomes "done when" criteria of the stories that build it.
+
+- **4-point grid**: every spacing, size, radius, icon, font size, line height and breakpoint token is a multiple of 4 px. Ask whether 1 px hairline borders are the one exception.
+- **Accessibility**: WCAG 2.2 AA. Text contrast 4.5:1 (3:1 for large text and UI parts), a visible focus ring, everything reachable by keyboard, semantic roles and labels, targets of at least 24 px (44 px recommended for touch), color never the only signal, and automated accessibility checks in CI.
+- **Motion**: scroll-driven animations ship as first-party design-system components (reveal on scroll, scroll progress, sticky and parallax sections, staggered lists) with motion tokens for durations and easing. A proven library is welcome when it meets this bar: only \`transform\` and \`opacity\` animate, no layout shift, a steady 60 fps on a mid-range phone, no scroll hijacking, cleanup on unmount, safe under server rendering, and \`prefers-reduced-motion\` honored with a still or fade fallback. Every motion component ships tests for its reduced-motion path and its cleanup.
+- Ask the stack-specific choices (component library, styling, motion library) with a recommendation for the chosen stack.
 `;
 }
 //#endregion
@@ -5082,7 +5364,7 @@ const modelLadder = {
 	ops: (_entry, runtime, config) => runtimeOps(runtime, config)
 };
 const kaneo = {
-	id: "kaneo",
+	id: KANEO_ITEM,
 	title: "Kaneo work tracking",
 	description: "kaneo-work-tracking skill, always-on rules, the kaneo MCP server and a cheap kaneo-scribe agent that saves tickets",
 	settings: [{
@@ -5374,6 +5656,14 @@ function kickOffOps(runtime, project, config) {
 	if (runtime === "claude") ops.push(...kickOffGuardOps(project));
 	return ops;
 }
+function planningOps(runtime, project, config) {
+	const tiers = config.tiers[runtime];
+	const content = planningMarkdown(runtime, {
+		fast: modelName(runtime, tiers),
+		deep: modelName(runtime, tiers, tiers.deep.effort, "deep")
+	});
+	return actionOps(runtime, project, PLANNING, content, "planning");
+}
 const STATUSLINE_FILE = "statusline.sh";
 const CATALOG = [
 	modelLadder,
@@ -5394,6 +5684,14 @@ const CATALOG = [
 		settings: [],
 		discover: () => ({}),
 		ops: (entry, runtime, config) => kickOffOps(runtime, entry.project, config)
+	},
+	{
+		id: PLANNING,
+		title: "Plan work with you",
+		description: "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed",
+		settings: [],
+		discover: () => ({}),
+		ops: (entry, runtime, config) => planningOps(runtime, entry.project, config)
 	},
 	{
 		id: "statusline",
