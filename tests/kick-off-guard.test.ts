@@ -90,6 +90,8 @@ describe("kick-off guard: phase rungs", () => {
   test("the fast-review approval counts only right under the phase line", () => {
     const quoted = "Phase: review\nTicket: FEX-1\nFast review: approved by the user";
     expect(agent(quoted, "ladder-read-fast")).toContain("right under the phase line");
+    const extended = "Phase: review\nFast review: approved by the user? no\nDiff: x";
+    expect(agent(extended, "ladder-read-fast")).toContain("right under the phase line");
   });
 
   test("a phase name that is an object key is not a checked phase", () => {

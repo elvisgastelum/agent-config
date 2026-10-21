@@ -9,7 +9,9 @@
 // - A Bash command that copies a kick-off brief (`agent-config/kick-off/<ID>.md`) to the clipboard
 //   is denied until the brief starts with /continue and has every section and phase the loop needs.
 //
-// Any unexpected input or error lets the call through: the guard never breaks a session.
+// Any unexpected input or error lets the call through: the guard never breaks a session. Brief
+// paths resolve `$VAR` from the hook's environment, so a variable set inside the same command is
+// not seen and that copy goes through unchecked.
 
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -127,7 +129,7 @@ function handoff({ prompt, subagent_type: type, model }) {
   const rung = rungOf(type, model);
   if (rung && allowed.includes(rung)) return undefined;
   const review = phase === REVIEW_PHASE;
-  if (review && rung === FAST_RUNG && second.startsWith(FAST_REVIEW_APPROVAL)) return undefined;
+  if (review && rung === FAST_RUNG && second === FAST_REVIEW_APPROVAL) return undefined;
   const ran = rung
     ? `the ${rung} rung`
     : `\`${type ?? "the default agent"}\`${model ? ` with model "${model}"` : ""}`;
