@@ -48,6 +48,14 @@ describe("PLAN_SCHEMA", () => {
     expect(() => db.exec(PLAN_SCHEMA)).not.toThrow();
   });
 
+  test("replaces the waves view of a store from an older schema", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE VIEW waves AS SELECT 'stale' AS ticket_id, 0 AS wave");
+    db.exec(PLAN_SCHEMA);
+    addTicket(db, "T1");
+    expect(waves(db)).toEqual([{ ticket_id: "T1", wave: 1 }]);
+  });
+
   test("layers open tickets into waves by their unfinished blockers", () => {
     const db = store();
     addTicket(db, "A", "done");

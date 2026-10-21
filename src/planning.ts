@@ -54,7 +54,10 @@ const STORY_SIZES = [GAP_SIZE, "P2", "P3", MAX_STORY_SIZE] as const;
 /**
  * The plan store's schema. Every statement is idempotent, so running it on an existing store is
  * safe. The `waves` view layers open tickets by their unfinished blockers and leaves out every
- * ticket in a dependency cycle or behind one (`stuck`), since none of them can start.
+ * ticket in a dependency cycle or behind one (`stuck`), since none of them can start. It is dropped
+ * and created again, so a store from an older schema gets the current view. It selects only
+ * grouped or aggregated columns: DuckDB (harlequin's default adapter) cannot bind a bare column,
+ * and its SQLite fallback prepares a rewritten query that SQLite cannot parse.
  */
 /** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
 export const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
@@ -121,7 +124,8 @@ CREATE TABLE IF NOT EXISTS findings (
   resolution TEXT,
   ticket_id TEXT REFERENCES tickets(id)
 );
-CREATE VIEW IF NOT EXISTS waves AS
+DROP VIEW IF EXISTS waves;
+CREATE VIEW waves AS
 WITH RECURSIVE
 open_blocks(blocker, blocked) AS (
   SELECT b.blocker, b.blocked FROM blocks b
@@ -148,7 +152,7 @@ layer(ticket_id, wave) AS (
 )
 SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
 FROM layer JOIN tickets t ON t.id = layer.ticket_id
-GROUP BY layer.ticket_id;`;
+GROUP BY layer.ticket_id, t.epic_id;`;
 
 /** What the gap reviewers look at; a capped fan-out gives one reviewer several lenses. */
 const LENSES: [name: string, focus: string][] = [
