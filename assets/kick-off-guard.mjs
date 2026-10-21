@@ -106,6 +106,10 @@ const LIST_OPERATORS = ["&&", "||", ";", "&", "\n"];
 const PIPE = "|";
 const OUTPUT_REDIRECT = ">";
 const INPUT_REDIRECT = "<";
+/** `&>file`: stdout and stderr to a file; this `&` is a redirect, not a background job. */
+const ALL_OUTPUT_REDIRECT = "&>";
+/** `>&2`, `2>&1`: after a redirect, `&` plus a descriptor duplicates it; `>&file` still names a file. */
+const DESCRIPTOR_DUPLICATE = /^&([\d-]+)?/;
 /** Characters that end a word without other meaning here: whitespace and subshell parentheses. */
 const WORD_BREAK = /[\s()]/;
 /** A leading `~/`, which the shell expands to the home directory. */
@@ -211,7 +215,9 @@ function parse(command) {
     const c = command[i];
     const expands = quote !== SINGLE_QUOTE;
     const variable = expands && c === VARIABLE_SIGIL ? SHELL_VARIABLE.exec(command.slice(i)) : null;
-    const list = quote ? undefined : LIST_OPERATORS.find((op) => command.startsWith(op, i));
+    const allOutput = !quote && command.startsWith(ALL_OUTPUT_REDIRECT, i);
+    const list =
+      quote || allOutput ? undefined : LIST_OPERATORS.find((op) => command.startsWith(op, i));
     if (variable) {
       word += process.env[variable[1] ?? variable[2]] ?? "";
       i += variable[0].length - 1;
@@ -222,6 +228,8 @@ function parse(command) {
       else word += c;
     } else if (c === SINGLE_QUOTE || c === DOUBLE_QUOTE) {
       quote = c;
+    } else if (allOutput) {
+      end();
     } else if (list) {
       end();
       pipelines.push([[]]);
@@ -231,7 +239,9 @@ function parse(command) {
       pipelines.at(-1).push([]);
     } else if (c === OUTPUT_REDIRECT || c === INPUT_REDIRECT) {
       end();
-      redirect = c;
+      const duplicate = DESCRIPTOR_DUPLICATE.exec(command.slice(i + 1));
+      i += duplicate?.[0].length ?? 0;
+      redirect = duplicate?.[1] ? "" : c;
     } else if (WORD_BREAK.test(c)) {
       end();
     } else {
@@ -261,7 +271,7 @@ function copy(command, cwd) {
   const written = new Set(
     commands.flatMap((words) =>
       words
-        .filter((w) => w.output || commandName(words) === TEE)
+        .filter((w) => w.output || basename(commandName(words)) === TEE)
         .map((w) => briefPath(w.text, cwd))
         .filter(Boolean),
     ),

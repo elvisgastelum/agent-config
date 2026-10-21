@@ -3029,7 +3029,7 @@ ${args} Read them before doing anything else. Only their first line picks the mo
 | \`${cmd} parallel\` | Parallel | 4 |
 | \`${cmd} parallel <n>\` | Parallel | \`<n>\` (a positive integer, e.g. \`${cmd} parallel 10\`) |
 
-If \`parallel\` is followed by something that is not a positive integer, or the first line is neither empty nor \`parallel\`, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel mode section.
+If the first line holds anything other than \`parallel\`, optionally followed by a positive integer, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel mode section.
 
 A brief (such as the one the kick-off action copies) scopes the run: take tickets only from its queue, in its order, and follow its steps wherever they differ from the flows below. Keep working through its queue until it says to stop.
 

@@ -200,6 +200,34 @@ describe("kick-off guard: brief copies", () => {
     expect(bash(`pbcopy < ${path.replaceAll(" ", "\\ ")}`)).toContain("/continue");
   });
 
+  test("a ~/ brief path expands to the home directory", () => {
+    const dir = tempDir();
+    writeBrief(dir, "FEX-14.md", INCOMPLETE);
+    const original = process.env.HOME;
+    try {
+      process.env.HOME = dir;
+      expect(bash("pbcopy < ~/agent-config/kick-off/FEX-14.md")).toContain("FEX-14.md");
+    } finally {
+      if (original === undefined) delete process.env.HOME;
+      else process.env.HOME = original;
+    }
+  });
+
+  test("file-descriptor redirects do not end the pipeline", () => {
+    const dir = tempDir();
+    const incomplete = writeBrief(dir, "FEX-15.md", INCOMPLETE);
+    expect(bash(`cat ${incomplete} 2>&1 | pbcopy`)).toContain("FEX-15.md");
+    expect(bash(`cat ${incomplete} >&2 | pbcopy`)).toContain("FEX-15.md");
+    expect(bash(`cat ${incomplete} &>/dev/null | pbcopy`)).toContain("FEX-15.md");
+    expect(bash(`cat ${incomplete} & echo hi | pbcopy`)).toBeUndefined();
+  });
+
+  test("a path-qualified tee writing the brief counts as a write", () => {
+    const dir = tempDir();
+    const complete = writeBrief(dir, "FEX-16.md", brief());
+    expect(bash(`printf x | /usr/bin/tee ${complete} | pbcopy`)).toContain("separate commands");
+  });
+
   test("environment variables in the brief path expand", () => {
     const dir = tempDir();
     writeBrief(dir, "FEX-7.md", INCOMPLETE);

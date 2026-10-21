@@ -234,6 +234,9 @@ test("install continue adds a manual-only action per runtime that delegates to c
   expect(claude).toContain('`subagent_type: "commit-writer"`');
   expect(claude).toContain("each on the balanced rung (claude-sonnet-5-5)");
   expect(claude).toContain("every line after it is this run's brief");
+  expect(claude).toContain(
+    "If the first line holds anything other than `parallel`, optionally followed by a positive integer, stop",
+  );
 
   const opencode = read(join(home, ".config/opencode/commands/continue.md"));
   expect(opencode).toContain("`$ARGUMENTS`");
