@@ -3,7 +3,7 @@
 // deep rung, keeps the plan in a SQLite store under .plans, and writes Kaneo epics and stories when
 // the kaneo item is installed and its MCP answers.
 
-import { CALL, CONTINUE, actionCommand, actionFrontmatter } from "./continue.ts";
+import { CALL, CONTINUE, PARALLEL_WAVE, actionCommand, actionFrontmatter } from "./continue.ts";
 import {
   EPIC_TITLE_PREFIX,
   KANEO_ITEM,
@@ -222,7 +222,7 @@ When one of these agents is not installed, do the step yourself with bounded rea
 | Installed | Effect on the plan |
 | --- | --- |
 | ${code(KANEO_ITEM)} with a working MCP | Tickets become Kaneo epics and stories, as the ${code(KANEO_SKILL)} skill says. |
-| ${code(CONTINUE)} | Stories are cut to run in parallel waves; the report names ${code(`${cont} parallel-wave`)}. |
+| ${code(CONTINUE)} | Stories are cut to run in parallel waves; the report names ${code(`${cont} ${PARALLEL_WAVE}`)}. |
 | ${code(KICK_OFF)} | The report offers ${code(`${kickOff} <EPIC-ID>`)} to prepare a brief for a fresh session. |
 | ${code(LADDER_ITEM)} | Reasoning and reads run on the ladder agents above. |
 
@@ -308,7 +308,7 @@ Set the plan's status to \`written\`.
 
 In plain words: what will be built, the epics, the waves and the widest wave's size, the decisions taken on recommendation, the gap tickets, the store path, and what to run next, naming only commands whose item is installed:
 
-- ${code(`${cont} parallel-wave`)} builds the next wave of an epic in parallel;
+- ${code(`${cont} ${PARALLEL_WAVE}`)} builds the next wave of an epic in parallel;
 - ${code(`${cont} parallel <N>`)} works up to N tickets at once, ${code(cont)} one at a time;
 - ${code(`${kickOff} <EPIC-ID>`)} prepares a brief that works a whole epic in a fresh session.
 

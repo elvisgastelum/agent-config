@@ -227,7 +227,7 @@ test("install continue adds a manual-only action per runtime that delegates to c
   const claude = read(skill);
   expect(claude).toContain("name: continue");
   expect(claude).toContain("disable-model-invocation: true");
-  expect(claude).toContain('argument-hint: "[parallel [n]]"');
+  expect(claude).toContain('argument-hint: "[parallel [n] | parallel-wave]"');
   expect(claude).toContain("`$ARGUMENTS`");
   expect(claude).toContain('`subagent_type: "kaneo-scribe"` (claude-haiku-5-5)');
   expect(claude).toContain('`subagent_type: "ladder-read-fast"`');
@@ -235,7 +235,7 @@ test("install continue adds a manual-only action per runtime that delegates to c
   expect(claude).toContain("each on the balanced rung (claude-sonnet-5-5)");
   expect(claude).toContain("every line after it is this run's brief");
   expect(claude).toContain(
-    "If the first line holds anything other than `parallel`, optionally followed by a positive integer, stop",
+    "If the first line holds anything other than `parallel` (optionally followed by a positive integer) or `parallel-wave`, stop",
   );
 
   const opencode = read(join(home, ".config/opencode/commands/continue.md"));

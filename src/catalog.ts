@@ -578,10 +578,15 @@ function actionOps(
 
 function continueOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
   const tiers = config.tiers[runtime];
-  const content = continueMarkdown(runtime, {
-    fast: modelName(runtime, tiers),
-    balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
-  });
+  const content = continueMarkdown(
+    runtime,
+    {
+      fast: modelName(runtime, tiers),
+      balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
+      deep: modelName(runtime, tiers, tiers.deep.effort, "deep"),
+    },
+    briefDirText(project),
+  );
   return actionOps(runtime, project, CONTINUE, content, "continue");
 }
 

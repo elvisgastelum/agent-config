@@ -3,10 +3,14 @@
 // titles to cheap agents. Moved here from elvisgastelum/claude-continue-skill.
 
 import { COMMIT_SKILL, COMMIT_WRITER } from "./commit.ts";
-import { KANEO_SKILL, SCRIBE } from "./kaneo.ts";
-import type { Runtime } from "./tiers.ts";
+import { EPIC_TITLE_PREFIX, KANEO_SKILL, SCRIBE, TOUCHES_LINE, WAVE_RULE } from "./kaneo.ts";
+import { ROUTED_REVIEW, modelRouting, phase, ticketPhases, type LoopModels } from "./loop.ts";
+import { agentName, type Runtime } from "./tiers.ts";
 
 export const CONTINUE = "continue";
+
+/** The argument that builds the next wave of an epic instead of a fixed number of tickets. */
+export const PARALLEL_WAVE = "parallel-wave";
 
 /** How each runtime's skill text tells the model to start a named sub-agent. */
 export const CALL: Record<Runtime, (agent: string) => string> = {
@@ -26,15 +30,16 @@ export function continueCommand(runtime: Runtime): string {
 }
 
 const DESCRIPTION =
-  "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one.";
+  "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one. With `parallel-wave`, build the next wave of an epic the kick-off way and explain the result.";
 
-export const ARGUMENT_HINT = "[parallel [n]]";
+export const ARGUMENT_HINT = `[parallel [n] | ${PARALLEL_WAVE}]`;
 
-/** Models the action names: the fast rung for cheap agents, the balanced rung for workers. */
-export interface ContinueModels {
-  fast: string;
-  balanced: string;
-}
+/** Models the action names: fast for cheap agents, balanced for workers, deep for wave plans. */
+export type ContinueModels = LoopModels;
+
+/** In parallel-wave mode the kick-off phases name these instead of a brief's placeholders. */
+const WAVE_BRANCH = "<integration branch>";
+const WAVE_REVIEW = "the review routing above";
 
 /** Frontmatter for the file each runtime reads; every one keeps the action manual-only. */
 export function actionFrontmatter(
@@ -63,13 +68,21 @@ export function actionFrontmatter(
 /** Codex: an explicit `$continue` still works; Codex never picks the skill on its own. */
 export const CODEX_POLICY = `policy:\n  allow_implicit_invocation: false\n`;
 
-export function continueMarkdown(runtime: Runtime, models: ContinueModels): string {
+export function continueMarkdown(
+  runtime: Runtime,
+  models: ContinueModels,
+  briefDir: string,
+): string {
   const cmd = continueCommand(runtime);
   const args =
     runtime === "codex"
       ? `Arguments passed to this run: the user's message after \`${cmd}\` (none means no arguments).`
       : "Arguments passed to this run: `$ARGUMENTS` (empty means no arguments).";
   const scribe = CALL[runtime](SCRIBE);
+  const deep = `\`${agentName("read", "deep")}\` (${models.deep})`;
+  const phases = ticketPhases(WAVE_BRANCH, WAVE_REVIEW)
+    .map((step, i) => `   ${i + 1}. ${step}`)
+    .join("\n");
   return `${actionFrontmatter(runtime, CONTINUE, DESCRIPTION, ARGUMENT_HINT)}
 
 ## Arguments
@@ -81,8 +94,9 @@ ${args} Read them before doing anything else. Only their first line picks the mo
 | \`${cmd}\` | Single | 1 (the single-ticket flow below) |
 | \`${cmd} parallel\` | Parallel | 4 |
 | \`${cmd} parallel <n>\` | Parallel | \`<n>\` (a positive integer, e.g. \`${cmd} parallel 10\`) |
+| \`${cmd} ${PARALLEL_WAVE}\` | Parallel wave | The size of the epic's next wave |
 
-If the first line holds anything other than \`parallel\`, optionally followed by a positive integer, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel mode section.
+If the first line holds anything other than \`parallel\` (optionally followed by a positive integer) or \`${PARALLEL_WAVE}\`, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel sections.
 
 A brief (such as the one the kick-off action copies) scopes the run: take tickets only from its queue, in its order, and follow its steps wherever they differ from the flows below. Keep working through its queue until it says to stop.
 
@@ -168,5 +182,44 @@ Stop the loop and report when a conflict cannot be resolved with confidence, che
 1. After a PR is merged, remove its worktree: \`git worktree remove <path>\`. Keep the worktree of any ticket that was not merged.
 2. Update the main checkout: \`git checkout <default-branch> && git pull\`.
 3. Report a table: ticket, PR URL, status (merged / open / blocked), and what is left for anything not merged.
+
+## Parallel-wave mode
+
+Goal: build the next wave of one epic, every story that can start now, all at once and the way the kick-off action works an epic; merge them one by one; then explain what changed at the user's level. One wave per run.
+
+### 1. Pick the epic
+
+1. Load the \`${KANEO_SKILL}\` skill: its "Plan an epic" section says how epics and their stories are marked. Ask ${scribe} for the project's open epics (tasks titled \`${EPIC_TITLE_PREFIX}…\`), each with its "Done when" list and its open stories, and every story with its \`blocks\` relations, including those to stories of other epics.
+2. Hand that summary to ${deep} (\`${phase("plan")}\`): order the epics (an epic waits while one of its stories is blocked by an open story of another epic) and recommend the one to work first, with a one-line reason: what it unblocks, its risk, its priority.
+3. One epic can start: take it. Several can start in any order: ask the user which one, the recommendation first. When the user skips the question, says to choose, or the run cannot ask, take the recommendation and say so. None can start: report what blocks each and stop.
+
+### 2. Find the waves
+
+1. Ask the scribe for every open story of the epic with its status, priority, \`blocks\` relations and \`${TOUCHES_LINE}\` line.
+2. Hand that to ${deep} (\`${phase("plan")}\`): ${WAVE_RULE} Return the waves in order; for each story, the context a fresh worker needs and the paths it touches; list dependency cycles and stale blockers as gaps.
+3. The first wave is this run's work, and its size is the parallel limit. A wave of one story runs the single-ticket flow, built through the phases in step 3. With no story ready, report the blockers and stop.
+4. Show the waves, the integration branch and the merge order before creating anything.
+
+### 3. Build the wave the kick-off way
+
+When the epic has a kick-off brief, \`${briefDir}/<EPIC-ID>.md\`, its integration branch, review routing and gaps apply. Without one, the integration branch is \`dev\` when \`origin/dev\` exists and the default branch otherwise, and reviews are routed by risk (${ROUTED_REVIEW}).
+
+Run parallel mode steps 2 to 5 with the wave as the picked tickets, and these changes:
+
+- Worktrees branch from \`origin/${WAVE_BRANCH}\`, and every PR merges into it.
+- Each worker builds its ticket through these phases, every handoff starting with its phase line, then runs the checks, commits, pushes and opens the PR as parallel mode step 3 says:
+${phases}
+- A worker reports itself blocked when the review still has findings after 3 rounds or CI fails twice after fixes.
+
+${modelRouting(runtime, models, WAVE_REVIEW)}
+
+### 4. Explain the wave
+
+After the cleanup, explain the wave at the user's level: plain words with each technical term explained in a few words, unless the user speaks technically.
+
+- **What changed**: per ticket, what someone can now do or what works differently, and why it matters for the epic.
+- **How it was checked**: risk level, review rounds, checks and CI.
+- **What to watch**: open findings, risks, and anything not merged with the reason.
+- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met.
 `;
 }
