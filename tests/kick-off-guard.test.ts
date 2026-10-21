@@ -103,6 +103,14 @@ describe("kick-off guard: phase rungs", () => {
     expect(agent(`${PHASE_PREFIX} plan`, "ladder-read-fast")).toContain("deep rung");
   });
 
+  test("planner agents carry their rung in their name, like the ladder agents", () => {
+    expect(agent("Phase: plan\nTask: classify", "planner-deep")).toBeUndefined();
+    expect(agent("Phase: review\nTask: draft quality", "planner-deep")).toBeUndefined();
+    expect(agent("Phase: plan\nTask: classify", "planner-fast")).toContain("fast rung");
+    expect(agent("Phase: review\nTask: draft quality", "planner-balanced")).toBeUndefined();
+    expect(agent("Phase: draft\nTask: draft the tickets", "planner-fast")).toBeUndefined();
+  });
+
   test("unchecked handoffs pass through", () => {
     expect(agent("Phase: edit\nTicket: FEX-1", "ladder-edit-fast")).toBeUndefined();
     expect(agent("Phase: fix\nTicket: FEX-1", "ladder-edit-fast")).toBeUndefined();

@@ -44,8 +44,11 @@ const FAST_RUNG = "fast";
 /** The exact line, right under the phase line, that lets a review run on the fast rung. */
 export const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
 
-/** Ladder agents carry their rung in their name: ladder-read-deep, ladder-edit-fast. */
-const LADDER_AGENT = /^ladder-(?:read|edit)-(fast|balanced|deep)$/;
+/**
+ * Ladder and planner agents carry their rung in their name: ladder-read-deep, ladder-edit-fast,
+ * planner-balanced.
+ */
+const LADDER_AGENT = /^(?:ladder-(?:read|edit)|planner)-(fast|balanced|deep)$/;
 const READ_AGENT_PREFIX = "ladder-read-";
 
 /** Model families and their rung; an alias (haiku) or a full ID (claude-haiku-5-5) names one. */
@@ -157,8 +160,9 @@ function nonEmptyLines(text) {
 }
 
 /**
- * The rung a handoff runs on: its model override's family, else its ladder agent's rung. An
- * override with no known family (fable) defers to the ladder agent; on any other agent it is denied.
+ * The rung a handoff runs on: its model override's family, else the rung in its ladder or planner
+ * agent's name. An override with no known family (fable) defers to that agent; on any other agent it
+ * is denied.
  */
 function rungOf(type, model) {
   const name = typeof model === "string" ? model.toLowerCase() : "";
