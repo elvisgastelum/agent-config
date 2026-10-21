@@ -49,14 +49,17 @@ export function findStores(paths: string[]): string[] {
 const message = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-type Database = import("node:sqlite").DatabaseSync;
+export type Database = import("node:sqlite").DatabaseSync;
 
-function versionOf(db: Database): number {
+/** How long a connection waits for another writer's lock before failing. */
+export const BUSY_TIMEOUT_MS = 5000;
+
+export function versionOf(db: Database): number {
   return Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
 }
 
 /** The version a store may be upgraded from; a newer one was written by a newer agent-config. */
-function checkVersion(from: number): void {
+export function checkVersion(from: number): void {
   if (from > PLAN_SCHEMA_VERSION) {
     throw new Error(
       `store version ${from} is newer than the ${PLAN_SCHEMA_VERSION} this agent-config supports; run agent-config update`,
@@ -200,6 +203,7 @@ export async function readPlan(path: string): Promise<PlanDetail> {
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(path, { readOnly: true });
   try {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
     const version = versionOf(db);
     checkVersion(version);
     const all = <T>(sql: string): T[] => db.prepare(sql).all() as T[];

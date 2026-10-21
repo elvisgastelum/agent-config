@@ -33,6 +33,7 @@ export const PLAN_KINDS = {
 } as const satisfies Record<string, { fanOut: number; start: Tier }>;
 export type PlanKind = keyof typeof PLAN_KINDS;
 const KIND_NAMES = Object.keys(PLAN_KINDS) as PlanKind[];
+export const PLAN_KIND_NAMES: readonly string[] = KIND_NAMES;
 
 export const PLANNING_HINT = `[${KIND_NAMES.join(" | ")}] <what to plan>`;
 
@@ -49,7 +50,7 @@ const GAP_LABEL_COLOR = "#EC4899";
 /** Story sizes on the kaneo-work-tracking point scale: anything larger is split first. */
 const GAP_SIZE = "P1";
 const MAX_STORY_SIZE = "P5";
-const STORY_SIZES = [GAP_SIZE, "P2", "P3", MAX_STORY_SIZE] as const;
+export const STORY_SIZES = [GAP_SIZE, "P2", "P3", MAX_STORY_SIZE] as const;
 
 /** The `plans` subcommand that upgrades existing stores. */
 export const PLANS_UPGRADE = "upgrade";
@@ -104,6 +105,18 @@ SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
 FROM layer JOIN tickets t ON t.id = layer.ticket_id
 GROUP BY layer.ticket_id, t.epic_id;`;
 
+/** The values the schema's CHECK lists allow; the plan tools take the same lists. */
+export const PLAN_STATUSES = ["interview", "review", "written"] as const;
+export const PLAN_TRACKERS = ["store", "kaneo"] as const;
+export const DECIDED_BY = ["user", "recommendation"] as const;
+export const TICKET_KINDS = ["story", "gap"] as const;
+export const TICKET_STATUSES = ["todo", "in_progress", "done"] as const;
+export const FINDING_KINDS = ["gap", "red_flag", "smell", "risk"] as const;
+export const FINDING_STATUSES = ["open", "resolved", "dismissed", "ticketed"] as const;
+
+/** Renders a value list as the inside of a SQL `IN (...)` check. */
+const sqlList = (values: readonly string[]): string => values.map((v) => `'${v}'`).join(", ");
+
 /** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
 export const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
 
@@ -115,11 +128,11 @@ export const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
 CREATE TABLE IF NOT EXISTS plan (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   title TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN (${KIND_NAMES.map((k) => `'${k}'`).join(", ")})),
+  kind TEXT NOT NULL CHECK (kind IN (${sqlList(KIND_NAMES)})),
   request TEXT NOT NULL,
   outcome TEXT,
-  status TEXT NOT NULL DEFAULT 'interview' CHECK (status IN ('interview', 'review', 'written')),
-  tracker TEXT NOT NULL DEFAULT 'store' CHECK (tracker IN ('store', 'kaneo')),
+  status TEXT NOT NULL DEFAULT 'interview' CHECK (status IN (${sqlList(PLAN_STATUSES)})),
+  tracker TEXT NOT NULL DEFAULT 'store' CHECK (tracker IN (${sqlList(PLAN_TRACKERS)})),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS facts (
@@ -134,7 +147,7 @@ CREATE TABLE IF NOT EXISTS decisions (
   question TEXT NOT NULL,
   answer TEXT NOT NULL,
   why TEXT,
-  decided_by TEXT NOT NULL CHECK (decided_by IN ('user', 'recommendation'))
+  decided_by TEXT NOT NULL CHECK (decided_by IN (${sqlList(DECIDED_BY)}))
 );
 CREATE TABLE IF NOT EXISTS epics (
   id TEXT PRIMARY KEY,
@@ -147,13 +160,13 @@ CREATE TABLE IF NOT EXISTS epics (
 CREATE TABLE IF NOT EXISTS tickets (
   id TEXT PRIMARY KEY,
   epic_id TEXT REFERENCES epics(id),
-  kind TEXT NOT NULL DEFAULT 'story' CHECK (kind IN ('story', 'gap')),
+  kind TEXT NOT NULL DEFAULT 'story' CHECK (kind IN (${sqlList(TICKET_KINDS)})),
   title TEXT NOT NULL,
   outcome TEXT NOT NULL,
   done_when TEXT NOT NULL,
-  size TEXT NOT NULL CHECK (size IN (${STORY_SIZES.map((s) => `'${s}'`).join(", ")})),
+  size TEXT NOT NULL CHECK (size IN (${sqlList(STORY_SIZES)})),
   touches TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
+  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN (${sqlList(TICKET_STATUSES)})),
   tracker_id TEXT
 );
 CREATE TABLE IF NOT EXISTS blocks (
@@ -164,12 +177,12 @@ CREATE TABLE IF NOT EXISTS blocks (
 );
 CREATE TABLE IF NOT EXISTS findings (
   id INTEGER PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('gap', 'red_flag', 'smell', 'risk')),
+  kind TEXT NOT NULL CHECK (kind IN (${sqlList(FINDING_KINDS)})),
   lens TEXT NOT NULL,
   detail TEXT NOT NULL,
   why TEXT NOT NULL,
   recommendation TEXT,
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'dismissed', 'ticketed')),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN (${sqlList(FINDING_STATUSES)})),
   resolution TEXT,
   ticket_id TEXT REFERENCES tickets(id)
 );

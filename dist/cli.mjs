@@ -1240,7 +1240,7 @@ ${f}
 	}).prompt();
 };
 `${styleText("gray", S_BAR)}`;
-const text = (t) => new n({
+const text$1 = (t) => new n({
 	validate: t.validate,
 	placeholder: t.placeholder,
 	defaultValue: t.defaultValue,
@@ -4493,6 +4493,7 @@ const PLAN_KINDS = {
 	}
 };
 const KIND_NAMES = Object.keys(PLAN_KINDS);
+const PLAN_KIND_NAMES = KIND_NAMES;
 const PLANNING_HINT = `[${KIND_NAMES.join(" | ")}] <what to plan>`;
 /** The plan store: one folder per month and per plan, in the repository root. */
 const PLANS_DIR = ".plans";
@@ -4550,6 +4551,34 @@ layer(ticket_id, wave) AS (
 SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
 FROM layer JOIN tickets t ON t.id = layer.ticket_id
 GROUP BY layer.ticket_id, t.epic_id;`;
+/** The values the schema's CHECK lists allow; the plan tools take the same lists. */
+const PLAN_STATUSES = [
+	"interview",
+	"review",
+	"written"
+];
+const PLAN_TRACKERS = ["store", "kaneo"];
+const DECIDED_BY = ["user", "recommendation"];
+const TICKET_KINDS = ["story", "gap"];
+const TICKET_STATUSES = [
+	"todo",
+	"in_progress",
+	"done"
+];
+const FINDING_KINDS = [
+	"gap",
+	"red_flag",
+	"smell",
+	"risk"
+];
+const FINDING_STATUSES = [
+	"open",
+	"resolved",
+	"dismissed",
+	"ticketed"
+];
+/** Renders a value list as the inside of a SQL `IN (...)` check. */
+const sqlList = (values) => values.map((v) => `'${v}'`).join(", ");
 /** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
 const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
 /**
@@ -4560,11 +4589,11 @@ const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
 CREATE TABLE IF NOT EXISTS plan (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   title TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN (${KIND_NAMES.map((k) => `'${k}'`).join(", ")})),
+  kind TEXT NOT NULL CHECK (kind IN (${sqlList(KIND_NAMES)})),
   request TEXT NOT NULL,
   outcome TEXT,
-  status TEXT NOT NULL DEFAULT 'interview' CHECK (status IN ('interview', 'review', 'written')),
-  tracker TEXT NOT NULL DEFAULT 'store' CHECK (tracker IN ('store', 'kaneo')),
+  status TEXT NOT NULL DEFAULT 'interview' CHECK (status IN (${sqlList(PLAN_STATUSES)})),
+  tracker TEXT NOT NULL DEFAULT 'store' CHECK (tracker IN (${sqlList(PLAN_TRACKERS)})),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS facts (
@@ -4579,7 +4608,7 @@ CREATE TABLE IF NOT EXISTS decisions (
   question TEXT NOT NULL,
   answer TEXT NOT NULL,
   why TEXT,
-  decided_by TEXT NOT NULL CHECK (decided_by IN ('user', 'recommendation'))
+  decided_by TEXT NOT NULL CHECK (decided_by IN (${sqlList(DECIDED_BY)}))
 );
 CREATE TABLE IF NOT EXISTS epics (
   id TEXT PRIMARY KEY,
@@ -4592,13 +4621,13 @@ CREATE TABLE IF NOT EXISTS epics (
 CREATE TABLE IF NOT EXISTS tickets (
   id TEXT PRIMARY KEY,
   epic_id TEXT REFERENCES epics(id),
-  kind TEXT NOT NULL DEFAULT 'story' CHECK (kind IN ('story', 'gap')),
+  kind TEXT NOT NULL DEFAULT 'story' CHECK (kind IN (${sqlList(TICKET_KINDS)})),
   title TEXT NOT NULL,
   outcome TEXT NOT NULL,
   done_when TEXT NOT NULL,
-  size TEXT NOT NULL CHECK (size IN (${STORY_SIZES.map((s) => `'${s}'`).join(", ")})),
+  size TEXT NOT NULL CHECK (size IN (${sqlList(STORY_SIZES)})),
   touches TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
+  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN (${sqlList(TICKET_STATUSES)})),
   tracker_id TEXT
 );
 CREATE TABLE IF NOT EXISTS blocks (
@@ -4609,12 +4638,12 @@ CREATE TABLE IF NOT EXISTS blocks (
 );
 CREATE TABLE IF NOT EXISTS findings (
   id INTEGER PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('gap', 'red_flag', 'smell', 'risk')),
+  kind TEXT NOT NULL CHECK (kind IN (${sqlList(FINDING_KINDS)})),
   lens TEXT NOT NULL,
   detail TEXT NOT NULL,
   why TEXT NOT NULL,
   recommendation TEXT,
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'dismissed', 'ticketed')),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN (${sqlList(FINDING_STATUSES)})),
   resolution TEXT,
   ticket_id TEXT REFERENCES tickets(id)
 );
@@ -6483,7 +6512,7 @@ async function chooseModels(config, runtimes) {
 		log.step(import_picocolors.default.bold(RUNTIME_LABELS[runtime]));
 		for (const tier of TIERS) {
 			const current = config.tiers[runtime][tier];
-			const model = ask(await text({
+			const model = ask(await text$1({
 				message: `${tier} — ${TIER_LABELS[tier]}`,
 				placeholder: runtime === "codex" ? "empty = session model" : defaultTierMap(runtime)[tier].model,
 				initialValue: current.model
@@ -6553,7 +6582,7 @@ async function ladderFlow(config) {
 	await chooseModels(config, runtimes);
 	if (config.components.includes("review-models")) await chooseReviewTiers(config);
 	if (config.components.includes("read-guard") && runtimes.includes("claude")) {
-		const value = ask(await text({
+		const value = ask(await text$1({
 			message: "Read guard: block whole reads of files with at least how many lines?",
 			initialValue: String(config.minLines),
 			validate: (v) => /^\d+$/.test(v ?? "") && Number(v) > 0 ? void 0 : "Enter a positive whole number"
@@ -6651,7 +6680,7 @@ async function catalogFlow() {
 			label: "Project",
 			hint: "one repository, committed with it"
 		}]
-	})) === "project" ? resolve(ask(await text({
+	})) === "project" ? resolve(ask(await text$1({
 		message: "Project directory",
 		initialValue: process.cwd(),
 		validate: (v) => {
@@ -6675,7 +6704,7 @@ async function catalogFlow() {
 	for (const s of item.settings) {
 		const known = defaults.settings[s.key];
 		const from = known?.source === "discovered" ? project ? " (from your user config; written into the repository)" : " (from your existing config)" : "";
-		const raw = ask(await text({
+		const raw = ask(await text$1({
 			message: `${s.message}${from}`,
 			placeholder: s.placeholder,
 			initialValue: known?.value ?? "",
@@ -6882,6 +6911,8 @@ function findStores(paths) {
 	return [...new Set(found)];
 }
 const message$2 = (error) => error instanceof Error ? error.message : String(error);
+/** How long a connection waits for another writer's lock before failing. */
+const BUSY_TIMEOUT_MS = 5e3;
 function versionOf(db) {
 	return Number(db.prepare("PRAGMA user_version").get().user_version);
 }
@@ -6961,6 +6992,7 @@ async function readPlan(path) {
 	const { DatabaseSync } = await import("node:sqlite");
 	const db = new DatabaseSync(path, { readOnly: true });
 	try {
+		db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
 		const version = versionOf(db);
 		checkVersion(version);
 		const all = (sql) => db.prepare(sql).all();
@@ -7131,6 +7163,9 @@ async function serveMcp(tools, options) {
 const PLANS_MCP_INSTRUCTIONS = `Plan stores live at ${PLAN_STORE_PATH} under the repository root. Pass absolute store paths (plan_list returns them). Read with plan_get sections or small plan_query selects, not a full dump.`;
 /** Most rows plan_query returns; more are cut and flagged as truncated. */
 const MAX_QUERY_ROWS = 500;
+/** A plan title: lowercase words joined by single hyphens, as it names the store folder. */
+const TITLE_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const MAX_TITLE_LENGTH = 80;
 const PLAN_SECTIONS = [
 	"plan",
 	"epics",
@@ -7153,6 +7188,120 @@ function resolveStore(store, cwd) {
 	return path;
 }
 const message = (error) => error instanceof Error ? error.message : String(error);
+/**
+* Runs `change` in one immediate transaction on a store at the current schema version, with foreign
+* keys on. A failed change rolls back and rethrows its own error.
+*/
+async function writeStore(store, cwd, change) {
+	const path = resolveStore(store, cwd);
+	const { DatabaseSync } = await import("node:sqlite");
+	const db = new DatabaseSync(path);
+	try {
+		db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+		db.exec("PRAGMA foreign_keys = ON");
+		const version = versionOf(db);
+		checkVersion(version);
+		if (version < 1) throw new Error(`store is schema v${version}; run agent-config plans ${PLANS_UPGRADE} <path> first`);
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const result = change(db);
+			db.exec("COMMIT");
+			return result;
+		} catch (error) {
+			try {
+				db.exec("ROLLBACK");
+			} catch {}
+			throw error;
+		}
+	} finally {
+		db.close();
+	}
+}
+/** The arguments the caller gave, minus `store` and the key, as column values. */
+const given = (args, columns) => Object.fromEntries(columns.filter((c) => args[c] !== void 0).map((c) => [c, args[c]]));
+function insertRow(db, table, values) {
+	const columns = Object.keys(values);
+	const marks = columns.map(() => "?").join(", ");
+	const result = db.prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${marks})`).run(...Object.values(values));
+	return Number(result.lastInsertRowid);
+}
+function updateRow(db, table, key, id, values) {
+	const columns = Object.keys(values);
+	if (columns.length === 0) return;
+	db.prepare(`UPDATE ${table} SET ${columns.map((c) => `${c} = ?`).join(", ")} WHERE ${key} = ?`).run(...Object.values(values), id);
+}
+const selectRow = (db, table, key, id) => db.prepare(`SELECT * FROM ${table} WHERE ${key} = ?`).get(id);
+/** Updates the given columns of row `id`, or inserts it when new; an insert needs `required` too. */
+function saveRow(db, table, id, args, columns, required) {
+	const values = given(args, columns);
+	if (selectRow(db, table, "id", id)) updateRow(db, table, "id", id, values);
+	else {
+		const missing = required.filter((c) => values[c] === void 0);
+		if (missing.length > 0) throw new Error(`${table} ${String(id)} is new; missing ${missing.join(", ")}`);
+		insertRow(db, table, {
+			id,
+			...values
+		});
+	}
+	return selectRow(db, table, "id", id);
+}
+const text = (description) => ({
+	type: "string",
+	minLength: 1,
+	description
+});
+const nullableText = { type: ["string", "null"] };
+const choice = (values) => ({
+	type: "string",
+	enum: [...values]
+});
+const storeProp = text("Absolute path of the plan.sqlite");
+const object = (properties, required = []) => ({
+	type: "object",
+	properties,
+	required,
+	additionalProperties: false
+});
+const EPIC_FIELDS = {
+	title: text(),
+	goal: text(),
+	done_when: text(),
+	position: { type: "integer" },
+	tracker_id: nullableText
+};
+const EPIC_REQUIRED = [
+	"title",
+	"goal",
+	"done_when",
+	"position"
+];
+const TICKET_FIELDS = {
+	epic_id: nullableText,
+	kind: choice(TICKET_KINDS),
+	title: text(),
+	outcome: text(),
+	done_when: text(),
+	size: choice(STORY_SIZES),
+	touches: text(),
+	status: choice(TICKET_STATUSES),
+	tracker_id: nullableText
+};
+const TICKET_REQUIRED = [
+	"title",
+	"outcome",
+	"done_when",
+	"size",
+	"touches"
+];
+const BLOCK_FIELDS = {
+	blocker: text(),
+	blocked: text()
+};
+const atLeastOne = (args, columns) => {
+	const values = given(args, columns);
+	if (Object.keys(values).length === 0) throw new Error(`give at least one of ${columns.join(", ")}`);
+	return values;
+};
 function planTools(cwd) {
 	return [
 		{
@@ -7258,6 +7407,7 @@ function planTools(cwd) {
 				const { DatabaseSync } = await import("node:sqlite");
 				const db = new DatabaseSync(path, { readOnly: true });
 				try {
+					db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
 					const params = args.params ?? [];
 					const rows = db.prepare(String(args.sql)).all(...params);
 					return {
@@ -7268,6 +7418,282 @@ function planTools(cwd) {
 					db.close();
 				}
 			}
+		},
+		{
+			name: "plan_create",
+			description: `Creates a plan store at ${PLAN_STORE_PATH} under the root and returns its absolute path. Refuses when that store already exists.`,
+			readOnly: false,
+			inputSchema: object({
+				root: text("Repository root (default: the server's directory)"),
+				title: text("Kebab-case plan title, at most 80 characters"),
+				kind: choice(PLAN_KIND_NAMES),
+				request: text("What the user asked to plan")
+			}, [
+				"title",
+				"kind",
+				"request"
+			]),
+			async handler(args) {
+				const title = String(args.title);
+				if (title.length > MAX_TITLE_LENGTH || !TITLE_PATTERN.test(title)) throw new Error(`title must be kebab-case (${TITLE_PATTERN.source}) and at most ${MAX_TITLE_LENGTH} characters`);
+				const root = typeof args.root === "string" ? resolve(cwd, args.root) : cwd;
+				const now = /* @__PURE__ */ new Date();
+				const month = `${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
+				const store = join(root, PLANS_DIR, month, title, PLAN_DB);
+				if (existsSync(store)) throw new Error(`${store} already exists`);
+				mkdirSync(dirname(store), { recursive: true });
+				const { DatabaseSync } = await import("node:sqlite");
+				try {
+					const db = new DatabaseSync(store);
+					try {
+						db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+						db.exec(PLAN_SCHEMA);
+						insertRow(db, "plan", {
+							id: 1,
+							title,
+							kind: args.kind,
+							request: args.request
+						});
+					} finally {
+						db.close();
+					}
+				} catch (error) {
+					rmSync(store, { force: true });
+					throw error;
+				}
+				return { store };
+			}
+		},
+		{
+			name: "plan_update",
+			description: "Sets the kind, outcome, status or tracker of the plan and returns the plan row. Give at least one field.",
+			readOnly: false,
+			inputSchema: object({
+				store: storeProp,
+				kind: choice(PLAN_KIND_NAMES),
+				outcome: text(),
+				status: choice(PLAN_STATUSES),
+				tracker: choice(PLAN_TRACKERS)
+			}, ["store"]),
+			handler: (args) => writeStore(String(args.store), cwd, (db) => {
+				updateRow(db, "plan", "id", 1, atLeastOne(args, [
+					"kind",
+					"outcome",
+					"status",
+					"tracker"
+				]));
+				return selectRow(db, "plan", "id", 1);
+			})
+		},
+		{
+			name: "fact_add",
+			description: "Records a fact found while exploring, with where it came from. Returns its id.",
+			readOnly: false,
+			inputSchema: object({
+				store: storeProp,
+				topic: text(),
+				fact: text(),
+				source: text()
+			}, [
+				"store",
+				"topic",
+				"fact",
+				"source"
+			]),
+			handler: (args) => writeStore(String(args.store), cwd, (db) => ({ id: insertRow(db, "facts", given(args, [
+				"topic",
+				"fact",
+				"source"
+			])) }))
+		},
+		{
+			name: "decision_add",
+			description: "Records a decision: the question, the answer, why, and whether the user or a recommendation decided it. Returns its id.",
+			readOnly: false,
+			inputSchema: object({
+				store: storeProp,
+				topic: text(),
+				question: text(),
+				answer: text(),
+				why: text(),
+				decided_by: choice(DECIDED_BY)
+			}, [
+				"store",
+				"topic",
+				"question",
+				"answer",
+				"decided_by"
+			]),
+			handler: (args) => writeStore(String(args.store), cwd, (db) => ({ id: insertRow(db, "decisions", given(args, [
+				"topic",
+				"question",
+				"answer",
+				"why",
+				"decided_by"
+			])) }))
+		},
+		{
+			name: "finding_add",
+			description: "Records a gap, red flag, smell or risk found by a review lens, with why it matters. Returns its id.",
+			readOnly: false,
+			inputSchema: object({
+				store: storeProp,
+				kind: choice(FINDING_KINDS),
+				lens: text(),
+				detail: text(),
+				why: text(),
+				recommendation: text()
+			}, [
+				"store",
+				"kind",
+				"lens",
+				"detail",
+				"why"
+			]),
+			handler: (args) => writeStore(String(args.store), cwd, (db) => ({ id: insertRow(db, "findings", given(args, [
+				"kind",
+				"lens",
+				"detail",
+				"why",
+				"recommendation"
+			])) }))
+		},
+		{
+			name: "finding_update",
+			description: "Sets the status, resolution or ticket of a finding and returns the finding row. Give at least one field.",
+			readOnly: false,
+			inputSchema: object({
+				store: storeProp,
+				id: { type: "integer" },
+				status: choice(FINDING_STATUSES),
+				resolution: text(),
+				ticket_id: text()
+			}, ["store", "id"]),
+			handler: (args) => writeStore(String(args.store), cwd, (db) => {
+				const values = atLeastOne(args, [
+					"status",
+					"resolution",
+					"ticket_id"
+				]);
+				if (!selectRow(db, "findings", "id", args.id)) throw new Error(`finding ${String(args.id)} not found`);
+				updateRow(db, "findings", "id", args.id, values);
+				return selectRow(db, "findings", "id", args.id);
+			})
+		},
+		{
+			name: "epic_save",
+			description: "Updates the given fields of an epic, or creates it when the id is new (then title, goal, done_when and position are required). Returns the epic row.",
+			readOnly: false,
+			inputSchema: object({
+				store: storeProp,
+				id: text(),
+				...EPIC_FIELDS
+			}, ["store", "id"]),
+			handler: (args) => writeStore(String(args.store), cwd, (db) => saveRow(db, "epics", args.id, args, Object.keys(EPIC_FIELDS), EPIC_REQUIRED))
+		},
+		{
+			name: "ticket_save",
+			description: "Updates the given fields of a ticket, or creates it when the id is new (then title, outcome, done_when, size and touches are required). Also how ticket progress is recorded: set status. Returns the ticket row.",
+			readOnly: false,
+			inputSchema: object({
+				store: storeProp,
+				id: text(),
+				...TICKET_FIELDS
+			}, ["store", "id"]),
+			handler: (args) => writeStore(String(args.store), cwd, (db) => saveRow(db, "tickets", args.id, args, Object.keys(TICKET_FIELDS), TICKET_REQUIRED))
+		},
+		{
+			name: "block_add",
+			description: "Makes one ticket block another: the blocked ticket waits for the blocker.",
+			readOnly: false,
+			inputSchema: object({
+				store: storeProp,
+				...BLOCK_FIELDS
+			}, [
+				"store",
+				"blocker",
+				"blocked"
+			]),
+			handler: (args) => writeStore(String(args.store), cwd, (db) => {
+				insertRow(db, "blocks", given(args, ["blocker", "blocked"]));
+				return {
+					blocker: args.blocker,
+					blocked: args.blocked
+				};
+			})
+		},
+		{
+			name: "block_remove",
+			description: "Removes a blocker link between two tickets; a link that does not exist is an error.",
+			readOnly: false,
+			inputSchema: object({
+				store: storeProp,
+				...BLOCK_FIELDS
+			}, [
+				"store",
+				"blocker",
+				"blocked"
+			]),
+			handler: (args) => writeStore(String(args.store), cwd, (db) => {
+				const result = db.prepare("DELETE FROM blocks WHERE blocker = ? AND blocked = ?").run(args.blocker, args.blocked);
+				if (Number(result.changes) === 0) throw new Error(`${String(args.blocker)} does not block ${String(args.blocked)}`);
+				return {
+					blocker: args.blocker,
+					blocked: args.blocked
+				};
+			})
+		},
+		{
+			name: "draft_replace",
+			description: "Replaces the whole draft in one transaction: deletes every block, ticket and epic, then inserts the given ones. Returns the counts and the waves the tickets can start in; on any error the earlier draft stays.",
+			readOnly: false,
+			inputSchema: object({
+				store: storeProp,
+				epics: {
+					type: "array",
+					items: object({
+						id: text(),
+						...EPIC_FIELDS
+					}, ["id", ...EPIC_REQUIRED])
+				},
+				tickets: {
+					type: "array",
+					items: object({
+						id: text(),
+						...TICKET_FIELDS
+					}, ["id", ...TICKET_REQUIRED])
+				},
+				blocks: {
+					type: "array",
+					items: object(BLOCK_FIELDS, ["blocker", "blocked"])
+				}
+			}, [
+				"store",
+				"epics",
+				"tickets",
+				"blocks"
+			]),
+			handler: (args) => writeStore(String(args.store), cwd, (db) => {
+				const epics = args.epics;
+				const tickets = args.tickets;
+				const blocks = args.blocks;
+				for (const table of [
+					"blocks",
+					"tickets",
+					"epics"
+				]) db.exec(`DELETE FROM ${table}`);
+				const epicColumns = ["id", ...Object.keys(EPIC_FIELDS)];
+				const ticketColumns = ["id", ...Object.keys(TICKET_FIELDS)];
+				for (const epic of epics) insertRow(db, "epics", given(epic, epicColumns));
+				for (const ticket of tickets) insertRow(db, "tickets", given(ticket, ticketColumns));
+				for (const block of blocks) insertRow(db, "blocks", given(block, ["blocker", "blocked"]));
+				return {
+					epics: epics.length,
+					tickets: tickets.length,
+					blocks: blocks.length,
+					waves: db.prepare("SELECT epic_id, ticket_id, wave FROM waves ORDER BY wave, ticket_id").all()
+				};
+			})
 		}
 	];
 }
@@ -8803,7 +9229,7 @@ async function catalogEntryFor(item, project, config, values) {
 			if (known.source === "discovered" && project) process.stderr.write(`agent-config: using ${s.message.toLowerCase()} ${value} from your user config; it is written into ${project}. Pass --${s.flag} to choose another.\n`);
 		} else {
 			if (!process.stdin.isTTY || !process.stdout.isTTY) throw new UsageError(`${item.id} needs --${s.flag} <${s.placeholder}>`);
-			const answer = await text({
+			const answer = await text$1({
 				message: s.message,
 				placeholder: s.placeholder,
 				validate: (v) => s.normalize(v ?? "") ? void 0 : `Enter a value like ${s.placeholder}`

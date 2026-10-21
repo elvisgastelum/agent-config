@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { serveMcp } from "../src/mcp.ts";
 import { planTools } from "../src/plans-mcp.ts";
 import { PLAN_DB, PLAN_SCHEMA, PLAN_SCHEMA_VERSION } from "../src/planning.ts";
+
+const V0_SCHEMA = new URL("./fixtures/plan-schema-v0.sql", import.meta.url);
 
 let root: string;
 let store: string;
@@ -79,11 +81,15 @@ describe("protocol", () => {
     expect(replies).toEqual([{ jsonrpc: "2.0", id: 7, result: {} }]);
   });
 
-  test("tools/list lists the three read-only tools", async () => {
+  test("tools/list lists the read tools as read-only and the write tools as not", async () => {
     const [reply] = await exchange([rpc(1, "tools/list")]);
     const tools = reply!.result!.tools as { name: string; annotations: unknown }[];
-    expect(tools.map((t) => t.name)).toEqual(["plan_list", "plan_get", "plan_query"]);
-    for (const tool of tools) expect(tool.annotations).toEqual({ readOnlyHint: true });
+    expect(tools).toHaveLength(14);
+    const reads = ["plan_list", "plan_get", "plan_query"];
+    expect(tools.map((t) => t.name).slice(0, 3)).toEqual(reads);
+    for (const tool of tools) {
+      expect(tool.annotations).toEqual({ readOnlyHint: reads.includes(tool.name) });
+    }
   });
 
   test("unknown tool, unknown method and bad JSON are JSON-RPC errors", async () => {
@@ -176,5 +182,158 @@ describe("tools", () => {
     const extra = await call("plan_get", { store, bogus: 1 });
     expect(extra.result!.isError).toBe(true);
     expect(extra.result!.content[0].text).toContain("bogus");
+  });
+});
+
+const ok = async (name: string, args: unknown): Promise<Record<string, any>> => {
+  const reply = await call(name, args);
+  expect(reply.result!.isError, JSON.stringify(reply.result)).toBe(false);
+  return reply.result!.structuredContent;
+};
+const fails = async (name: string, args: unknown): Promise<string> => {
+  const reply = await call(name, args);
+  expect(reply.result!.isError).toBe(true);
+  return reply.result!.content[0].text;
+};
+const detail = async (): Promise<Record<string, any>> => ok("plan_get", { store });
+
+describe("write tools", () => {
+  test("plan_create makes the store at the current schema; duplicates and bad titles fail", async () => {
+    const now = new Date();
+    const month = `${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
+    const made = await ok("plan_create", { title: "new-plan", kind: "feat", request: "do it" });
+    const expected = join(root, ".plans", month, "new-plan", PLAN_DB);
+    expect(made).toEqual({ store: expected });
+    const got = await ok("plan_get", { store: expected });
+    expect(got.version).toBe(PLAN_SCHEMA_VERSION);
+    expect(got.plan).toMatchObject({ title: "new-plan", kind: "feat", request: "do it" });
+    expect(await fails("plan_create", { title: "new-plan", kind: "feat", request: "x" })).toContain(
+      "exists",
+    );
+    const bad = await fails("plan_create", { title: "Not Kebab", kind: "feat", request: "x" });
+    expect(bad).toContain("title");
+    expect(existsSync(join(root, ".plans", month, "Not Kebab"))).toBe(false);
+  });
+
+  test("plan_update, fact_add, decision_add, finding_add and finding_update round-trip", async () => {
+    await fails("plan_update", { store });
+    const plan = await ok("plan_update", { store, outcome: "done well", status: "written" });
+    expect(plan).toMatchObject({ outcome: "done well", status: "written" });
+    expect(await ok("fact_add", { store, topic: "t", fact: "f", source: "s" })).toEqual({ id: 1 });
+    expect(
+      await ok("decision_add", {
+        store,
+        topic: "t",
+        question: "q",
+        answer: "a",
+        decided_by: "user",
+      }),
+    ).toEqual({ id: 1 });
+    expect(
+      await ok("finding_add", { store, kind: "gap", lens: "l", detail: "d", why: "w" }),
+    ).toEqual({ id: 1 });
+    const row = await ok("finding_update", {
+      store,
+      id: 1,
+      status: "resolved",
+      resolution: "fixed",
+      ticket_id: "T1",
+    });
+    expect(row).toMatchObject({ id: 1, status: "resolved", resolution: "fixed", ticket_id: "T1" });
+    const got = await detail();
+    expect(got.plan).toMatchObject({ outcome: "done well", status: "written" });
+    expect(got.facts).toEqual([{ id: 1, topic: "t", fact: "f", source: "s" }]);
+    expect(got.decisions[0]).toMatchObject({ decidedBy: "user", why: null });
+    expect(got.findings[0]).toMatchObject({ status: "resolved", ticketId: "T1" });
+    expect(await fails("finding_update", { store, id: 9, status: "open" })).toContain(
+      "finding 9 not found",
+    );
+    await fails("finding_update", { store, id: 1 });
+  });
+
+  test("epic_save and ticket_save insert then partially update", async () => {
+    const epic = { store, id: "E1", title: "Epic", goal: "g", done_when: "d", position: 1 };
+    expect(await ok("epic_save", epic)).toMatchObject({ id: "E1", title: "Epic" });
+    expect(await ok("epic_save", { store, id: "E1", goal: "new goal" })).toMatchObject({
+      title: "Epic",
+      goal: "new goal",
+    });
+    const missing = await fails("epic_save", { store, id: "E2", title: "x" });
+    for (const field of ["goal", "done_when", "position"]) expect(missing).toContain(field);
+    const ticket = {
+      store,
+      id: "T3",
+      epic_id: "E1",
+      title: "Three",
+      outcome: "o",
+      done_when: "c",
+      size: "P2",
+      touches: "x",
+    };
+    expect(await ok("ticket_save", ticket)).toMatchObject({ id: "T3", status: "todo" });
+    expect(await ok("ticket_save", { store, id: "T3", status: "in_progress" })).toMatchObject({
+      title: "Three",
+      status: "in_progress",
+    });
+    expect((await detail()).progress).toEqual({ todo: 1, inProgress: 1, done: 1, total: 3 });
+    const none = await fails("ticket_save", { store, id: "T9", title: "x" });
+    for (const field of ["outcome", "done_when", "size", "touches"]) expect(none).toContain(field);
+    await fails("ticket_save", { ...ticket, id: "T4", epic_id: "NOPE" });
+    expect((await detail()).tickets.map((t: { id: string }) => t.id)).toEqual(["T1", "T2", "T3"]);
+  });
+
+  test("block_add and block_remove", async () => {
+    await ok("block_add", { store, blocker: "T1", blocked: "T2" });
+    expect((await detail()).tickets[1].blockedBy).toEqual(["T1"]);
+    await ok("block_remove", { store, blocker: "T1", blocked: "T2" });
+    expect((await detail()).tickets[1].blockedBy).toEqual([]);
+    await fails("block_remove", { store, blocker: "T1", blocked: "T2" });
+  });
+
+  test("draft_replace replaces an earlier draft atomically and returns waves", async () => {
+    const t = (id: string) => ({
+      id,
+      title: id,
+      outcome: "o",
+      done_when: "c",
+      size: "P2",
+      touches: "x",
+    });
+    const epics = [{ id: "E1", title: "e", goal: "g", done_when: "d", position: 1 }];
+    const result = await ok("draft_replace", {
+      store,
+      epics,
+      tickets: [{ ...t("A"), epic_id: "E1" }, t("B")],
+      blocks: [{ blocker: "A", blocked: "B" }],
+    });
+    expect(result).toMatchObject({ epics: 1, tickets: 2, blocks: 1 });
+    expect(result.waves).toEqual([
+      { epic_id: "E1", ticket_id: "A", wave: 1 },
+      { epic_id: null, ticket_id: "B", wave: 2 },
+    ]);
+    await fails("draft_replace", {
+      store,
+      epics: [],
+      tickets: [t("C")],
+      blocks: [{ blocker: "C", blocked: "ZZ" }],
+    });
+    expect((await detail()).tickets.map((x: { id: string }) => x.id)).toEqual(["A", "B"]);
+  });
+
+  test("an old or newer store rejects writes", async () => {
+    const old = join(root, ".plans", "10-2026", "old", PLAN_DB);
+    mkdirSync(join(old, ".."), { recursive: true });
+    const db = new DatabaseSync(old);
+    db.exec(readFileSync(V0_SCHEMA, "utf8"));
+    db.close();
+    expect(await fails("fact_add", { store: old, topic: "t", fact: "f", source: "s" })).toContain(
+      "plans upgrade",
+    );
+    const newer = new DatabaseSync(store);
+    newer.exec(`PRAGMA user_version = ${PLAN_SCHEMA_VERSION + 1}`);
+    newer.close();
+    expect(await fails("fact_add", { store, topic: "t", fact: "f", source: "s" })).toContain(
+      "newer",
+    );
   });
 });

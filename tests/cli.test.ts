@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
+import { planTools } from "../src/plans-mcp.ts";
 import { read } from "./helpers.ts";
 
 const cli = join(import.meta.dirname, "..", "src", "cli.ts");
@@ -815,5 +816,5 @@ test("plans mcp answers JSON-RPC on stdout and exits 0 when stdin ends", async (
     );
   expect(replies.map((r) => r.id)).toEqual([1, 2]);
   expect(replies[0]!.result.serverInfo).toMatchObject({ name: "agent-config-plans" });
-  expect(replies[1]!.result.tools).toHaveLength(3);
+  expect(replies[1]!.result.tools).toHaveLength(planTools(process.cwd()).length);
 });
