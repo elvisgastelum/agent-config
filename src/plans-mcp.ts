@@ -2,7 +2,7 @@
 // one BEGIN IMMEDIATE transaction on a store at the current schema version. Write results are rows
 // as stored (snake_case columns), unlike readPlan's camelCase.
 
-import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { JsonSchema, McpTool } from "./mcp.ts";
 import {
@@ -14,8 +14,10 @@ import {
   PLAN_SCHEMA,
   PLAN_SCHEMA_VERSION,
   PLAN_STATUSES,
+  PLAN_TOOLS,
   PLAN_STORE_PATH,
   PLAN_TRACKERS,
+  PLANS_MCP,
   PLANS_DIR,
   PLANS_UPGRADE,
   STORY_SIZES,
@@ -32,8 +34,7 @@ import {
   type PlanDetail,
 } from "./plans.ts";
 
-/** The server name an agent registers the plan tools under. */
-export const PLANS_MCP = "plans";
+export { PLANS_MCP };
 
 export const PLANS_MCP_INSTRUCTIONS = `Plan stores live at ${PLAN_STORE_PATH} under the repository root. Pass absolute store paths (plan_list returns them). Read with plan_get sections or small plan_query selects, not a full dump.`;
 
@@ -195,7 +196,7 @@ const atLeastOne = (args: Row, columns: string[]): Row => {
 export function planTools(cwd: string): McpTool[] {
   return [
     {
-      name: "plan_list",
+      name: PLAN_TOOLS.plan_list,
       description: `Lists the plan stores under a repository's ${PLANS_DIR} folder with each plan's title, kind, status and ticket progress. Start here to find a store path.`,
       readOnly: true,
       inputSchema: {
@@ -232,7 +233,7 @@ export function planTools(cwd: string): McpTool[] {
       },
     },
     {
-      name: "plan_get",
+      name: PLAN_TOOLS.plan_get,
       description:
         "Reads a plan store, optionally only some sections (plan, epics, tickets, decisions, facts, findings, progress). Prefer asking for the sections you need.",
       readOnly: true,
@@ -254,7 +255,7 @@ export function planTools(cwd: string): McpTool[] {
       },
     },
     {
-      name: "plan_query",
+      name: PLAN_TOOLS.plan_query,
       description: `Runs one read-only SQL statement against a plan store and returns up to ${MAX_QUERY_ROWS} rows. Use small selects, for example SELECT * FROM waves ORDER BY wave.`,
       readOnly: true,
       inputSchema: {
@@ -283,7 +284,7 @@ export function planTools(cwd: string): McpTool[] {
       },
     },
     {
-      name: "plan_create",
+      name: PLAN_TOOLS.plan_create,
       description: `Creates a plan store at ${PLAN_STORE_PATH} under the root and returns its absolute path. Refuses when that store already exists.`,
       readOnly: false,
       inputSchema: object(
@@ -306,8 +307,17 @@ export function planTools(cwd: string): McpTool[] {
         const now = new Date();
         const month = `${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
         const store = join(root, PLANS_DIR, month, title, PLAN_DB);
-        if (existsSync(store)) throw new Error(`${store} already exists`);
         mkdirSync(dirname(store), { recursive: true });
+        // Claim the file exclusively, so a concurrent create fails here and the cleanup below only
+        // ever removes a file this call made.
+        try {
+          closeSync(openSync(store, "wx"));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+            throw new Error(`${store} already exists`);
+          }
+          throw error;
+        }
         const { DatabaseSync } = await import("node:sqlite");
         try {
           const db = new DatabaseSync(store);
@@ -326,7 +336,7 @@ export function planTools(cwd: string): McpTool[] {
       },
     },
     {
-      name: "plan_update",
+      name: PLAN_TOOLS.plan_update,
       description:
         "Sets the kind, outcome, status or tracker of the plan and returns the plan row. Give at least one field.",
       readOnly: false,
@@ -353,7 +363,7 @@ export function planTools(cwd: string): McpTool[] {
         }),
     },
     {
-      name: "fact_add",
+      name: PLAN_TOOLS.fact_add,
       description: "Records a fact found while exploring, with where it came from. Returns its id.",
       readOnly: false,
       inputSchema: object({ store: storeProp, topic: text(), fact: text(), source: text() }, [
@@ -368,7 +378,7 @@ export function planTools(cwd: string): McpTool[] {
         })),
     },
     {
-      name: "decision_add",
+      name: PLAN_TOOLS.decision_add,
       description:
         "Records a decision: the question, the answer, why, and whether the user or a recommendation decided it. Returns its id.",
       readOnly: false,
@@ -393,7 +403,7 @@ export function planTools(cwd: string): McpTool[] {
         })),
     },
     {
-      name: "finding_add",
+      name: PLAN_TOOLS.finding_add,
       description:
         "Records a gap, red flag, smell or risk found by a review lens, with why it matters. Returns its id.",
       readOnly: false,
@@ -418,7 +428,7 @@ export function planTools(cwd: string): McpTool[] {
         })),
     },
     {
-      name: "finding_update",
+      name: PLAN_TOOLS.finding_update,
       description:
         "Sets the status, resolution or ticket of a finding and returns the finding row. Give at least one field.",
       readOnly: false,
@@ -443,7 +453,7 @@ export function planTools(cwd: string): McpTool[] {
         }),
     },
     {
-      name: "epic_save",
+      name: PLAN_TOOLS.epic_save,
       description:
         "Updates the given fields of an epic, or creates it when the id is new (then title, goal, done_when and position are required). Returns the epic row.",
       readOnly: false,
@@ -454,7 +464,7 @@ export function planTools(cwd: string): McpTool[] {
         ),
     },
     {
-      name: "ticket_save",
+      name: PLAN_TOOLS.ticket_save,
       description:
         "Updates the given fields of a ticket, or creates it when the id is new (then title, outcome, done_when, size and touches are required). Also how ticket progress is recorded: set status. Returns the ticket row.",
       readOnly: false,
@@ -465,7 +475,7 @@ export function planTools(cwd: string): McpTool[] {
         ),
     },
     {
-      name: "block_add",
+      name: PLAN_TOOLS.block_add,
       description: "Makes one ticket block another: the blocked ticket waits for the blocker.",
       readOnly: false,
       inputSchema: object({ store: storeProp, ...BLOCK_FIELDS }, ["store", "blocker", "blocked"]),
@@ -476,7 +486,7 @@ export function planTools(cwd: string): McpTool[] {
         }),
     },
     {
-      name: "block_remove",
+      name: PLAN_TOOLS.block_remove,
       description:
         "Removes a blocker link between two tickets; a link that does not exist is an error.",
       readOnly: false,
@@ -493,7 +503,7 @@ export function planTools(cwd: string): McpTool[] {
         }),
     },
     {
-      name: "draft_replace",
+      name: PLAN_TOOLS.draft_replace,
       description:
         "Replaces the whole draft in one transaction: deletes every block, ticket and epic, then inserts the given ones. Returns the counts and the waves the tickets can start in; on any error the earlier draft stays.",
       readOnly: false,

@@ -61,6 +61,28 @@ export const PLANS_SERVE = "serve";
 /** The `plans` subcommand that serves plan tools to an agent over MCP. */
 export const PLANS_MCP_SUBCOMMAND = "mcp";
 
+/** The MCP server name the plan tools are registered under, and the catalog item that adds it. */
+export const PLANS_MCP = "plans";
+export const PLANS_MCP_ITEM = "plans-mcp";
+
+/** The plan tools the `plans` MCP server offers. */
+export const PLAN_TOOLS = {
+  plan_list: "plan_list",
+  plan_get: "plan_get",
+  plan_query: "plan_query",
+  plan_create: "plan_create",
+  plan_update: "plan_update",
+  fact_add: "fact_add",
+  decision_add: "decision_add",
+  finding_add: "finding_add",
+  finding_update: "finding_update",
+  epic_save: "epic_save",
+  ticket_save: "ticket_save",
+  block_add: "block_add",
+  block_remove: "block_remove",
+  draft_replace: "draft_replace",
+} as const;
+
 /**
  * The plan store's schema version, kept in SQLite's `PRAGMA user_version`. A store without one is
  * version 0 (the 0.11.0 shape). A schema change adds `PLAN_SCHEMA_VERSION + 1`, a new entry in
@@ -263,7 +285,7 @@ export function plannerDescription(tier: Tier, model: string): string {
 export function plannerBody(tier: Tier): string {
   return `You are a planner, a sub-agent of the \`${PLANNING}\` action. The parent session runs the interview with the user and keeps every decision; you do the reasoning it hands you and reply briefly.
 
-Every handoff opens with a phase line and names the plan store, a SQLite file. Read it with small \`sqlite3\` selects (or \`python3 -m sqlite3\`) and the code with bounded reads (line ranges, \`grep\`); never dump a whole table or file.
+Every handoff opens with a phase line and names the plan store, a SQLite file. Read it with small \`sqlite3\` selects (or \`python3 -m sqlite3\`) and the code with bounded reads (line ranges, \`grep\`); never dump a whole table or file. With the \`${PLANS_MCP}\` MCP tools, read with \`${PLAN_TOOLS.plan_get}\` or \`${PLAN_TOOLS.plan_query}\` and write the draft with \`${PLAN_TOOLS.draft_replace}\`; otherwise use \`sqlite3\`.
 
 ## Phases
 
@@ -439,6 +461,8 @@ In plain words: what will be built, the epics, the waves and the widest wave's s
 With none installed, say how to work the tickets by hand from the store.
 
 ## Plan store
+
+When the \`${PLANS_MCP}\` MCP tools are available, use them for every store read and write instead of \`sqlite3\`: they validate input, keep foreign keys on and run each write in one transaction. ${code(PLAN_TOOLS.plan_create)} picks the month folder, ${code(PLAN_TOOLS.plan_get)} and ${code(PLAN_TOOLS.plan_query)} read, ${code(PLAN_TOOLS.draft_replace)} rewrites a draft and ${code(PLAN_TOOLS.ticket_save)} saves one ticket. Without them, use \`sqlite3\` as described below; ${code(`agent-config configure ${PLANS_MCP_ITEM}`)} adds the server.
 
 Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is the current month (\`10-2026\`). Create it with \`sqlite3\` (or \`python3 -m sqlite3\` when \`sqlite3\` is missing) from this schema:
 

@@ -319,7 +319,8 @@ function expectPlanners(root: string, project: boolean) {
     const claude = read(join(root, dirs.claude, `${name}.md`));
     expect(claude).toContain(`name: ${name}`);
     expect(claude).toContain(`model: ${model}`);
-    expect(claude).toContain("tools: Read, Grep, Glob, Bash");
+    expect(claude).toContain("tools: Read, Grep, Glob, Bash, ");
+    expect(claude).toContain("mcp__plans__plan_get");
     const opencode = read(join(root, dirs.opencode, `${name}.md`));
     expect(opencode).toContain("mode: subagent");
     expect(opencode).toContain("  edit: deny");
@@ -507,6 +508,7 @@ test("install model-ladder installs only the ladder; uninstall model-ladder keep
     "continue",
     "kick-off",
     "planning",
+    "plans-mcp",
     "statusline",
   ]);
   expect(listed.items[0].entries).toMatchObject([{ scope: "user", runtimes: ["claude"] }]);
@@ -817,4 +819,35 @@ test("plans mcp answers JSON-RPC on stdout and exits 0 when stdin ends", async (
   expect(replies.map((r) => r.id)).toEqual([1, 2]);
   expect(replies[0]!.result.serverInfo).toMatchObject({ name: "agent-config-plans" });
   expect(replies[1]!.result.tools).toHaveLength(planTools(process.cwd()).length);
+});
+
+test("configure plans-mcp --project writes the project config", () => {
+  const repo = mkdtempSync(join(tmpdir(), "agent-config-repo-"));
+  try {
+    const res = run("configure", "plans-mcp", "--project", repo, "--runtime", "claude", "--yes");
+    expect(res.code).toBe(0);
+    expect(JSON.parse(read(join(repo, ".mcp.json"))).mcpServers.plans).toEqual({
+      type: "stdio",
+      command: "agent-config",
+      args: ["plans", "mcp"],
+    });
+    expect(existsSync(join(home, ".claude.json"))).toBe(false);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("configure plans-mcp outside a terminal installs at user scope", () => {
+  const res = run("configure", "plans-mcp", "--runtime", "claude", "--yes");
+  expect(res.code).toBe(0);
+  expect(JSON.parse(read(join(home, ".claude.json"))).mcpServers.plans.args).toEqual([
+    "plans",
+    "mcp",
+  ]);
+});
+
+test("configure without an item is a usage error", () => {
+  const res = run("configure");
+  expect(res.code).toBe(2);
+  expect(res.stderr).toContain("catalog");
 });

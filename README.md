@@ -12,7 +12,7 @@ edits  ─┘                          └─ deep      Opus 5.5    last resort,
 
 It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the rungs for **Gentle AI review agents**, and undoes everything with one command.
 
-Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket, `agi install kick-off` adds a `/kick-off` action that briefs a whole Kaneo epic for `/continue`, `agi install statusline` adds a compact Claude Code status line. See [Catalog](#catalog).
+Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket, `agi install kick-off` adds a `/kick-off` action that briefs a whole Kaneo epic for `/continue`, `agi configure plans-mcp` adds the `plans` MCP server for `/planning` plan stores, `agi install statusline` adds a compact Claude Code status line. See [Catalog](#catalog).
 
 ## Install
 
@@ -58,6 +58,7 @@ Also: **Re-apply installed items** (writes every saved item again), **Status** (
 | `agent-config`                                | Opens the TUI.                                                                                                                                                                                                                                            |
 | `agent-config install`                        | Re-applies every saved catalog item; with nothing saved it asks you to add one. Asks to confirm. `agi i` is short for it.                                                                                                                                 |
 | `agent-config install <item>`                 | Adds a catalog item, e.g. `agi install model-ladder` or `agi install kaneo`. `--project <dir>` installs an item (not model-ladder) into one repository instead of your user config. See [Catalog](#catalog).                                              |
+| `agent-config configure <item>`               | Adds a catalog item and asks where: System (your user config) or Project (this repository). `--project <dir>` skips the question; outside a terminal it configures your user config, e.g. `agi configure plans-mcp`.                                      |
 | `agent-config catalog`                        | Lists catalog items and where each one is installed.                                                                                                                                                                                                      |
 | `agent-config status`                         | Lists what agent-config installed and whether it still matches.                                                                                                                                                                                           |
 | `agent-config uninstall`                      | Undoes it. `--runtime` limits it to some agents.                                                                                                                                                                                                          |
@@ -68,6 +69,7 @@ Also: **Re-apply installed items** (writes every saved item again), **Status** (
 | `agent-config delegate <read\|edit> "<task>"` | Runs a ladder agent headlessly and prints only its reply. For agents that cannot spawn subagents. See below.                                                                                                                                              |
 | `agent-config plans upgrade [<path> ...]`     | Upgrades `/planning` plan stores to the current schema version in one transaction each (default `./.plans`; a directory is searched for `plan.sqlite`; `--dry-run` only reports what would change); refuses stores newer than the installed agent-config. |
 | `agent-config plans serve [<path> ...]`       | Serves `/planning` plan stores read-only as a web page (default `./.plans`), re-read on every request, with a QR code to open it from a phone on the same network; the link carries a random access token.                                                |
+| `agent-config plans mcp`                      | Runs the `plans` MCP server on stdio, with tools that read and write `/planning` plan stores. Agents start it from the config `agi configure plans-mcp` writes.                                                                                           |
 
 | Flag                                            | Meaning                                                                        |
 | ----------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -122,6 +124,7 @@ agi install commit                              # title-only commits, drafted by
 agi install continue                            # /continue: work the next Kaneo ticket end to end
 agi install kick-off                            # /kick-off: brief a whole Kaneo epic for /continue
 agi install planning                            # /planning: plan work with you, then tickets for /continue
+agi configure plans-mcp                         # plans MCP server: agents read and write plan stores with tools
 agi install statusline                          # compact Claude Code status line
 agi uninstall kaneo [--project .]               # remove that copy only
 ```
@@ -218,6 +221,7 @@ A manual action that plans a project, epic, feature, fix or ticket with you befo
 - The item also installs three sub-agents, `planner-fast`, `planner-balanced` and `planner-deep`: one planning specialist on the fast, balanced and deep models from the ladder settings. Classification, gap reviews and every review run on `planner-deep`. Drafting starts on the kind's planner (fix and ticket `planner-fast`, feat and epic `planner-balanced`, project `planner-deep`); `planner-deep` reviews each draft, and a failed review (or an `escalate` reply) climbs one rung with every earlier finding passed along, like the model ladder. When the deep planner's draft still fails, its open findings go to you in the final review. Planners write the draft straight into the plan store.
 - A final review repeats until nothing is open, or until you ask to write the tickets. Then each open gap becomes a `Gap:` ticket that blocks the work depending on it.
 - The plan lives in a SQLite store at `.plans/<MM-yyyy>/<plan-title>/plan.sqlite`: facts, decisions, findings, epics, tickets, blocks, and a `waves` view, so agents query exactly what they need. Stores carry a schema version (`PRAGMA user_version`); `agent-config plans upgrade` applies the missing upgrades in one transaction and refuses stores newer than the installed agent-config. `agent-config plans serve` shows the stores and their progress in a browser, also on a phone via the QR code it prints.
+- With the `plans-mcp` item (`agi configure plans-mcp`) agents read and write the store through the `plans` MCP server's tools, which validate input and run each write in one transaction, instead of `sqlite3`.
 - With Kaneo it writes `Epic:` tasks and P5-or-smaller stories with `blocks` relations and `Touches:` lines, ready for `/continue parallel-wave` or `/kick-off`.
 - Plans with a UI follow a design-system standard: every size token a multiple of 4 px, WCAG 2.2 AA accessibility, and scroll-driven motion as first-party components that animate only transform and opacity and honor `prefers-reduced-motion`.
 

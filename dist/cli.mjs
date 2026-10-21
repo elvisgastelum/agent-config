@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs, styleText } from "node:util";
 import process$1, { stdin, stdout } from "node:process";
@@ -4515,6 +4515,26 @@ const STORY_SIZES = [
 const PLANS_UPGRADE = "upgrade";
 /** The `plans` subcommand that serves stores to a browser. */
 const PLANS_SERVE = "serve";
+/** The MCP server name the plan tools are registered under, and the catalog item that adds it. */
+const PLANS_MCP = "plans";
+const PLANS_MCP_ITEM = "plans-mcp";
+/** The plan tools the `plans` MCP server offers. */
+const PLAN_TOOLS = {
+	plan_list: "plan_list",
+	plan_get: "plan_get",
+	plan_query: "plan_query",
+	plan_create: "plan_create",
+	plan_update: "plan_update",
+	fact_add: "fact_add",
+	decision_add: "decision_add",
+	finding_add: "finding_add",
+	finding_update: "finding_update",
+	epic_save: "epic_save",
+	ticket_save: "ticket_save",
+	block_add: "block_add",
+	block_remove: "block_remove",
+	draft_replace: "draft_replace"
+};
 /**
 * The `waves` view layers open tickets by their unfinished blockers and leaves out every ticket in
 * a dependency cycle or behind one (`stuck`), since none of them can start. It is dropped and
@@ -4700,7 +4720,7 @@ function plannerDescription(tier, model) {
 function plannerBody(tier) {
 	return `You are a planner, a sub-agent of the \`${PLANNING}\` action. The parent session runs the interview with the user and keeps every decision; you do the reasoning it hands you and reply briefly.
 
-Every handoff opens with a phase line and names the plan store, a SQLite file. Read it with small \`sqlite3\` selects (or \`python3 -m sqlite3\`) and the code with bounded reads (line ranges, \`grep\`); never dump a whole table or file.
+Every handoff opens with a phase line and names the plan store, a SQLite file. Read it with small \`sqlite3\` selects (or \`python3 -m sqlite3\`) and the code with bounded reads (line ranges, \`grep\`); never dump a whole table or file. With the \`${PLANS_MCP}\` MCP tools, read with \`${PLAN_TOOLS.plan_get}\` or \`${PLAN_TOOLS.plan_query}\` and write the draft with \`${PLAN_TOOLS.draft_replace}\`; otherwise use \`sqlite3\`.
 
 ## Phases
 
@@ -4870,6 +4890,8 @@ In plain words: what will be built, the epics, the waves and the widest wave's s
 With none installed, say how to work the tickets by hand from the store.
 
 ## Plan store
+
+When the \`${PLANS_MCP}\` MCP tools are available, use them for every store read and write instead of \`sqlite3\`: they validate input, keep foreign keys on and run each write in one transaction. ${code(PLAN_TOOLS.plan_create)} picks the month folder, ${code(PLAN_TOOLS.plan_get)} and ${code(PLAN_TOOLS.plan_query)} read, ${code(PLAN_TOOLS.draft_replace)} rewrites a draft and ${code(PLAN_TOOLS.ticket_save)} saves one ticket. Without them, use \`sqlite3\` as described below; ${code(`agent-config configure ${PLANS_MCP_ITEM}`)} adds the server.
 
 Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is the current month (\`10-2026\`). Create it with \`sqlite3\` (or \`python3 -m sqlite3\` when \`sqlite3\` is missing) from this schema:
 
@@ -5570,6 +5592,73 @@ function kaneoMcpOp(runtime, project, url) {
 		};
 	}
 }
+/** The command wrapper `install.sh` puts in the bin dir, and the name a PATH lookup finds it by. */
+const BINARY = "agent-config";
+/** The `plans mcp` arguments every runtime passes to the binary. */
+const PLANS_MCP_ARGS = ["plans", "mcp"];
+/**
+* What runs the plans server. A project's config is committed, so it carries only the bare name;
+* a user's config points at the installed wrapper when there is one.
+*/
+function plansMcpCommand(project) {
+	const bin = setting("BIN_DIR");
+	if (project || !bin) return BINARY;
+	const wrapper = join(bin, BINARY);
+	return existsSync(wrapper) ? wrapper : BINARY;
+}
+function plansMcpOp(runtime, project) {
+	const command = plansMcpCommand(project);
+	const base = {
+		runtime,
+		component: "catalog",
+		label: `${PLANS_MCP} MCP server ${command} ${PLANS_MCP_ARGS.join(" ")}`
+	};
+	switch (runtime) {
+		case "claude": return {
+			...base,
+			kind: "json-set",
+			path: project ? join(project, ".mcp.json") : claudeJsonPath(),
+			pointer: ["mcpServers", PLANS_MCP],
+			value: {
+				type: "stdio",
+				command,
+				args: PLANS_MCP_ARGS
+			}
+		};
+		case "opencode": return {
+			...base,
+			kind: "json-set",
+			path: opencodeConfigPath(project),
+			pointer: ["mcp", PLANS_MCP],
+			value: {
+				type: "local",
+				command: [command, ...PLANS_MCP_ARGS],
+				enabled: true
+			}
+		};
+		case "codex": {
+			const table = `[mcp_servers.${PLANS_MCP}]`;
+			return {
+				...base,
+				kind: "block",
+				path: join(project ? join(project, ".codex") : codexDir(), "config.toml"),
+				content: `${table}\ncommand = ${JSON.stringify(command)}\nargs = [${PLANS_MCP_ARGS.map((a) => JSON.stringify(a)).join(", ")}]`,
+				markers: [blockMarkers(PLANS_MCP_ITEM, "hash")],
+				conflict: table
+			};
+		}
+		case "pi": return {
+			...base,
+			kind: "json-set",
+			path: project ? join(project, ".pi", "mcp.json") : join(piDir(), "mcp.json"),
+			pointer: ["mcpServers", PLANS_MCP],
+			value: {
+				command,
+				args: PLANS_MCP_ARGS
+			}
+		};
+	}
+}
 /**
 * The model ladder: ladder agents, routing skill, instructions, read guard and review models.
 * Its parts, rungs and models are the top-level ladder settings of the saved configuration.
@@ -5882,7 +5971,8 @@ const PLANNER_CLAUDE_TOOLS = [
 	"Read",
 	"Grep",
 	"Glob",
-	"Bash"
+	"Bash",
+	...Object.values(PLAN_TOOLS).map((tool) => `mcp__${PLANS_MCP}__${tool}`)
 ];
 const PLANNER_OPENCODE_DENY = ["edit", "task"];
 const PLANNER_PI_TOOLS = [
@@ -5890,7 +5980,8 @@ const PLANNER_PI_TOOLS = [
 	"grep",
 	"find",
 	"ls",
-	"bash"
+	"bash",
+	"tool_search"
 ];
 function planningOps(runtime, project, config) {
 	const tiers = config.tiers[runtime];
@@ -5951,6 +6042,14 @@ const CATALOG = [
 		settings: [],
 		discover: () => ({}),
 		ops: (entry, runtime, config) => planningOps(runtime, entry.project, config)
+	},
+	{
+		id: PLANS_MCP_ITEM,
+		title: "Plans MCP",
+		description: `the ${PLANS_MCP} MCP server: tools that read and write /planning plan stores on demand`,
+		settings: [],
+		discover: () => ({}),
+		ops: (entry, runtime) => [plansMcpOp(runtime, entry.project)]
 	},
 	{
 		id: "statusline",
@@ -7305,7 +7404,7 @@ const atLeastOne = (args, columns) => {
 function planTools(cwd) {
 	return [
 		{
-			name: "plan_list",
+			name: PLAN_TOOLS.plan_list,
 			description: `Lists the plan stores under a repository's ${PLANS_DIR} folder with each plan's title, kind, status and ticket progress. Start here to find a store path.`,
 			readOnly: true,
 			inputSchema: {
@@ -7341,7 +7440,7 @@ function planTools(cwd) {
 			}
 		},
 		{
-			name: "plan_get",
+			name: PLAN_TOOLS.plan_get,
 			description: "Reads a plan store, optionally only some sections (plan, epics, tickets, decisions, facts, findings, progress). Prefer asking for the sections you need.",
 			readOnly: true,
 			inputSchema: {
@@ -7375,7 +7474,7 @@ function planTools(cwd) {
 			}
 		},
 		{
-			name: "plan_query",
+			name: PLAN_TOOLS.plan_query,
 			description: `Runs one read-only SQL statement against a plan store and returns up to ${MAX_QUERY_ROWS} rows. Use small selects, for example SELECT * FROM waves ORDER BY wave.`,
 			readOnly: true,
 			inputSchema: {
@@ -7420,7 +7519,7 @@ function planTools(cwd) {
 			}
 		},
 		{
-			name: "plan_create",
+			name: PLAN_TOOLS.plan_create,
 			description: `Creates a plan store at ${PLAN_STORE_PATH} under the root and returns its absolute path. Refuses when that store already exists.`,
 			readOnly: false,
 			inputSchema: object({
@@ -7440,8 +7539,13 @@ function planTools(cwd) {
 				const now = /* @__PURE__ */ new Date();
 				const month = `${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
 				const store = join(root, PLANS_DIR, month, title, PLAN_DB);
-				if (existsSync(store)) throw new Error(`${store} already exists`);
 				mkdirSync(dirname(store), { recursive: true });
+				try {
+					closeSync(openSync(store, "wx"));
+				} catch (error) {
+					if (error.code === "EEXIST") throw new Error(`${store} already exists`);
+					throw error;
+				}
 				const { DatabaseSync } = await import("node:sqlite");
 				try {
 					const db = new DatabaseSync(store);
@@ -7465,7 +7569,7 @@ function planTools(cwd) {
 			}
 		},
 		{
-			name: "plan_update",
+			name: PLAN_TOOLS.plan_update,
 			description: "Sets the kind, outcome, status or tracker of the plan and returns the plan row. Give at least one field.",
 			readOnly: false,
 			inputSchema: object({
@@ -7486,7 +7590,7 @@ function planTools(cwd) {
 			})
 		},
 		{
-			name: "fact_add",
+			name: PLAN_TOOLS.fact_add,
 			description: "Records a fact found while exploring, with where it came from. Returns its id.",
 			readOnly: false,
 			inputSchema: object({
@@ -7507,7 +7611,7 @@ function planTools(cwd) {
 			])) }))
 		},
 		{
-			name: "decision_add",
+			name: PLAN_TOOLS.decision_add,
 			description: "Records a decision: the question, the answer, why, and whether the user or a recommendation decided it. Returns its id.",
 			readOnly: false,
 			inputSchema: object({
@@ -7533,7 +7637,7 @@ function planTools(cwd) {
 			])) }))
 		},
 		{
-			name: "finding_add",
+			name: PLAN_TOOLS.finding_add,
 			description: "Records a gap, red flag, smell or risk found by a review lens, with why it matters. Returns its id.",
 			readOnly: false,
 			inputSchema: object({
@@ -7559,7 +7663,7 @@ function planTools(cwd) {
 			])) }))
 		},
 		{
-			name: "finding_update",
+			name: PLAN_TOOLS.finding_update,
 			description: "Sets the status, resolution or ticket of a finding and returns the finding row. Give at least one field.",
 			readOnly: false,
 			inputSchema: object({
@@ -7581,7 +7685,7 @@ function planTools(cwd) {
 			})
 		},
 		{
-			name: "epic_save",
+			name: PLAN_TOOLS.epic_save,
 			description: "Updates the given fields of an epic, or creates it when the id is new (then title, goal, done_when and position are required). Returns the epic row.",
 			readOnly: false,
 			inputSchema: object({
@@ -7592,7 +7696,7 @@ function planTools(cwd) {
 			handler: (args) => writeStore(String(args.store), cwd, (db) => saveRow(db, "epics", args.id, args, Object.keys(EPIC_FIELDS), EPIC_REQUIRED))
 		},
 		{
-			name: "ticket_save",
+			name: PLAN_TOOLS.ticket_save,
 			description: "Updates the given fields of a ticket, or creates it when the id is new (then title, outcome, done_when, size and touches are required). Also how ticket progress is recorded: set status. Returns the ticket row.",
 			readOnly: false,
 			inputSchema: object({
@@ -7603,7 +7707,7 @@ function planTools(cwd) {
 			handler: (args) => writeStore(String(args.store), cwd, (db) => saveRow(db, "tickets", args.id, args, Object.keys(TICKET_FIELDS), TICKET_REQUIRED))
 		},
 		{
-			name: "block_add",
+			name: PLAN_TOOLS.block_add,
 			description: "Makes one ticket block another: the blocked ticket waits for the blocker.",
 			readOnly: false,
 			inputSchema: object({
@@ -7623,7 +7727,7 @@ function planTools(cwd) {
 			})
 		},
 		{
-			name: "block_remove",
+			name: PLAN_TOOLS.block_remove,
 			description: "Removes a blocker link between two tickets; a link that does not exist is an error.",
 			readOnly: false,
 			inputSchema: object({
@@ -7644,7 +7748,7 @@ function planTools(cwd) {
 			})
 		},
 		{
-			name: "draft_replace",
+			name: PLAN_TOOLS.draft_replace,
 			description: "Replaces the whole draft in one transaction: deletes every block, ticket and epic, then inserts the given ones. Returns the counts and the waves the tickets can start in; on any error the earlier draft stays.",
 			readOnly: false,
 			inputSchema: object({
@@ -9042,6 +9146,9 @@ Usage:
   agent-config install <item>      add a catalog item, e.g. \`agi install model-ladder\` or
                                    \`agi install kaneo\` (--project <dir> for one repository
                                    instead of your user config; not model-ladder)
+  agent-config configure <item>    install a catalog item and choose where: system (your user config) or
+                                   a project, e.g. \`agi configure plans-mcp\` (asks in a terminal;
+                                   --project <dir> skips the question; otherwise system)
   agent-config catalog             list catalog items and where they are installed
   agent-config status              list what agent-config installed and whether it changed
   agent-config uninstall [flags]   remove it and restore what it replaced
@@ -9195,6 +9302,33 @@ function catalogTarget(id, values, forUninstall = false) {
 		project
 	};
 	throw new UsageError(`--project ${project} is not a directory`);
+}
+/**
+* The flags `configure <id>` installs with: `--project` when given, else the scope the user picks
+* in a terminal (System or the current directory), else user scope. A user-only item skips it.
+*/
+async function configureScope(id, values, json) {
+	const { item } = catalogTarget(id, values);
+	const terminal = process.stdin.isTTY && process.stdout.isTTY && !json;
+	if (values.project !== void 0 || item.userOnly || !terminal) return values;
+	const cwd = process.cwd();
+	const answer = await select({
+		message: `Where should ${item.id} be configured?`,
+		options: [{
+			value: "system",
+			label: "System",
+			hint: "your home config, every project"
+		}, {
+			value: "project",
+			label: "Project",
+			hint: `this repository: ${cwd}`
+		}]
+	});
+	if (isCancel(answer)) throw new Cancelled();
+	return answer === "project" ? {
+		...values,
+		project: cwd
+	} : values;
 }
 /** Resolves the entry `install <id>` names, applies the ladder flags to it, and saves it in `config`. */
 async function saveEntryFor(id, config, values) {
@@ -9362,7 +9496,8 @@ async function main(argv) {
 	const itemId = [
 		"install",
 		"apply",
-		"uninstall"
+		"uninstall",
+		"configure"
 	].includes(command) ? positionals[1] : void 0;
 	const catalogFlag = given.find((k) => CATALOG_ONLY.includes(k));
 	if (catalogFlag && (!itemId || catalogFlag === "url" && command === "uninstall")) throw new UsageError(`--${catalogFlag} only applies to ${catalogFlag === "url" ? "install (or apply)" : "install or uninstall"} <item>`);
@@ -9383,6 +9518,11 @@ async function main(argv) {
 			if (config.catalog.length === 0) throw new UsageError(`nothing to install yet; add a catalog item, e.g. \`agent-config install ${LADDER_ITEM}\` (see \`agent-config catalog\`)`);
 			for (const w of missingProjectWarnings(config)) process.stderr.write(`agent-config: warning: ${w}\n`);
 			return applyAndReport(buildPlan(config), config, values, json);
+		}
+		case "configure": {
+			if (!itemId) throw new UsageError("configure needs a catalog item, e.g. `agent-config configure plans-mcp` (see `agent-config catalog`)");
+			const config = loadConfig();
+			return applyAndReport(buildPlan(config, [entryKey(await saveEntryFor(itemId, config, await configureScope(itemId, values, json)))]), config, values, json);
 		}
 		case "catalog": {
 			const config = loadConfig();

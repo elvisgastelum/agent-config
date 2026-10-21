@@ -45,9 +45,14 @@ import {
   kickOffDir,
   opencodeDir,
   piDir,
+  setting,
 } from "./paths.ts";
 import {
+  PLAN_TOOLS,
   PLANNING,
+  PLANS_MCP,
+  PLANS_MCP_ITEM,
+  PLANS_MCP_SUBCOMMAND,
   plannerBody,
   plannerDescription,
   plannerName,
@@ -308,6 +313,69 @@ function kaneoMcpOp(runtime: Runtime, project: string | undefined, url: string):
         path: project ? join(project, ".pi", "mcp.json") : join(piDir(), "mcp.json"),
         pointer: ["mcpServers", KANEO_MCP],
         value: { url },
+      };
+  }
+}
+
+/** The command wrapper `install.sh` puts in the bin dir, and the name a PATH lookup finds it by. */
+const BINARY = "agent-config";
+
+/** The `plans mcp` arguments every runtime passes to the binary. */
+const PLANS_MCP_ARGS = ["plans", PLANS_MCP_SUBCOMMAND];
+
+/**
+ * What runs the plans server. A project's config is committed, so it carries only the bare name;
+ * a user's config points at the installed wrapper when there is one.
+ */
+function plansMcpCommand(project: string | undefined): string {
+  const bin = setting("BIN_DIR");
+  if (project || !bin) return BINARY;
+  const wrapper = join(bin, BINARY);
+  return existsSync(wrapper) ? wrapper : BINARY;
+}
+
+function plansMcpOp(runtime: Runtime, project: string | undefined): Op {
+  const command = plansMcpCommand(project);
+  const base = {
+    runtime,
+    component: "catalog" as const,
+    label: `${PLANS_MCP} MCP server ${command} ${PLANS_MCP_ARGS.join(" ")}`,
+  };
+  switch (runtime) {
+    case "claude":
+      return {
+        ...base,
+        kind: "json-set",
+        path: project ? join(project, ".mcp.json") : claudeJsonPath(),
+        pointer: ["mcpServers", PLANS_MCP],
+        value: { type: "stdio", command, args: PLANS_MCP_ARGS },
+      };
+    case "opencode":
+      return {
+        ...base,
+        kind: "json-set",
+        path: opencodeConfigPath(project),
+        pointer: ["mcp", PLANS_MCP],
+        value: { type: "local", command: [command, ...PLANS_MCP_ARGS], enabled: true },
+      };
+    case "codex": {
+      const table = `[mcp_servers.${PLANS_MCP}]`;
+      return {
+        ...base,
+        kind: "block",
+        path: join(project ? join(project, ".codex") : codexDir(), "config.toml"),
+        content: `${table}\ncommand = ${JSON.stringify(command)}\nargs = [${PLANS_MCP_ARGS.map((a) => JSON.stringify(a)).join(", ")}]`,
+        markers: [blockMarkers(PLANS_MCP_ITEM, "hash")],
+        conflict: table,
+      };
+    }
+    case "pi":
+      return {
+        ...base,
+        kind: "json-set",
+        path: project ? join(project, ".pi", "mcp.json") : join(piDir(), "mcp.json"),
+        pointer: ["mcpServers", PLANS_MCP],
+        value: { command, args: PLANS_MCP_ARGS },
       };
   }
 }
@@ -648,9 +716,16 @@ function kickOffOps(runtime: Runtime, project: string | undefined, config: Confi
 }
 
 /** What the planner agents may use: read the repository and run commands, never edit it. */
-const PLANNER_CLAUDE_TOOLS = ["Read", "Grep", "Glob", "Bash"];
+const PLANNER_CLAUDE_TOOLS = [
+  "Read",
+  "Grep",
+  "Glob",
+  "Bash",
+  ...Object.values(PLAN_TOOLS).map((tool) => `mcp__${PLANS_MCP}__${tool}`),
+];
 const PLANNER_OPENCODE_DENY = ["edit", "task"];
-const PLANNER_PI_TOOLS = ["read", "grep", "find", "ls", "bash"];
+// Pi keeps MCP tools undeclared (see SCRIBE_AGENT); tool_search loads the plan tools.
+const PLANNER_PI_TOOLS = ["read", "grep", "find", "ls", "bash", "tool_search"];
 
 function planningOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
   const tiers = config.tiers[runtime];
@@ -752,6 +827,15 @@ const planningItem: CatalogItem = {
   ops: (entry, runtime, config) => planningOps(runtime, entry.project, config),
 };
 
+const plansMcpItem: CatalogItem = {
+  id: PLANS_MCP_ITEM,
+  title: "Plans MCP",
+  description: `the ${PLANS_MCP} MCP server: tools that read and write /planning plan stores on demand`,
+  settings: [],
+  discover: () => ({}),
+  ops: (entry, runtime) => [plansMcpOp(runtime, entry.project)],
+};
+
 export const CATALOG: CatalogItem[] = [
   modelLadder,
   kaneo,
@@ -759,6 +843,7 @@ export const CATALOG: CatalogItem[] = [
   continueItem,
   kickOff,
   planningItem,
+  plansMcpItem,
   statusline,
 ];
 
