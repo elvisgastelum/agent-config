@@ -4507,16 +4507,50 @@ const STORY_SIZES = [
 	"P3",
 	MAX_STORY_SIZE
 ];
+/** The `plans` subcommand that upgrades existing stores. */
+const PLANS_SUBCOMMAND = "upgrade";
 /**
-* The plan store's schema. Every statement is idempotent, so running it on an existing store is
-* safe. The `waves` view layers open tickets by their unfinished blockers and leaves out every
-* ticket in a dependency cycle or behind one (`stuck`), since none of them can start. It is dropped
-* and created again, so a store from an older schema gets the current view. It selects only
-* grouped or aggregated columns: DuckDB (harlequin's default adapter) cannot bind a bare column,
-* and its SQLite fallback prepares a rewritten query that SQLite cannot parse.
+* The `waves` view layers open tickets by their unfinished blockers and leaves out every ticket in
+* a dependency cycle or behind one (`stuck`), since none of them can start. It is dropped and
+* created again, so a store from an older schema gets the current view. It selects only grouped or
+* aggregated columns: DuckDB (harlequin's default adapter) cannot bind a bare column, and its
+* SQLite fallback prepares a rewritten query that SQLite cannot parse.
 */
+const WAVES_VIEW = `DROP VIEW IF EXISTS waves;
+CREATE VIEW waves AS
+WITH RECURSIVE
+open_blocks(blocker, blocked) AS (
+  SELECT b.blocker, b.blocked FROM blocks b
+  JOIN tickets p ON p.id = b.blocker
+  JOIN tickets t ON t.id = b.blocked
+  WHERE p.status <> 'done' AND t.status <> 'done'
+),
+reach(src, dst) AS (
+  SELECT blocker, blocked FROM open_blocks
+  UNION
+  SELECT reach.src, o.blocked FROM reach JOIN open_blocks o ON o.blocker = reach.dst
+),
+stuck(id) AS (
+  SELECT DISTINCT r.dst FROM reach r JOIN reach c ON c.src = r.src AND c.dst = c.src
+),
+layer(ticket_id, wave) AS (
+  SELECT t.id, 1 FROM tickets t
+  WHERE t.status <> 'done'
+    AND NOT EXISTS (SELECT 1 FROM open_blocks o WHERE o.blocked = t.id)
+  UNION
+  SELECT o.blocked, layer.wave + 1 FROM layer
+  JOIN open_blocks o ON o.blocker = layer.ticket_id
+  WHERE o.blocked NOT IN (SELECT id FROM stuck)
+)
+SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
+FROM layer JOIN tickets t ON t.id = layer.ticket_id
+GROUP BY layer.ticket_id, t.epic_id;`;
 /** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
 const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
+/**
+* The plan store's schema. It only creates a new store and stamps it with the current version; an
+* existing store is upgraded with `PLAN_MIGRATIONS`, never by running this on it again.
+*/
 const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
 CREATE TABLE IF NOT EXISTS plan (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -4579,35 +4613,14 @@ CREATE TABLE IF NOT EXISTS findings (
   resolution TEXT,
   ticket_id TEXT REFERENCES tickets(id)
 );
-DROP VIEW IF EXISTS waves;
-CREATE VIEW waves AS
-WITH RECURSIVE
-open_blocks(blocker, blocked) AS (
-  SELECT b.blocker, b.blocked FROM blocks b
-  JOIN tickets p ON p.id = b.blocker
-  JOIN tickets t ON t.id = b.blocked
-  WHERE p.status <> 'done' AND t.status <> 'done'
-),
-reach(src, dst) AS (
-  SELECT blocker, blocked FROM open_blocks
-  UNION
-  SELECT reach.src, o.blocked FROM reach JOIN open_blocks o ON o.blocker = reach.dst
-),
-stuck(id) AS (
-  SELECT DISTINCT r.dst FROM reach r JOIN reach c ON c.src = r.src AND c.dst = c.src
-),
-layer(ticket_id, wave) AS (
-  SELECT t.id, 1 FROM tickets t
-  WHERE t.status <> 'done'
-    AND NOT EXISTS (SELECT 1 FROM open_blocks o WHERE o.blocked = t.id)
-  UNION
-  SELECT o.blocked, layer.wave + 1 FROM layer
-  JOIN open_blocks o ON o.blocker = layer.ticket_id
-  WHERE o.blocked NOT IN (SELECT id FROM stuck)
-)
-SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
-FROM layer JOIN tickets t ON t.id = layer.ticket_id
-GROUP BY layer.ticket_id, t.epic_id;`;
+${WAVES_VIEW}
+PRAGMA user_version = 1;`;
+/**
+* `PLAN_MIGRATIONS[v]` upgrades a store at version v to v + 1; the upgrade sets `user_version`
+* itself. A released migration is never edited: a schema change adds a new one. Version 0 gets the
+* `waves` view that works in DuckDB.
+*/
+const PLAN_MIGRATIONS = [WAVES_VIEW];
 /** What the gap reviewers look at; a capped fan-out gives one reviewer several lenses. */
 const LENSES = [
 	["scope", "the outcome, who it is for, what is in and out, criteria a test or a person can check"],
@@ -4830,7 +4843,7 @@ Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is
 ${PLAN_SCHEMA}
 \`\`\`
 
-Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. An existing store is upgraded with ${code(`agent-config plans ${PLANS_SUBCOMMAND} <path>`)}, never by running the schema on it again. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
 ## Design system standard
 
@@ -6863,39 +6876,76 @@ function findStores(paths) {
 	}
 	return [...new Set(found)];
 }
-/** Runs the schema on each store in one transaction; a store that fails does not stop the rest. */
+const message = (error) => error instanceof Error ? error.message : String(error);
+function versionOf(db) {
+	return Number(db.prepare("PRAGMA user_version").get().user_version);
+}
+/** The version a store may be upgraded from; a newer one was written by a newer agent-config. */
+function checkVersion(from) {
+	if (from > 1) throw new Error(`store version ${from} is newer than the 1 this agent-config supports; run agent-config update`);
+}
+/**
+* Brings each store to the current schema version in one transaction, applying the migrations it
+* is missing; a store that fails does not stop the rest. A dry run reads each store read-only.
+*/
 async function upgradeStores(stores, dryRun = false) {
-	const result = {
-		upgraded: [],
-		failed: []
-	};
-	if (dryRun) return {
-		...result,
-		upgraded: [...stores]
-	};
 	const { DatabaseSync } = await import("node:sqlite");
+	const to = 1;
+	const results = [];
 	for (const path of stores) try {
-		const db = new DatabaseSync(path);
+		const db = new DatabaseSync(path, { readOnly: dryRun });
 		try {
+			if (dryRun) {
+				const from = versionOf(db);
+				checkVersion(from);
+				results.push({
+					path,
+					status: from === to ? "current" : "pending",
+					from,
+					to
+				});
+				continue;
+			}
 			db.exec("BEGIN IMMEDIATE");
 			try {
-				db.exec(PLAN_SCHEMA);
+				const from = versionOf(db);
+				checkVersion(from);
+				if (from === to) {
+					db.exec("ROLLBACK");
+					results.push({
+						path,
+						status: "current",
+						from,
+						to
+					});
+					continue;
+				}
+				for (const migration of PLAN_MIGRATIONS.slice(from, to)) db.exec(migration);
+				db.exec(`PRAGMA user_version = ${to}`);
 				db.exec("COMMIT");
+				results.push({
+					path,
+					status: "upgraded",
+					from,
+					to
+				});
 			} catch (error) {
-				db.exec("ROLLBACK");
+				try {
+					db.exec("ROLLBACK");
+				} catch {}
 				throw error;
 			}
 		} finally {
 			db.close();
 		}
-		result.upgraded.push(path);
 	} catch (error) {
-		result.failed.push({
+		results.push({
 			path,
-			error: error instanceof Error ? error.message : String(error)
+			status: "failed",
+			error: message(error)
 		});
 	}
-	return result;
+	return results;
 }
 //#endregion
 //#region src/delegate.ts
@@ -7199,7 +7249,7 @@ Usage:
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
-  agent-config plans upgrade [<path> ...]
+  agent-config plans ${PLANS_SUBCOMMAND} [<path> ...]
                                    upgrade /planning plan stores (default: ./.plans; a directory is
                                    searched for plan.sqlite; --dry-run lists them)
 
@@ -7235,7 +7285,6 @@ Delegate flags:
 Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
 3 uninstall kept files you edited (re-run with --force) / delegate ended partial or escalate,
 4 delegate refused: already running inside a agent-config delegated agent, 130 cancelled.`;
-const PLANS_SUBCOMMAND = "upgrade";
 var UsageError = class extends Error {};
 const DELEGATE_ONLY = [
 	"tier",
@@ -7658,8 +7707,13 @@ async function main(argv) {
 			return last.status === "done" ? 0 : 3;
 		}
 		case "plans": {
-			if (positionals[1] !== PLANS_SUBCOMMAND) throw new UsageError(`plans expects "${PLANS_SUBCOMMAND}"`);
+			if (positionals[1] !== "upgrade") throw new UsageError(`plans expects "${PLANS_SUBCOMMAND}"`);
 			const given = positionals.slice(2);
+			const hasStoreDir = existsSync(resolve(PLANS_DIR));
+			if (given.length === 0 && !hasStoreDir) {
+				out(json, { stores: [] }, "No plan stores found.");
+				return 0;
+			}
 			let stores;
 			try {
 				stores = findStores(given.length > 0 ? given : [resolve(PLANS_DIR)]);
@@ -7668,10 +7722,17 @@ async function main(argv) {
 				throw error;
 			}
 			const dryRun = values["dry-run"] === true;
-			const result = await upgradeStores(stores, dryRun);
-			const lines = [...result.upgraded.map((path) => `${dryRun ? "would upgrade" : "upgraded"} ${path}`), ...result.failed.map((f) => `failed ${f.path}: ${f.error}`)];
-			out(json, result, lines.length > 0 ? lines.join("\n") : "No plan stores found.");
-			return result.failed.length > 0 ? 1 : 0;
+			const results = await upgradeStores(stores, dryRun);
+			const lines = results.map((r) => {
+				switch (r.status) {
+					case "upgraded": return `upgraded ${r.path} (v${r.from} -> v${r.to})`;
+					case "current": return `current ${r.path} (v${r.from})`;
+					case "pending": return `would upgrade ${r.path} (v${r.from} -> v${r.to})`;
+					case "failed": return `failed ${r.path}: ${r.error}`;
+				}
+			});
+			out(json, { stores: results }, lines.length > 0 ? lines.join("\n") : "No plan stores found.");
+			return results.some((r) => r.status === "failed") ? 1 : 0;
 		}
 		case "update":
 		case "self-update": {

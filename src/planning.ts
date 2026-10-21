@@ -51,17 +51,60 @@ const GAP_SIZE = "P1";
 const MAX_STORY_SIZE = "P5";
 const STORY_SIZES = [GAP_SIZE, "P2", "P3", MAX_STORY_SIZE] as const;
 
+/** The `plans` subcommand that upgrades existing stores. */
+export const PLANS_SUBCOMMAND = "upgrade";
+
 /**
- * The plan store's schema. Every statement is idempotent, so running it on an existing store is
- * safe. The `waves` view layers open tickets by their unfinished blockers and leaves out every
- * ticket in a dependency cycle or behind one (`stuck`), since none of them can start. It is dropped
- * and created again, so a store from an older schema gets the current view. It selects only
- * grouped or aggregated columns: DuckDB (harlequin's default adapter) cannot bind a bare column,
- * and its SQLite fallback prepares a rewritten query that SQLite cannot parse.
+ * The plan store's schema version, kept in SQLite's `PRAGMA user_version`. A store without one is
+ * version 0 (the 0.11.0 shape). A schema change adds `PLAN_SCHEMA_VERSION + 1`, a new entry in
+ * `PLAN_MIGRATIONS` and the matching change in `PLAN_SCHEMA`.
  */
+export const PLAN_SCHEMA_VERSION = 1;
+
+/**
+ * The `waves` view layers open tickets by their unfinished blockers and leaves out every ticket in
+ * a dependency cycle or behind one (`stuck`), since none of them can start. It is dropped and
+ * created again, so a store from an older schema gets the current view. It selects only grouped or
+ * aggregated columns: DuckDB (harlequin's default adapter) cannot bind a bare column, and its
+ * SQLite fallback prepares a rewritten query that SQLite cannot parse.
+ */
+const WAVES_VIEW = `DROP VIEW IF EXISTS waves;
+CREATE VIEW waves AS
+WITH RECURSIVE
+open_blocks(blocker, blocked) AS (
+  SELECT b.blocker, b.blocked FROM blocks b
+  JOIN tickets p ON p.id = b.blocker
+  JOIN tickets t ON t.id = b.blocked
+  WHERE p.status <> 'done' AND t.status <> 'done'
+),
+reach(src, dst) AS (
+  SELECT blocker, blocked FROM open_blocks
+  UNION
+  SELECT reach.src, o.blocked FROM reach JOIN open_blocks o ON o.blocker = reach.dst
+),
+stuck(id) AS (
+  SELECT DISTINCT r.dst FROM reach r JOIN reach c ON c.src = r.src AND c.dst = c.src
+),
+layer(ticket_id, wave) AS (
+  SELECT t.id, 1 FROM tickets t
+  WHERE t.status <> 'done'
+    AND NOT EXISTS (SELECT 1 FROM open_blocks o WHERE o.blocked = t.id)
+  UNION
+  SELECT o.blocked, layer.wave + 1 FROM layer
+  JOIN open_blocks o ON o.blocker = layer.ticket_id
+  WHERE o.blocked NOT IN (SELECT id FROM stuck)
+)
+SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
+FROM layer JOIN tickets t ON t.id = layer.ticket_id
+GROUP BY layer.ticket_id, t.epic_id;`;
+
 /** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
 export const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
 
+/**
+ * The plan store's schema. It only creates a new store and stamps it with the current version; an
+ * existing store is upgraded with `PLAN_MIGRATIONS`, never by running this on it again.
+ */
 export const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
 CREATE TABLE IF NOT EXISTS plan (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -124,35 +167,15 @@ CREATE TABLE IF NOT EXISTS findings (
   resolution TEXT,
   ticket_id TEXT REFERENCES tickets(id)
 );
-DROP VIEW IF EXISTS waves;
-CREATE VIEW waves AS
-WITH RECURSIVE
-open_blocks(blocker, blocked) AS (
-  SELECT b.blocker, b.blocked FROM blocks b
-  JOIN tickets p ON p.id = b.blocker
-  JOIN tickets t ON t.id = b.blocked
-  WHERE p.status <> 'done' AND t.status <> 'done'
-),
-reach(src, dst) AS (
-  SELECT blocker, blocked FROM open_blocks
-  UNION
-  SELECT reach.src, o.blocked FROM reach JOIN open_blocks o ON o.blocker = reach.dst
-),
-stuck(id) AS (
-  SELECT DISTINCT r.dst FROM reach r JOIN reach c ON c.src = r.src AND c.dst = c.src
-),
-layer(ticket_id, wave) AS (
-  SELECT t.id, 1 FROM tickets t
-  WHERE t.status <> 'done'
-    AND NOT EXISTS (SELECT 1 FROM open_blocks o WHERE o.blocked = t.id)
-  UNION
-  SELECT o.blocked, layer.wave + 1 FROM layer
-  JOIN open_blocks o ON o.blocker = layer.ticket_id
-  WHERE o.blocked NOT IN (SELECT id FROM stuck)
-)
-SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
-FROM layer JOIN tickets t ON t.id = layer.ticket_id
-GROUP BY layer.ticket_id, t.epic_id;`;
+${WAVES_VIEW}
+PRAGMA user_version = ${PLAN_SCHEMA_VERSION};`;
+
+/**
+ * `PLAN_MIGRATIONS[v]` upgrades a store at version v to v + 1; the upgrade sets `user_version`
+ * itself. A released migration is never edited: a schema change adds a new one. Version 0 gets the
+ * `waves` view that works in DuckDB.
+ */
+export const PLAN_MIGRATIONS: readonly string[] = [WAVES_VIEW];
 
 /** What the gap reviewers look at; a capped fan-out gives one reviewer several lenses. */
 const LENSES: [name: string, focus: string][] = [
@@ -404,7 +427,7 @@ Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is
 ${PLAN_SCHEMA}
 \`\`\`
 
-Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. An existing store is upgraded with ${code(`agent-config plans ${PLANS_SUBCOMMAND} <path>`)}, never by running the schema on it again. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
 ## Design system standard
 
