@@ -327,6 +327,16 @@ describe("kick-off guard: brief copies", () => {
     expect(bash(`command pbcopy < ${incomplete}`)).toContain("FEX-22.md");
     expect(bash(`env LANG=C pbcopy < ${incomplete}`)).toContain("FEX-22.md");
     expect(bash(`sudo -n pbcopy < ${incomplete}`)).toContain("FEX-22.md");
+    expect(bash(`sudo -u root pbcopy < ${incomplete}`)).toContain("FEX-22.md");
+    expect(bash(`env -u LANG pbcopy < ${incomplete}`)).toContain("FEX-22.md");
+  });
+
+  test("a complete brief copied with a descriptor redirect passes", () => {
+    const dir = tempDir();
+    const complete = writeBrief(dir, "FEX-23.md", brief());
+    expect(bash(`cat ${complete} 2>&1 | pbcopy`)).toBeUndefined();
+    expect(bash(`cat ${complete} 2>/dev/null | pbcopy`)).toBeUndefined();
+    expect(bash(`pbcopy < ${complete} 2>/dev/null`)).toBeUndefined();
   });
 
   test("copying a file outside the brief folder is allowed, even under a kick-off folder", () => {

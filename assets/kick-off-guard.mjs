@@ -123,6 +123,8 @@ const OUTPUT_REDIRECT = ">";
 const INPUT_REDIRECT = "<";
 /** `&>file`: stdout and stderr to a file; this `&` is a redirect, not a background job. */
 const ALL_OUTPUT_REDIRECT = "&>";
+/** Digits written right before a redirect (`2>`) name the descriptor it redirects, not a word. */
+const DESCRIPTOR = /^\d+$/;
 /** `>&2`, `2>&1`: after a redirect, `&` plus a descriptor duplicates it; `>&file` still names a file. */
 const DESCRIPTOR_DUPLICATE = /^&([\d-]+)?/;
 /** Characters that end a word without other meaning here: whitespace and subshell parentheses. */
@@ -270,6 +272,7 @@ function parse(command) {
       pipelines.at(-1).push([]);
       if (command.startsWith(PIPE_WITH_ERRORS, i)) i += PIPE_WITH_ERRORS.length - 1;
     } else if (c === OUTPUT_REDIRECT || c === INPUT_REDIRECT) {
+      if (DESCRIPTOR.test(word)) word = "";
       end();
       const duplicate = DESCRIPTOR_DUPLICATE.exec(command.slice(i + 1));
       i += duplicate?.[0].length ?? 0;
@@ -314,8 +317,18 @@ function commandName(words) {
   return "";
 }
 
+/**
+ * Whether a command runs a clipboard tool. Behind a wrapper, any later word counts, because a
+ * wrapper's options may take values (`sudo -u root pbcopy`) that `commandName` cannot tell apart.
+ */
 function isClipboard(words) {
-  return CLIPBOARD_TOOLS.has(commandName(words));
+  if (CLIPBOARD_TOOLS.has(commandName(words))) return true;
+  const first = words.find((w) => !ASSIGNMENT.test(w.text));
+  return (
+    first !== undefined &&
+    WRAPPERS.has(basename(first.text)) &&
+    words.some((w) => CLIPBOARD_TOOLS.has(basename(w.text)))
+  );
 }
 
 /** Whether the command is only `<clipboard tool> < <brief>` or `cat <brief> | <clipboard tool>`. */
