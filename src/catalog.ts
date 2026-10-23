@@ -98,6 +98,13 @@ export function entryKey(entry: { item: string; project?: string }): string {
   return `${entry.item}@${entry.project ?? "user"}`;
 }
 
+/** The item and project an entry key names; the inverse of `entryKey`. */
+export function parseEntryKey(key: string): { item: string; project?: string } {
+  const at = key.indexOf("@");
+  const scope = key.slice(at + 1);
+  return { item: key.slice(0, at), ...(scope === "user" ? {} : { project: scope }) };
+}
+
 export function scopeLabel(entry: { project?: string }): string {
   return entry.project ? `project ${entry.project}` : "user";
 }

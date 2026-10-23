@@ -35,6 +35,7 @@ import {
 import { resolveBackup } from "./migrate.ts";
 import { statePaths } from "./paths.ts";
 import type { Runtime } from "./tiers.ts";
+import { VERSION } from "./version.ts";
 
 export const COMPONENTS = [
   "agents",
@@ -137,6 +138,8 @@ export interface ManifestRecord {
   replacedLinks?: { path: string; target: string }[];
   /** block: its own markers; absent for the agent-config block. */
   markers?: Markers;
+  /** The agent-config version that last wrote or confirmed it; absent before 0.15.0. */
+  version?: string;
 }
 
 export interface Manifest {
@@ -815,7 +818,9 @@ export function applyPlan(plan: PlannedOp[]): ApplyResult {
     const key = opKey(planned.op);
     try {
       const record = applyOp(planned, byKey.get(key), result.notes);
-      if (record) byKey.set(key, record);
+      // A skipped op wrote nothing, so its record keeps the version that did.
+      if (record)
+        byKey.set(key, planned.action === "skip" ? record : { ...record, version: VERSION });
       result.applied.push(planned);
     } catch (error) {
       result.errors.push({

@@ -3476,6 +3476,9 @@ function migrateLegacyLayout() {
 	return result;
 }
 //#endregion
+//#region src/version.ts
+const VERSION = "0.11.0";
+//#endregion
 //#region src/ops.ts
 const COMPONENTS = [
 	"agents",
@@ -4131,7 +4134,10 @@ function applyPlan(plan) {
 		const key = opKey(planned.op);
 		try {
 			const record = applyOp(planned, byKey.get(key), result.notes);
-			if (record) byKey.set(key, record);
+			if (record) byKey.set(key, planned.action === "skip" ? record : {
+				...record,
+				version: VERSION
+			});
 			result.applied.push(planned);
 		} catch (error) {
 			result.errors.push({
@@ -5331,6 +5337,15 @@ function runtimeOps(runtime, config) {
 function entryKey(entry) {
 	return `${entry.item}@${entry.project ?? "user"}`;
 }
+/** The item and project an entry key names; the inverse of `entryKey`. */
+function parseEntryKey(key) {
+	const at = key.indexOf("@");
+	const scope = key.slice(at + 1);
+	return {
+		item: key.slice(0, at),
+		...scope === "user" ? {} : { project: scope }
+	};
+}
 function scopeLabel(entry) {
 	return entry.project ? `project ${entry.project}` : "user";
 }
@@ -6083,9 +6098,6 @@ function saveConfig(config) {
 	writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
 }
 //#endregion
-//#region src/version.ts
-const VERSION = "0.11.0";
-//#endregion
 //#region src/selfupdate.ts
 /** The checkout this CLI runs from (dist/cli.mjs and src/selfupdate.ts sit one level below). */
 function checkoutRoot() {
@@ -6308,7 +6320,11 @@ function buildPlan(config, only) {
 	const missing = new Set(missingProjects(config).map(entryKey));
 	const planned = new Set((only ?? config.catalog.map(entryKey)).filter((k) => !missing.has(k)));
 	const ladder = ladderRuntimes(config);
-	return [...manifest.filter((r) => r.item !== void 0 && planned.has(r.item) && !wanted.has(recordKey(r)) && (r.item !== "model-ladder@user" || ladder.includes(r.runtime) && config.components.includes(r.component))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
+	const retired = (key) => {
+		const { item, project } = parseEntryKey(key);
+		return !catalogItem(item) && (project === void 0 || existsSync(project));
+	};
+	return [...manifest.filter((r) => r.item !== void 0 && (planned.has(r.item) || !only && retired(r.item)) && !wanted.has(recordKey(r)) && (r.item !== "model-ladder@user" || ladder.includes(r.runtime) && config.components.includes(r.component))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
 }
 /**
 * After uninstalling some runtimes, puts back catalog files the remaining runtimes still use: a
@@ -6389,11 +6405,19 @@ function doctor() {
 		ok: true,
 		detail: gentle ? "installed (review-models applies)" : "not installed (review-models skips)"
 	});
-	const drifted = status().filter((s) => s.state !== "ok");
+	const installed = status();
+	const drifted = installed.filter((s) => s.state !== "ok");
 	checks.push({
 		name: "managed files",
 		ok: drifted.length === 0,
 		detail: drifted.length === 0 ? "all as installed" : `${drifted.length} changed or missing (often \`gentle-ai sync\` resetting review models); run \`agent-config install\` to reapply`
+	});
+	const others = installed.filter((s) => s.record.version !== VERSION);
+	const versions = [...new Set(others.map((s) => s.record.version ?? "unrecorded"))].sort();
+	checks.push({
+		name: "installed version",
+		ok: others.length === 0,
+		detail: others.length === 0 ? `all at ${VERSION}` : `${others.length} installed by another version (${versions.join(", ")}); run \`agent-config install\` to bring them to ${VERSION}`
 	});
 	return checks;
 }

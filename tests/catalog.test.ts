@@ -10,7 +10,7 @@ import {
   upsertEntry,
   type CatalogEntry,
 } from "../src/catalog.ts";
-import { buildPlan, restoreShared, status, uninstallSelection } from "../src/commands.ts";
+import { buildPlan, doctor, restoreShared, status, uninstallSelection } from "../src/commands.ts";
 import { defaultConfig, loadConfig, saveConfig, type Config } from "../src/config.ts";
 import {
   EPIC_LABEL,
@@ -23,9 +23,17 @@ import {
   TOUCHES_LINE,
   WAVE_RULE,
 } from "../src/kaneo.ts";
-import { applyPlan, uninstall } from "../src/ops.ts";
+import {
+  applyPlan,
+  loadManifest,
+  saveManifest,
+  uninstall,
+  withBlock,
+  type ManifestRecord,
+} from "../src/ops.ts";
 import { configPath } from "../src/paths.ts";
 import type { Runtime } from "../src/tiers.ts";
+import { VERSION } from "../src/version.ts";
 import { put, read, sandbox } from "./helpers.ts";
 
 const URL = "https://kaneo.example.com";
@@ -440,5 +448,151 @@ describe("loadConfig catalog", () => {
     );
     const catalog = loadConfig().catalog;
     expect(catalog).toEqual([{ item: "kaneo", runtimes: ["claude"], settings: { url: URL } }]);
+  });
+});
+
+// What `agi install plans-mcp` wrote in 0.12.0-0.14.0, a catalog item this version does not have.
+const RETIRED_ITEM = "plans-mcp@user";
+const RETIRED_SERVER = { type: "stdio", command: "agent-config", args: ["plans", "mcp"] };
+const RETIRED_MARKERS: [string, string][] = [
+  [
+    "# BEGIN agent-config:plans-mcp: managed by agent-config, edits inside this block are overwritten",
+    "# END agent-config:plans-mcp",
+  ],
+];
+const CODEX_BEFORE = 'model = "gpt-5"\n';
+
+function addRecords(records: ManifestRecord[]): void {
+  saveManifest({ version: 1, records: [...loadManifest().records, ...records] });
+}
+
+/** Writes the 0.14.0 plans-mcp registrations for Claude and Codex and records them as it did. */
+function installRetired(): { claudeJson: string; codexToml: string } {
+  const claudeJson = join(box.home, ".claude.json");
+  const config = JSON.parse(read(claudeJson));
+  config.mcpServers.plans = RETIRED_SERVER;
+  put(claudeJson, JSON.stringify(config, null, 2));
+  const codexToml = join(box.home, ".codex/config.toml");
+  put(
+    codexToml,
+    withBlock(
+      CODEX_BEFORE,
+      '[mcp_servers.plans]\ncommand = "agent-config"\nargs = ["plans", "mcp"]',
+      RETIRED_MARKERS,
+    ),
+  );
+  const base = {
+    component: "catalog" as const,
+    label: "plans MCP server agent-config plans mcp",
+    item: RETIRED_ITEM,
+    createdDirs: [] as string[],
+  };
+  addRecords([
+    {
+      ...base,
+      kind: "json-set",
+      runtime: "claude",
+      path: claudeJson,
+      pointer: ["mcpServers", "plans"],
+      value: RETIRED_SERVER,
+      prev: { present: false },
+      existingDepth: 1,
+    },
+    {
+      ...base,
+      kind: "block",
+      runtime: "codex",
+      path: codexToml,
+      trailingNewline: true,
+      markers: RETIRED_MARKERS,
+    },
+  ]);
+  return { claudeJson, codexToml };
+}
+
+describe("catalog items this version no longer has", () => {
+  test("a full re-apply undoes them and keeps everything else", () => {
+    const entry = kaneoEntry(["claude"]);
+    const config = withEntry(entry);
+    put(join(box.home, ".claude.json"), '{"mcpServers":{"other":{"type":"stdio"}},"x":1}');
+    install(config, entry);
+    const { claudeJson, codexToml } = installRetired();
+
+    const plan = buildPlan(config);
+    const retired = plan.filter((p) => p.record?.item === RETIRED_ITEM);
+    expect(retired.map((p) => p.action)).toEqual(["remove", "remove"]);
+    expect(applyPlan(plan).errors).toEqual([]);
+
+    const after = JSON.parse(read(claudeJson));
+    expect(after.mcpServers.plans).toBeUndefined();
+    expect(after.mcpServers.other).toEqual({ type: "stdio" });
+    expect(after.mcpServers.kaneo).toEqual({ type: "http", url: MCP });
+    expect(after.x).toBe(1);
+    expect(read(codexToml)).toBe(CODEX_BEFORE);
+    expect(loadManifest().records.filter((r) => r.item === RETIRED_ITEM)).toEqual([]);
+    expect(buildPlan(config).every((p) => p.action === "unchanged")).toBe(true);
+  });
+
+  test("installing one item leaves them alone", () => {
+    const entry = kaneoEntry(["claude"]);
+    const config = withEntry(entry);
+    put(join(box.home, ".claude.json"), "{}");
+    install(config, entry);
+    const { claudeJson } = installRetired();
+
+    const plan = buildPlan(config, [entryKey(entry)]);
+    expect(plan.filter((p) => p.record?.item === RETIRED_ITEM)).toEqual([]);
+    expect(applyPlan(plan).errors).toEqual([]);
+    expect(JSON.parse(read(claudeJson)).mcpServers.plans).toEqual(RETIRED_SERVER);
+  });
+
+  test("leaves them alone in a project whose directory is gone", () => {
+    const gone = join(box.home, "gone-repo");
+    addRecords([
+      {
+        kind: "json-set",
+        runtime: "claude",
+        component: "catalog",
+        path: join(gone, ".mcp.json"),
+        label: "plans MCP server agent-config plans mcp",
+        item: `plans-mcp@${gone}`,
+        pointer: ["mcpServers", "plans"],
+        value: RETIRED_SERVER,
+        prev: { present: false },
+        existingDepth: 0,
+        createdFile: true,
+      },
+    ]);
+    expect(buildPlan(defaultConfig()).filter((p) => p.op.path.startsWith(gone))).toEqual([]);
+  });
+});
+
+describe("installed version", () => {
+  const check = () => doctor().find((c) => c.name === "installed version");
+
+  test("every installed record carries the version that wrote it", () => {
+    const entry = kaneoEntry(["claude", "opencode"]);
+    install(withEntry(entry), entry);
+    const records = loadManifest().records;
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.every((r) => r.version === VERSION)).toBe(true);
+    expect(check()).toEqual({ name: "installed version", ok: true, detail: `all at ${VERSION}` });
+  });
+
+  test("doctor names files from another version, and a re-apply brings them to this one", () => {
+    const entry = kaneoEntry(["claude"]);
+    const config = withEntry(entry);
+    install(config, entry);
+    const [first, second, ...rest] = loadManifest().records;
+    const { version: _, ...unrecorded } = first!;
+    saveManifest({ version: 1, records: [unrecorded, { ...second!, version: "0.14.0" }, ...rest] });
+
+    expect(check()).toEqual({
+      name: "installed version",
+      ok: false,
+      detail: `2 installed by another version (0.14.0, unrecorded); run \`agent-config install\` to bring them to ${VERSION}`,
+    });
+    expect(applyPlan(buildPlan(config)).errors).toEqual([]);
+    expect(check()?.ok).toBe(true);
   });
 });
