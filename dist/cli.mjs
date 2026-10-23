@@ -3478,6 +3478,13 @@ function migrateLegacyLayout() {
 //#endregion
 //#region src/version.ts
 const VERSION = "0.11.0";
+/** Whether `version` ("0.15.0") is a later release than `than`, comparing each number in turn. */
+function isNewer(version, than = VERSION) {
+	const a = version.split(".").map(Number);
+	const b = than.split(".").map(Number);
+	for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+	return false;
+}
 //#endregion
 //#region src/ops.ts
 const COMPONENTS = [
@@ -6320,11 +6327,11 @@ function buildPlan(config, only) {
 	const missing = new Set(missingProjects(config).map(entryKey));
 	const planned = new Set((only ?? config.catalog.map(entryKey)).filter((k) => !missing.has(k)));
 	const ladder = ladderRuntimes(config);
-	const retired = (key) => {
+	const retired = (key, version) => {
 		const { item, project } = parseEntryKey(key);
-		return !catalogItem(item) && (project === void 0 || existsSync(project));
+		return !catalogItem(item) && !(version && isNewer(version)) && (project === void 0 || existsSync(project));
 	};
-	return [...manifest.filter((r) => r.item !== void 0 && (planned.has(r.item) || !only && retired(r.item)) && !wanted.has(recordKey(r)) && (r.item !== "model-ladder@user" || ladder.includes(r.runtime) && config.components.includes(r.component))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
+	return [...manifest.filter((r) => r.item !== void 0 && (planned.has(r.item) || !only && retired(r.item, r.version)) && !wanted.has(recordKey(r)) && (r.item !== "model-ladder@user" || ladder.includes(r.runtime) && config.components.includes(r.component))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
 }
 /**
 * After uninstalling some runtimes, puts back catalog files the remaining runtimes still use: a

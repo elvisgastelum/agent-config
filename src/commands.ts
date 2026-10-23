@@ -33,7 +33,7 @@ import {
 import { codexDir, home, piDir, RUNTIME_BIN, runtimeDir } from "./paths.ts";
 import { defaultInstallHome, legacyInstallHome } from "./selfupdate.ts";
 import { RUNTIMES, type Runtime } from "./tiers.ts";
-import { VERSION } from "./version.ts";
+import { isNewer, VERSION } from "./version.ts";
 
 /** The user cancelled a prompt (Ctrl+C); the CLI exits 130. */
 export class Cancelled extends Error {}
@@ -81,11 +81,16 @@ export function buildPlan(config: Config, only?: string[]): PlannedOp[] {
   const planned = new Set((only ?? config.catalog.map(entryKey)).filter((k) => !missing.has(k)));
   const ladder = ladderRuntimes(config);
   // A full re-apply also undoes what a catalog item this version does not have installed (such
-  // as plans-mcp from 0.12.0-0.14.0), since nothing can produce it any more. A project whose
+  // as plans-mcp from 0.12.0-0.14.0), since nothing can produce it any more. An item a newer
+  // agent-config installed is kept: this version just does not know it yet. A project whose
   // directory is gone is left alone, as above.
-  const retired = (key: string) => {
+  const retired = (key: string, version: string | undefined) => {
     const { item, project } = parseEntryKey(key);
-    return !catalogItem(item) && (project === undefined || existsSync(project));
+    return (
+      !catalogItem(item) &&
+      !(version && isNewer(version)) &&
+      (project === undefined || existsSync(project))
+    );
   };
   // Installed parts of the planned entries that the configuration no longer produces (a moved
   // hook, a renamed setting, a runtime dropped from a catalog entry) are undone, so nothing
@@ -94,7 +99,7 @@ export function buildPlan(config: Config, only?: string[]): PlannedOp[] {
     .filter(
       (r) =>
         r.item !== undefined &&
-        (planned.has(r.item) || (!only && retired(r.item))) &&
+        (planned.has(r.item) || (!only && retired(r.item, r.version))) &&
         !wanted.has(recordKey(r)) &&
         (r.item !== LADDER_KEY ||
           (ladder.includes(r.runtime) && (config.components as string[]).includes(r.component))),

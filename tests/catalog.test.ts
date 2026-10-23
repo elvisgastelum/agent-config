@@ -33,7 +33,7 @@ import {
 } from "../src/ops.ts";
 import { configPath } from "../src/paths.ts";
 import type { Runtime } from "../src/tiers.ts";
-import { VERSION } from "../src/version.ts";
+import { isNewer, VERSION } from "../src/version.ts";
 import { put, read, sandbox } from "./helpers.ts";
 
 const URL = "https://kaneo.example.com";
@@ -567,6 +567,46 @@ describe("catalog items this version no longer has", () => {
   });
 });
 
+describe("catalog items this version no longer has, by scope and version", () => {
+  function retiredRecord(item: string, path: string, version?: string): ManifestRecord {
+    return {
+      kind: "json-set",
+      runtime: "claude",
+      component: "catalog",
+      path,
+      label: "plans MCP server agent-config plans mcp",
+      item,
+      pointer: ["mcpServers", "plans"],
+      value: RETIRED_SERVER,
+      prev: { present: false },
+      existingDepth: 0,
+      createdFile: true,
+      ...(version ? { version } : {}),
+    };
+  }
+
+  test("undoes them in a project whose directory still exists", () => {
+    project = mkdtempSync(join(tmpdir(), "agent-config-project-"));
+    const mcpJson = join(project, ".mcp.json");
+    put(mcpJson, JSON.stringify({ mcpServers: { plans: RETIRED_SERVER } }));
+    addRecords([retiredRecord(`plans-mcp@${project}`, mcpJson)]);
+
+    const plan = buildPlan(defaultConfig());
+    expect(plan.filter((p) => p.op.path === mcpJson).map((p) => p.action)).toEqual(["remove"]);
+    expect(applyPlan(plan).errors).toEqual([]);
+    expect(existsSync(mcpJson)).toBe(false);
+    expect(loadManifest().records).toEqual([]);
+  });
+
+  test("keeps an item a newer agent-config installed, which this version does not know yet", () => {
+    const claudeJson = join(box.home, ".claude.json");
+    put(claudeJson, JSON.stringify({ mcpServers: { plans: RETIRED_SERVER } }));
+    addRecords([retiredRecord("plans-mcp@user", claudeJson, "99.0.0")]);
+
+    expect(buildPlan(defaultConfig()).filter((p) => p.op.path === claudeJson)).toEqual([]);
+  });
+});
+
 describe("installed version", () => {
   const check = () => doctor().find((c) => c.name === "installed version");
 
@@ -595,4 +635,23 @@ describe("installed version", () => {
     expect(applyPlan(buildPlan(config)).errors).toEqual([]);
     expect(check()?.ok).toBe(true);
   });
+
+  test("a skipped op keeps the version of the agent-config that last wrote it", () => {
+    const entry = kaneoEntry(["claude"]);
+    const config = withEntry(entry);
+    install(config, entry);
+    const records = loadManifest().records.map((r) => ({ ...r, version: "0.14.0" }));
+    saveManifest({ version: 1, records });
+    const planned = buildPlan(config).find((p) => p.op.path === records[0]!.path)!;
+
+    expect(applyPlan([{ ...planned, action: "skip", reason: "test" }]).errors).toEqual([]);
+    expect(loadManifest().records.find((r) => r.path === planned.op.path)?.version).toBe("0.14.0");
+  });
+});
+
+test("isNewer compares release numbers, not text", () => {
+  expect(isNewer("0.15.0", "0.14.0")).toBe(true);
+  expect(isNewer("0.9.0", "0.11.0")).toBe(false);
+  expect(isNewer("1.0.0", "0.99.9")).toBe(true);
+  expect(isNewer("0.15.0", "0.15.0")).toBe(false);
 });
