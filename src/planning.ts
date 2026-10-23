@@ -33,7 +33,6 @@ export const PLAN_KINDS = {
 } as const satisfies Record<string, { fanOut: number; start: Tier }>;
 export type PlanKind = keyof typeof PLAN_KINDS;
 const KIND_NAMES = Object.keys(PLAN_KINDS) as PlanKind[];
-export const PLAN_KIND_NAMES: readonly string[] = KIND_NAMES;
 
 export const PLANNING_HINT = `[${KIND_NAMES.join(" | ")}] <what to plan>`;
 
@@ -50,55 +49,79 @@ const GAP_LABEL_COLOR = "#EC4899";
 /** Story sizes on the kaneo-work-tracking point scale: anything larger is split first. */
 const GAP_SIZE = "P1";
 const MAX_STORY_SIZE = "P5";
-export const STORY_SIZES = [GAP_SIZE, "P2", "P3", MAX_STORY_SIZE] as const;
-
-/** The `plans` subcommand that upgrades existing stores. */
-export const PLANS_UPGRADE = "upgrade";
-
-/** The `plans` subcommand that serves stores to a browser. */
-export const PLANS_SERVE = "serve";
-
-/** The `plans` subcommand that serves plan tools to an agent over MCP. */
-export const PLANS_MCP_SUBCOMMAND = "mcp";
-
-/** The MCP server name the plan tools are registered under, and the catalog item that adds it. */
-export const PLANS_MCP = "plans";
-export const PLANS_MCP_ITEM = "plans-mcp";
-
-/** The plan tools the `plans` MCP server offers. */
-export const PLAN_TOOLS = {
-  plan_list: "plan_list",
-  plan_get: "plan_get",
-  plan_query: "plan_query",
-  plan_create: "plan_create",
-  plan_update: "plan_update",
-  fact_add: "fact_add",
-  decision_add: "decision_add",
-  finding_add: "finding_add",
-  finding_update: "finding_update",
-  epic_save: "epic_save",
-  ticket_save: "ticket_save",
-  block_add: "block_add",
-  block_remove: "block_remove",
-  draft_replace: "draft_replace",
-} as const;
+const STORY_SIZES = [GAP_SIZE, "P2", "P3", MAX_STORY_SIZE] as const;
 
 /**
- * The plan store's schema version, kept in SQLite's `PRAGMA user_version`. A store without one is
- * version 0 (the 0.11.0 shape). A schema change adds `PLAN_SCHEMA_VERSION + 1`, a new entry in
- * `PLAN_MIGRATIONS` and the matching change in `PLAN_SCHEMA`.
+ * The plan store's schema. Every statement is idempotent, so running it on an existing store is
+ * safe. The `waves` view layers open tickets by their unfinished blockers and leaves out every
+ * ticket in a dependency cycle or behind one (`stuck`), since none of them can start.
  */
-export const PLAN_SCHEMA_VERSION = 1;
+/** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
+export const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
 
-/**
- * The `waves` view layers open tickets by their unfinished blockers and leaves out every ticket in
- * a dependency cycle or behind one (`stuck`), since none of them can start. It is dropped and
- * created again, so a store from an older schema gets the current view. It selects only grouped or
- * aggregated columns: DuckDB (harlequin's default adapter) cannot bind a bare column, and its
- * SQLite fallback prepares a rewritten query that SQLite cannot parse.
- */
-const WAVES_VIEW = `DROP VIEW IF EXISTS waves;
-CREATE VIEW waves AS
+export const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
+CREATE TABLE IF NOT EXISTS plan (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN (${KIND_NAMES.map((k) => `'${k}'`).join(", ")})),
+  request TEXT NOT NULL,
+  outcome TEXT,
+  status TEXT NOT NULL DEFAULT 'interview' CHECK (status IN ('interview', 'review', 'written')),
+  tracker TEXT NOT NULL DEFAULT 'store' CHECK (tracker IN ('store', 'kaneo')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS facts (
+  id INTEGER PRIMARY KEY,
+  topic TEXT NOT NULL,
+  fact TEXT NOT NULL,
+  source TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decisions (
+  id INTEGER PRIMARY KEY,
+  topic TEXT NOT NULL,
+  question TEXT NOT NULL,
+  answer TEXT NOT NULL,
+  why TEXT,
+  decided_by TEXT NOT NULL CHECK (decided_by IN ('user', 'recommendation'))
+);
+CREATE TABLE IF NOT EXISTS epics (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  goal TEXT NOT NULL,
+  done_when TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  tracker_id TEXT
+);
+CREATE TABLE IF NOT EXISTS tickets (
+  id TEXT PRIMARY KEY,
+  epic_id TEXT REFERENCES epics(id),
+  kind TEXT NOT NULL DEFAULT 'story' CHECK (kind IN ('story', 'gap')),
+  title TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  done_when TEXT NOT NULL,
+  size TEXT NOT NULL CHECK (size IN (${STORY_SIZES.map((s) => `'${s}'`).join(", ")})),
+  touches TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
+  tracker_id TEXT
+);
+CREATE TABLE IF NOT EXISTS blocks (
+  blocker TEXT NOT NULL REFERENCES tickets(id),
+  blocked TEXT NOT NULL REFERENCES tickets(id),
+  PRIMARY KEY (blocker, blocked),
+  CHECK (blocker <> blocked)
+);
+CREATE TABLE IF NOT EXISTS findings (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('gap', 'red_flag', 'smell', 'risk')),
+  lens TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  why TEXT NOT NULL,
+  recommendation TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'dismissed', 'ticketed')),
+  resolution TEXT,
+  ticket_id TEXT REFERENCES tickets(id)
+);
+CREATE VIEW IF NOT EXISTS waves AS
 WITH RECURSIVE
 open_blocks(blocker, blocked) AS (
   SELECT b.blocker, b.blocked FROM blocks b
@@ -125,98 +148,7 @@ layer(ticket_id, wave) AS (
 )
 SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
 FROM layer JOIN tickets t ON t.id = layer.ticket_id
-GROUP BY layer.ticket_id, t.epic_id;`;
-
-/** The values the schema's CHECK lists allow; the plan tools take the same lists. */
-export const PLAN_STATUSES = ["interview", "review", "written"] as const;
-export const PLAN_TRACKERS = ["store", "kaneo"] as const;
-export const DECIDED_BY = ["user", "recommendation"] as const;
-export const TICKET_KINDS = ["story", "gap"] as const;
-export const TICKET_STATUSES = ["todo", "in_progress", "done"] as const;
-export const FINDING_KINDS = ["gap", "red_flag", "smell", "risk"] as const;
-export const FINDING_STATUSES = ["open", "resolved", "dismissed", "ticketed"] as const;
-
-/** Renders a value list as the inside of a SQL `IN (...)` check. */
-const sqlList = (values: readonly string[]): string => values.map((v) => `'${v}'`).join(", ");
-
-/** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
-export const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
-
-/**
- * The plan store's schema. It only creates a new store and stamps it with the current version; an
- * existing store is upgraded with `PLAN_MIGRATIONS`, never by running this on it again.
- */
-export const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
-CREATE TABLE IF NOT EXISTS plan (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  title TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN (${sqlList(KIND_NAMES)})),
-  request TEXT NOT NULL,
-  outcome TEXT,
-  status TEXT NOT NULL DEFAULT 'interview' CHECK (status IN (${sqlList(PLAN_STATUSES)})),
-  tracker TEXT NOT NULL DEFAULT 'store' CHECK (tracker IN (${sqlList(PLAN_TRACKERS)})),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS facts (
-  id INTEGER PRIMARY KEY,
-  topic TEXT NOT NULL,
-  fact TEXT NOT NULL,
-  source TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS decisions (
-  id INTEGER PRIMARY KEY,
-  topic TEXT NOT NULL,
-  question TEXT NOT NULL,
-  answer TEXT NOT NULL,
-  why TEXT,
-  decided_by TEXT NOT NULL CHECK (decided_by IN (${sqlList(DECIDED_BY)}))
-);
-CREATE TABLE IF NOT EXISTS epics (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  goal TEXT NOT NULL,
-  done_when TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  tracker_id TEXT
-);
-CREATE TABLE IF NOT EXISTS tickets (
-  id TEXT PRIMARY KEY,
-  epic_id TEXT REFERENCES epics(id),
-  kind TEXT NOT NULL DEFAULT 'story' CHECK (kind IN (${sqlList(TICKET_KINDS)})),
-  title TEXT NOT NULL,
-  outcome TEXT NOT NULL,
-  done_when TEXT NOT NULL,
-  size TEXT NOT NULL CHECK (size IN (${sqlList(STORY_SIZES)})),
-  touches TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN (${sqlList(TICKET_STATUSES)})),
-  tracker_id TEXT
-);
-CREATE TABLE IF NOT EXISTS blocks (
-  blocker TEXT NOT NULL REFERENCES tickets(id),
-  blocked TEXT NOT NULL REFERENCES tickets(id),
-  PRIMARY KEY (blocker, blocked),
-  CHECK (blocker <> blocked)
-);
-CREATE TABLE IF NOT EXISTS findings (
-  id INTEGER PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN (${sqlList(FINDING_KINDS)})),
-  lens TEXT NOT NULL,
-  detail TEXT NOT NULL,
-  why TEXT NOT NULL,
-  recommendation TEXT,
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN (${sqlList(FINDING_STATUSES)})),
-  resolution TEXT,
-  ticket_id TEXT REFERENCES tickets(id)
-);
-${WAVES_VIEW}
-PRAGMA user_version = ${PLAN_SCHEMA_VERSION};`;
-
-/**
- * `PLAN_MIGRATIONS[v]` upgrades a store at version v to v + 1; the upgrade sets `user_version`
- * itself. A released migration is never edited: a schema change adds a new one. Version 0 gets the
- * `waves` view that works in DuckDB.
- */
-export const PLAN_MIGRATIONS: readonly string[] = [WAVES_VIEW];
+GROUP BY layer.ticket_id;`;
 
 /** What the gap reviewers look at; a capped fan-out gives one reviewer several lenses. */
 const LENSES: [name: string, focus: string][] = [
@@ -285,7 +217,7 @@ export function plannerDescription(tier: Tier, model: string): string {
 export function plannerBody(tier: Tier): string {
   return `You are a planner, a sub-agent of the \`${PLANNING}\` action. The parent session runs the interview with the user and keeps every decision; you do the reasoning it hands you and reply briefly.
 
-Every handoff opens with a phase line and names the plan store, a SQLite file. Read it with small \`sqlite3\` selects (or \`python3 -m sqlite3\`) and the code with bounded reads (line ranges, \`grep\`); never dump a whole table or file. With the \`${PLANS_MCP}\` MCP tools, read with \`${PLAN_TOOLS.plan_get}\` or \`${PLAN_TOOLS.plan_query}\` and write the draft with \`${PLAN_TOOLS.draft_replace}\`; otherwise use \`sqlite3\`.
+Every handoff opens with a phase line and names the plan store, a SQLite file. Read it with small \`sqlite3\` selects (or \`python3 -m sqlite3\`) and the code with bounded reads (line ranges, \`grep\`); never dump a whole table or file.
 
 ## Phases
 
@@ -448,7 +380,7 @@ Climb on a failed review, never for speed: a cheap draft that the review checks 
 - **Kaneo**: load the ${code(KANEO_SKILL)} skill and follow its "Plan an epic" section; epics are titled ${code(`${EPIC_TITLE_PREFIX}<outcome>`)}. Have the scribe create each epic, then its stories and gap tickets with their labels and relations, in batches. Check each reply against the store, record every Kaneo identifier in \`tracker_id\`, and set the plan's tracker to \`kaneo\`.
 - **Store only**: the tickets already live in the store.
 
-Set the plan's status to \`written\`. Tell the user they can review the plan in a browser, also from a phone on the same network, with ${code(`agent-config plans ${PLANS_SERVE}`)}.
+Set the plan's status to \`written\`.
 
 ## 8. Report
 
@@ -462,15 +394,13 @@ With none installed, say how to work the tickets by hand from the store.
 
 ## Plan store
 
-When the \`${PLANS_MCP}\` MCP tools are available, use them for every store read and write instead of \`sqlite3\`: they validate input, keep foreign keys on and run each write in one transaction. ${code(PLAN_TOOLS.plan_create)} picks the month folder, ${code(PLAN_TOOLS.plan_get)} and ${code(PLAN_TOOLS.plan_query)} read, ${code(PLAN_TOOLS.draft_replace)} rewrites a draft and ${code(PLAN_TOOLS.ticket_save)} saves one ticket. Without them, use \`sqlite3\` as described below; ${code(`agent-config configure ${PLANS_MCP_ITEM}`)} adds the server.
-
 Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is the current month (\`10-2026\`). Create it with \`sqlite3\` (or \`python3 -m sqlite3\` when \`sqlite3\` is missing) from this schema:
 
 \`\`\`sql
 ${PLAN_SCHEMA}
 \`\`\`
 
-Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. An existing store is upgraded with ${code(`agent-config plans ${PLANS_UPGRADE} <path>`)}, never by running the schema on it again. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
 ## Design system standard
 

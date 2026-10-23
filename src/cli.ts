@@ -2,7 +2,7 @@
 // agent-config: the TUI for humans, plain commands (and --json) for scripts and agents.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
@@ -40,12 +40,6 @@ import {
 } from "./ops.ts";
 import { EFFORTS, isReviewLens, isRuntime, isTier, type Effort, type Runtime } from "./tiers.ts";
 import { formatPlan, runTui } from "./tui.ts";
-import { MissingPathError, findStores, upgradeStores } from "./plans.ts";
-import { PLANS_DIR, PLANS_MCP_SUBCOMMAND, PLANS_SERVE, PLANS_UPGRADE } from "./planning.ts";
-import { serveMcp } from "./mcp.ts";
-import { PLANS_MCP_INSTRUCTIONS, planTools } from "./plans-mcp.ts";
-import { servePlans } from "./serve.ts";
-import { renderUnicodeCompact } from "uqr";
 import { DELEGATED_ENV, LEGACY_DELEGATED_ENV, delegate } from "./delegate.ts";
 import {
   checkForUpdate,
@@ -72,9 +66,6 @@ Usage:
   agent-config install <item>      add a catalog item, e.g. \`agi install model-ladder\` or
                                    \`agi install kaneo\` (--project <dir> for one repository
                                    instead of your user config; not model-ladder)
-  agent-config configure <item>    install a catalog item and choose where: system (your user config) or
-                                   a project, e.g. \`agi configure plans-mcp\` (asks in a terminal;
-                                   --project <dir> skips the question; otherwise system)
   agent-config catalog             list catalog items and where they are installed
   agent-config status              list what agent-config installed and whether it changed
   agent-config uninstall [flags]   remove it and restore what it replaced
@@ -87,14 +78,6 @@ Usage:
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
-  agent-config plans ${PLANS_UPGRADE} [<path> ...]
-                                   upgrade /planning plan stores (default: ./.plans; a directory is
-                                   searched for plan.sqlite; --dry-run lists them)
-  agent-config plans ${PLANS_SERVE} [<path> ...]
-                                   serve plan stores read-only as a web page, with a QR code for
-                                   a phone on the same network (default: ./.plans)
-  agent-config plans ${PLANS_MCP_SUBCOMMAND}
-                                   stdio MCP server with plan-store tools for agents
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -227,30 +210,6 @@ function catalogTarget(
     status().some((e) => e.record.item === key);
   if (forUninstall && known) return { item, project };
   throw new UsageError(`--project ${project} is not a directory`);
-}
-
-/**
- * The flags `configure <id>` installs with: `--project` when given, else the scope the user picks
- * in a terminal (System or the current directory), else user scope. A user-only item skips it.
- */
-async function configureScope(
-  id: string,
-  values: Record<string, unknown>,
-  json: boolean,
-): Promise<Record<string, unknown>> {
-  const { item } = catalogTarget(id, values);
-  const terminal = process.stdin.isTTY && process.stdout.isTTY && !json;
-  if (values.project !== undefined || item.userOnly || !terminal) return values;
-  const cwd = process.cwd();
-  const answer = await p.select({
-    message: `Where should ${item.id} be configured?`,
-    options: [
-      { value: "system", label: "System", hint: "your home config, every project" },
-      { value: "project", label: "Project", hint: `this repository: ${cwd}` },
-    ],
-  });
-  if (p.isCancel(answer)) throw new Cancelled();
-  return answer === "project" ? { ...values, project: cwd } : values;
 }
 
 /** Resolves the entry `install <id>` names, applies the ladder flags to it, and saves it in `config`. */
@@ -443,9 +402,7 @@ async function main(argv: string[]): Promise<number> {
         : `--${misplaced} only applies to delegate`,
     );
   }
-  const itemId = ["install", "apply", "uninstall", "configure"].includes(command)
-    ? positionals[1]
-    : undefined;
+  const itemId = ["install", "apply", "uninstall"].includes(command) ? positionals[1] : undefined;
   const catalogFlag = given.find((k) => CATALOG_ONLY.includes(k));
   if (catalogFlag && (!itemId || (catalogFlag === "url" && command === "uninstall"))) {
     throw new UsageError(
@@ -486,17 +443,6 @@ async function main(argv: string[]): Promise<number> {
       for (const w of missingProjectWarnings(config))
         process.stderr.write(`agent-config: warning: ${w}\n`);
       return applyAndReport(buildPlan(config), config, values, json);
-    }
-    case "configure": {
-      if (!itemId) {
-        throw new UsageError(
-          "configure needs a catalog item, e.g. `agent-config configure plans-mcp` (see `agent-config catalog`)",
-        );
-      }
-      const config = loadConfig();
-      const scoped = await configureScope(itemId, values, json);
-      const entry = await saveEntryFor(itemId, config, scoped);
-      return applyAndReport(buildPlan(config, [entryKey(entry)]), config, values, json);
     }
     case "catalog": {
       const config = loadConfig();
@@ -695,97 +641,6 @@ async function main(argv: string[]): Promise<number> {
       );
       if (!last || last.status === "error") return 1;
       return last.status === "done" ? 0 : 3;
-    }
-    case "plans": {
-      const sub = positionals[1];
-      if (sub !== PLANS_UPGRADE && sub !== PLANS_SERVE && sub !== PLANS_MCP_SUBCOMMAND) {
-        throw new UsageError(
-          `plans expects "${PLANS_UPGRADE}", "${PLANS_SERVE}" or "${PLANS_MCP_SUBCOMMAND}"`,
-        );
-      }
-      if (sub === PLANS_MCP_SUBCOMMAND) {
-        await serveMcp(planTools(process.cwd()), {
-          name: "agent-config-plans",
-          version: VERSION,
-          instructions: PLANS_MCP_INSTRUCTIONS,
-          input: process.stdin,
-          output: process.stdout,
-        });
-        return 0;
-      }
-      const given = positionals.slice(2);
-      const hasStoreDir = existsSync(resolve(PLANS_DIR));
-      if (sub === PLANS_SERVE) {
-        const roots = given.length > 0 ? given.map((p) => resolve(p)) : [resolve(PLANS_DIR)];
-        if (given.length > 0) {
-          try {
-            findStores(given);
-          } catch (error) {
-            if (error instanceof MissingPathError) throw new UsageError(error.message);
-            throw error;
-          }
-        }
-        const server = await servePlans(roots);
-        const { local, network } = server.urls;
-        if (json) {
-          process.stdout.write(`${JSON.stringify({ port: server.port, urls: server.urls })}\n`);
-        } else {
-          const shownRoots = roots.map((r) => relative(process.cwd(), r) || ".").join(", ");
-          const lines = [
-            `Serving plans from ${shownRoots} (read-only, re-read on every request). Press Ctrl+C to stop.`,
-            `  Local:   ${local}`,
-            ...network.map((url) => `  Network: ${url}`),
-            network.length > 0
-              ? "Anyone on your network with this link can read these plans."
-              : "No network address found; the page is reachable from this machine only.",
-          ];
-          if (network.length > 0) {
-            lines.push(
-              renderUnicodeCompact(network[0]),
-              "Scan to open on a phone or another device on the same network.",
-            );
-          }
-          process.stdout.write(`${lines.join("\n")}\n`);
-        }
-        await new Promise<void>((done) => {
-          const stop = (): void => {
-            process.off("SIGINT", stop);
-            process.off("SIGTERM", stop);
-            done();
-          };
-          process.on("SIGINT", stop);
-          process.on("SIGTERM", stop);
-        });
-        await server.close();
-        return 0;
-      }
-      if (given.length === 0 && !hasStoreDir) {
-        out(json, { stores: [] }, "No plan stores found.");
-        return 0;
-      }
-      let stores: string[];
-      try {
-        stores = findStores(given.length > 0 ? given : [resolve(PLANS_DIR)]);
-      } catch (error) {
-        if (error instanceof MissingPathError) throw new UsageError(error.message);
-        throw error;
-      }
-      const dryRun = values["dry-run"] === true;
-      const results = await upgradeStores(stores, dryRun);
-      const lines = results.map((r) => {
-        switch (r.status) {
-          case "upgraded":
-            return `upgraded ${r.path} (v${r.from} -> v${r.to})`;
-          case "current":
-            return `current ${r.path} (v${r.from})`;
-          case "pending":
-            return `would upgrade ${r.path} (v${r.from} -> v${r.to})`;
-          case "failed":
-            return `failed ${r.path}: ${r.error}`;
-        }
-      });
-      out(json, { stores: results }, lines.length > 0 ? lines.join("\n") : "No plan stores found.");
-      return results.some((r) => r.status === "failed") ? 1 : 0;
     }
     case "update":
     case "self-update": {

@@ -8,7 +8,6 @@ import {
   PLAN_KINDS,
   PLAN_SCHEMA,
   PLAN_STORE_PATH,
-  PLAN_TOOLS,
   REVIEW_VERDICT,
   STORE_WRITE_PREFIX,
   plannerBody,
@@ -47,14 +46,6 @@ describe("PLAN_SCHEMA", () => {
   test("runs again on an existing store", () => {
     const db = store();
     expect(() => db.exec(PLAN_SCHEMA)).not.toThrow();
-  });
-
-  test("replaces the waves view of a store from an older schema", () => {
-    const db = new DatabaseSync(":memory:");
-    db.exec("CREATE VIEW waves AS SELECT 'stale' AS ticket_id, 0 AS wave");
-    db.exec(PLAN_SCHEMA);
-    addTicket(db, "T1");
-    expect(waves(db)).toEqual([{ ticket_id: "T1", wave: 1 }]);
   });
 
   test("layers open tickets into waves by their unfinished blockers", () => {
@@ -126,13 +117,6 @@ describe("planningMarkdown", () => {
     expect(text).toContain(`\`${STORE_WRITE_PREFIX}\``);
   });
 
-  test("prefers the plans MCP tools and names how to add the server", () => {
-    const text = planningMarkdown("claude", MODELS);
-    expect(text).toContain("agent-config configure plans-mcp");
-    for (const tool of [PLAN_TOOLS.draft_replace, PLAN_TOOLS.plan_create, PLAN_TOOLS.ticket_save])
-      expect(text).toContain(tool);
-  });
-
   test("starts each kind's draft on its planner and climbs one rung on a failed review", () => {
     const section = planningMarkdown("claude", MODELS).split("## 5. ")[1]!.split("\n## ")[0]!;
     for (const [kind, { start }] of Object.entries(PLAN_KINDS))
@@ -164,7 +148,6 @@ describe("planner agents", () => {
       expect(body).toContain(`\`${PHASE_PREFIX} ${DRAFT_PHASE}\``);
       expect(body).toContain(REVIEW_VERDICT.revise);
     }
-    for (const body of [fast!, balanced!, deep!]) expect(body).toContain(PLAN_TOOLS.draft_replace);
     expect(fast).toContain(`reply \`${DRAFT_STATUS.escalate}\` early`);
     expect(deep).toContain("the last rung");
     expect(new Set([fast, balanced, deep]).size).toBe(3);

@@ -1,9 +1,8 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vite-plus/test";
-import { planTools } from "../src/plans-mcp.ts";
 import { read } from "./helpers.ts";
 
 const cli = join(import.meta.dirname, "..", "src", "cli.ts");
@@ -319,8 +318,7 @@ function expectPlanners(root: string, project: boolean) {
     const claude = read(join(root, dirs.claude, `${name}.md`));
     expect(claude).toContain(`name: ${name}`);
     expect(claude).toContain(`model: ${model}`);
-    expect(claude).toContain("tools: Read, Grep, Glob, Bash, ");
-    expect(claude).toContain("mcp__plans__plan_get");
+    expect(claude).toContain("tools: Read, Grep, Glob, Bash");
     const opencode = read(join(root, dirs.opencode, `${name}.md`));
     expect(opencode).toContain("mode: subagent");
     expect(opencode).toContain("  edit: deny");
@@ -508,7 +506,6 @@ test("install model-ladder installs only the ladder; uninstall model-ladder keep
     "continue",
     "kick-off",
     "planning",
-    "plans-mcp",
     "statusline",
   ]);
   expect(listed.items[0].entries).toMatchObject([{ scope: "user", runtimes: ["claude"] }]);
@@ -772,82 +769,4 @@ test("install statusline refuses other runtimes and --project", () => {
   const project = run("install", "statusline", "--project", home, "--yes");
   expect(project.code).not.toBe(0);
   expect(project.stderr).toContain("user scope only");
-});
-
-test("plans serve --json prints one JSON line, answers on it, and exits 0 on SIGINT", async () => {
-  const child = spawn("node", [cli, "plans", "serve", "--json"], {
-    cwd: home,
-    env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const exited = new Promise<number | null>((done) => child.on("close", done));
-  let out = "";
-  const line = await new Promise<string>((done) => {
-    child.stdout.on("data", (chunk) => {
-      out += chunk;
-      if (out.includes("\n")) done(out);
-    });
-  });
-  const { urls } = JSON.parse(line) as { urls: { local: string } };
-  expect((await fetch(urls.local)).status).toBe(200);
-  child.kill("SIGINT");
-  expect(await exited).toBe(0);
-  expect(line.trim().split("\n")).toHaveLength(1);
-});
-
-test("plans mcp answers JSON-RPC on stdout and exits 0 when stdin ends", async () => {
-  const child = spawn("node", [cli, "plans", "mcp"], {
-    cwd: home,
-    env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  const exited = new Promise<number | null>((done) => child.on("close", done));
-  let out = "";
-  child.stdout.on("data", (chunk) => (out += chunk));
-  child.stdin.write(
-    `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })}\n`,
-  );
-  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
-  child.stdin.end();
-  expect(await exited).toBe(0);
-  const replies = out
-    .split("\n")
-    .filter((l) => l !== "")
-    .map(
-      (l) => JSON.parse(l) as { id: number; result: { tools?: unknown[]; serverInfo?: unknown } },
-    );
-  expect(replies.map((r) => r.id)).toEqual([1, 2]);
-  expect(replies[0]!.result.serverInfo).toMatchObject({ name: "agent-config-plans" });
-  expect(replies[1]!.result.tools).toHaveLength(planTools(process.cwd()).length);
-});
-
-test("configure plans-mcp --project writes the project config", () => {
-  const repo = mkdtempSync(join(tmpdir(), "agent-config-repo-"));
-  try {
-    const res = run("configure", "plans-mcp", "--project", repo, "--runtime", "claude", "--yes");
-    expect(res.code).toBe(0);
-    expect(JSON.parse(read(join(repo, ".mcp.json"))).mcpServers.plans).toEqual({
-      type: "stdio",
-      command: "agent-config",
-      args: ["plans", "mcp"],
-    });
-    expect(existsSync(join(home, ".claude.json"))).toBe(false);
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
-});
-
-test("configure plans-mcp outside a terminal installs at user scope", () => {
-  const res = run("configure", "plans-mcp", "--runtime", "claude", "--yes");
-  expect(res.code).toBe(0);
-  expect(JSON.parse(read(join(home, ".claude.json"))).mcpServers.plans.args).toEqual([
-    "plans",
-    "mcp",
-  ]);
-});
-
-test("configure without an item is a usage error", () => {
-  const res = run("configure");
-  expect(res.code).toBe(2);
-  expect(res.stderr).toContain("catalog");
 });

@@ -1,16 +1,14 @@
 #!/usr/bin/env node
-import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { parseArgs, styleText } from "node:util";
 import process$1, { stdin, stdout } from "node:process";
-import * as l from "node:readline";
-import l__default, { createInterface } from "node:readline";
+import l__default, * as l from "node:readline";
 import { ReadStream } from "node:tty";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { homedir, networkInterfaces, tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createServer } from "node:http";
 //#region \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -1240,7 +1238,7 @@ ${f}
 	}).prompt();
 };
 `${styleText("gray", S_BAR)}`;
-const text$1 = (t) => new n({
+const text = (t) => new n({
 	validate: t.validate,
 	placeholder: t.placeholder,
 	defaultValue: t.defaultValue,
@@ -4493,12 +4491,8 @@ const PLAN_KINDS = {
 	}
 };
 const KIND_NAMES = Object.keys(PLAN_KINDS);
-const PLAN_KIND_NAMES = KIND_NAMES;
 const PLANNING_HINT = `[${KIND_NAMES.join(" | ")}] <what to plan>`;
-/** The plan store: one folder per month and per plan, in the repository root. */
-const PLANS_DIR = ".plans";
-const PLAN_DB = "plan.sqlite";
-const PLAN_STORE_PATH = `${PLANS_DIR}/<MM-yyyy>/<plan-title>/${PLAN_DB}`;
+const PLAN_STORE_PATH = `.plans/<MM-yyyy>/<plan-title>/plan.sqlite`;
 /** A gap still open when the user asks to write the tickets becomes a ticket with this title. */
 const GAP_TITLE_PREFIX = "Gap: ";
 const GAP_LABEL_COLOR = "#EC4899";
@@ -4511,39 +4505,76 @@ const STORY_SIZES = [
 	"P3",
 	MAX_STORY_SIZE
 ];
-/** The `plans` subcommand that upgrades existing stores. */
-const PLANS_UPGRADE = "upgrade";
-/** The `plans` subcommand that serves stores to a browser. */
-const PLANS_SERVE = "serve";
-/** The MCP server name the plan tools are registered under, and the catalog item that adds it. */
-const PLANS_MCP = "plans";
-const PLANS_MCP_ITEM = "plans-mcp";
-/** The plan tools the `plans` MCP server offers. */
-const PLAN_TOOLS = {
-	plan_list: "plan_list",
-	plan_get: "plan_get",
-	plan_query: "plan_query",
-	plan_create: "plan_create",
-	plan_update: "plan_update",
-	fact_add: "fact_add",
-	decision_add: "decision_add",
-	finding_add: "finding_add",
-	finding_update: "finding_update",
-	epic_save: "epic_save",
-	ticket_save: "ticket_save",
-	block_add: "block_add",
-	block_remove: "block_remove",
-	draft_replace: "draft_replace"
-};
 /**
-* The `waves` view layers open tickets by their unfinished blockers and leaves out every ticket in
-* a dependency cycle or behind one (`stuck`), since none of them can start. It is dropped and
-* created again, so a store from an older schema gets the current view. It selects only grouped or
-* aggregated columns: DuckDB (harlequin's default adapter) cannot bind a bare column, and its
-* SQLite fallback prepares a rewritten query that SQLite cannot parse.
+* The plan store's schema. Every statement is idempotent, so running it on an existing store is
+* safe. The `waves` view layers open tickets by their unfinished blockers and leaves out every
+* ticket in a dependency cycle or behind one (`stuck`), since none of them can start.
 */
-const WAVES_VIEW = `DROP VIEW IF EXISTS waves;
-CREATE VIEW waves AS
+/** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
+const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
+const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
+CREATE TABLE IF NOT EXISTS plan (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN (${KIND_NAMES.map((k) => `'${k}'`).join(", ")})),
+  request TEXT NOT NULL,
+  outcome TEXT,
+  status TEXT NOT NULL DEFAULT 'interview' CHECK (status IN ('interview', 'review', 'written')),
+  tracker TEXT NOT NULL DEFAULT 'store' CHECK (tracker IN ('store', 'kaneo')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS facts (
+  id INTEGER PRIMARY KEY,
+  topic TEXT NOT NULL,
+  fact TEXT NOT NULL,
+  source TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decisions (
+  id INTEGER PRIMARY KEY,
+  topic TEXT NOT NULL,
+  question TEXT NOT NULL,
+  answer TEXT NOT NULL,
+  why TEXT,
+  decided_by TEXT NOT NULL CHECK (decided_by IN ('user', 'recommendation'))
+);
+CREATE TABLE IF NOT EXISTS epics (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  goal TEXT NOT NULL,
+  done_when TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  tracker_id TEXT
+);
+CREATE TABLE IF NOT EXISTS tickets (
+  id TEXT PRIMARY KEY,
+  epic_id TEXT REFERENCES epics(id),
+  kind TEXT NOT NULL DEFAULT 'story' CHECK (kind IN ('story', 'gap')),
+  title TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  done_when TEXT NOT NULL,
+  size TEXT NOT NULL CHECK (size IN (${STORY_SIZES.map((s) => `'${s}'`).join(", ")})),
+  touches TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
+  tracker_id TEXT
+);
+CREATE TABLE IF NOT EXISTS blocks (
+  blocker TEXT NOT NULL REFERENCES tickets(id),
+  blocked TEXT NOT NULL REFERENCES tickets(id),
+  PRIMARY KEY (blocker, blocked),
+  CHECK (blocker <> blocked)
+);
+CREATE TABLE IF NOT EXISTS findings (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('gap', 'red_flag', 'smell', 'risk')),
+  lens TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  why TEXT NOT NULL,
+  recommendation TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'dismissed', 'ticketed')),
+  resolution TEXT,
+  ticket_id TEXT REFERENCES tickets(id)
+);
+CREATE VIEW IF NOT EXISTS waves AS
 WITH RECURSIVE
 open_blocks(blocker, blocked) AS (
   SELECT b.blocker, b.blocked FROM blocks b
@@ -4570,111 +4601,7 @@ layer(ticket_id, wave) AS (
 )
 SELECT t.epic_id, layer.ticket_id, MAX(layer.wave) AS wave
 FROM layer JOIN tickets t ON t.id = layer.ticket_id
-GROUP BY layer.ticket_id, t.epic_id;`;
-/** The values the schema's CHECK lists allow; the plan tools take the same lists. */
-const PLAN_STATUSES = [
-	"interview",
-	"review",
-	"written"
-];
-const PLAN_TRACKERS = ["store", "kaneo"];
-const DECIDED_BY = ["user", "recommendation"];
-const TICKET_KINDS = ["story", "gap"];
-const TICKET_STATUSES = [
-	"todo",
-	"in_progress",
-	"done"
-];
-const FINDING_KINDS = [
-	"gap",
-	"red_flag",
-	"smell",
-	"risk"
-];
-const FINDING_STATUSES = [
-	"open",
-	"resolved",
-	"dismissed",
-	"ticketed"
-];
-/** Renders a value list as the inside of a SQL `IN (...)` check. */
-const sqlList = (values) => values.map((v) => `'${v}'`).join(", ");
-/** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
-const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
-/**
-* The plan store's schema. It only creates a new store and stamps it with the current version; an
-* existing store is upgraded with `PLAN_MIGRATIONS`, never by running this on it again.
-*/
-const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
-CREATE TABLE IF NOT EXISTS plan (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  title TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN (${sqlList(KIND_NAMES)})),
-  request TEXT NOT NULL,
-  outcome TEXT,
-  status TEXT NOT NULL DEFAULT 'interview' CHECK (status IN (${sqlList(PLAN_STATUSES)})),
-  tracker TEXT NOT NULL DEFAULT 'store' CHECK (tracker IN (${sqlList(PLAN_TRACKERS)})),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS facts (
-  id INTEGER PRIMARY KEY,
-  topic TEXT NOT NULL,
-  fact TEXT NOT NULL,
-  source TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS decisions (
-  id INTEGER PRIMARY KEY,
-  topic TEXT NOT NULL,
-  question TEXT NOT NULL,
-  answer TEXT NOT NULL,
-  why TEXT,
-  decided_by TEXT NOT NULL CHECK (decided_by IN (${sqlList(DECIDED_BY)}))
-);
-CREATE TABLE IF NOT EXISTS epics (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  goal TEXT NOT NULL,
-  done_when TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  tracker_id TEXT
-);
-CREATE TABLE IF NOT EXISTS tickets (
-  id TEXT PRIMARY KEY,
-  epic_id TEXT REFERENCES epics(id),
-  kind TEXT NOT NULL DEFAULT 'story' CHECK (kind IN (${sqlList(TICKET_KINDS)})),
-  title TEXT NOT NULL,
-  outcome TEXT NOT NULL,
-  done_when TEXT NOT NULL,
-  size TEXT NOT NULL CHECK (size IN (${sqlList(STORY_SIZES)})),
-  touches TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN (${sqlList(TICKET_STATUSES)})),
-  tracker_id TEXT
-);
-CREATE TABLE IF NOT EXISTS blocks (
-  blocker TEXT NOT NULL REFERENCES tickets(id),
-  blocked TEXT NOT NULL REFERENCES tickets(id),
-  PRIMARY KEY (blocker, blocked),
-  CHECK (blocker <> blocked)
-);
-CREATE TABLE IF NOT EXISTS findings (
-  id INTEGER PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN (${sqlList(FINDING_KINDS)})),
-  lens TEXT NOT NULL,
-  detail TEXT NOT NULL,
-  why TEXT NOT NULL,
-  recommendation TEXT,
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN (${sqlList(FINDING_STATUSES)})),
-  resolution TEXT,
-  ticket_id TEXT REFERENCES tickets(id)
-);
-${WAVES_VIEW}
-PRAGMA user_version = 1;`;
-/**
-* `PLAN_MIGRATIONS[v]` upgrades a store at version v to v + 1; the upgrade sets `user_version`
-* itself. A released migration is never edited: a schema change adds a new one. Version 0 gets the
-* `waves` view that works in DuckDB.
-*/
-const PLAN_MIGRATIONS = [WAVES_VIEW];
+GROUP BY layer.ticket_id;`;
 /** What the gap reviewers look at; a capped fan-out gives one reviewer several lenses. */
 const LENSES = [
 	["scope", "the outcome, who it is for, what is in and out, criteria a test or a person can check"],
@@ -4720,7 +4647,7 @@ function plannerDescription(tier, model) {
 function plannerBody(tier) {
 	return `You are a planner, a sub-agent of the \`${PLANNING}\` action. The parent session runs the interview with the user and keeps every decision; you do the reasoning it hands you and reply briefly.
 
-Every handoff opens with a phase line and names the plan store, a SQLite file. Read it with small \`sqlite3\` selects (or \`python3 -m sqlite3\`) and the code with bounded reads (line ranges, \`grep\`); never dump a whole table or file. With the \`${PLANS_MCP}\` MCP tools, read with \`${PLAN_TOOLS.plan_get}\` or \`${PLAN_TOOLS.plan_query}\` and write the draft with \`${PLAN_TOOLS.draft_replace}\`; otherwise use \`sqlite3\`.
+Every handoff opens with a phase line and names the plan store, a SQLite file. Read it with small \`sqlite3\` selects (or \`python3 -m sqlite3\`) and the code with bounded reads (line ranges, \`grep\`); never dump a whole table or file.
 
 ## Phases
 
@@ -4877,7 +4804,7 @@ Climb on a failed review, never for speed: a cheap draft that the review checks 
 - **Kaneo**: load the ${code(KANEO_SKILL)} skill and follow its "Plan an epic" section; epics are titled ${code(`${EPIC_TITLE_PREFIX}<outcome>`)}. Have the scribe create each epic, then its stories and gap tickets with their labels and relations, in batches. Check each reply against the store, record every Kaneo identifier in \`tracker_id\`, and set the plan's tracker to \`kaneo\`.
 - **Store only**: the tickets already live in the store.
 
-Set the plan's status to \`written\`. Tell the user they can review the plan in a browser, also from a phone on the same network, with ${code(`agent-config plans ${PLANS_SERVE}`)}.
+Set the plan's status to \`written\`.
 
 ## 8. Report
 
@@ -4891,15 +4818,13 @@ With none installed, say how to work the tickets by hand from the store.
 
 ## Plan store
 
-When the \`${PLANS_MCP}\` MCP tools are available, use them for every store read and write instead of \`sqlite3\`: they validate input, keep foreign keys on and run each write in one transaction. ${code(PLAN_TOOLS.plan_create)} picks the month folder, ${code(PLAN_TOOLS.plan_get)} and ${code(PLAN_TOOLS.plan_query)} read, ${code(PLAN_TOOLS.draft_replace)} rewrites a draft and ${code(PLAN_TOOLS.ticket_save)} saves one ticket. Without them, use \`sqlite3\` as described below; ${code(`agent-config configure ${PLANS_MCP_ITEM}`)} adds the server.
-
 Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is the current month (\`10-2026\`). Create it with \`sqlite3\` (or \`python3 -m sqlite3\` when \`sqlite3\` is missing) from this schema:
 
 \`\`\`sql
 ${PLAN_SCHEMA}
 \`\`\`
 
-Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. An existing store is upgraded with ${code(`agent-config plans ${PLANS_UPGRADE} <path>`)}, never by running the schema on it again. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
 ## Design system standard
 
@@ -5592,73 +5517,6 @@ function kaneoMcpOp(runtime, project, url) {
 		};
 	}
 }
-/** The command wrapper `install.sh` puts in the bin dir, and the name a PATH lookup finds it by. */
-const BINARY = "agent-config";
-/** The `plans mcp` arguments every runtime passes to the binary. */
-const PLANS_MCP_ARGS = ["plans", "mcp"];
-/**
-* What runs the plans server. A project's config is committed, so it carries only the bare name;
-* a user's config points at the installed wrapper when there is one.
-*/
-function plansMcpCommand(project) {
-	const bin = setting("BIN_DIR");
-	if (project || !bin) return BINARY;
-	const wrapper = join(bin, BINARY);
-	return existsSync(wrapper) ? wrapper : BINARY;
-}
-function plansMcpOp(runtime, project) {
-	const command = plansMcpCommand(project);
-	const base = {
-		runtime,
-		component: "catalog",
-		label: `${PLANS_MCP} MCP server ${command} ${PLANS_MCP_ARGS.join(" ")}`
-	};
-	switch (runtime) {
-		case "claude": return {
-			...base,
-			kind: "json-set",
-			path: project ? join(project, ".mcp.json") : claudeJsonPath(),
-			pointer: ["mcpServers", PLANS_MCP],
-			value: {
-				type: "stdio",
-				command,
-				args: PLANS_MCP_ARGS
-			}
-		};
-		case "opencode": return {
-			...base,
-			kind: "json-set",
-			path: opencodeConfigPath(project),
-			pointer: ["mcp", PLANS_MCP],
-			value: {
-				type: "local",
-				command: [command, ...PLANS_MCP_ARGS],
-				enabled: true
-			}
-		};
-		case "codex": {
-			const table = `[mcp_servers.${PLANS_MCP}]`;
-			return {
-				...base,
-				kind: "block",
-				path: join(project ? join(project, ".codex") : codexDir(), "config.toml"),
-				content: `${table}\ncommand = ${JSON.stringify(command)}\nargs = [${PLANS_MCP_ARGS.map((a) => JSON.stringify(a)).join(", ")}]`,
-				markers: [blockMarkers(PLANS_MCP_ITEM, "hash")],
-				conflict: table
-			};
-		}
-		case "pi": return {
-			...base,
-			kind: "json-set",
-			path: project ? join(project, ".pi", "mcp.json") : join(piDir(), "mcp.json"),
-			pointer: ["mcpServers", PLANS_MCP],
-			value: {
-				command,
-				args: PLANS_MCP_ARGS
-			}
-		};
-	}
-}
 /**
 * The model ladder: ladder agents, routing skill, instructions, read guard and review models.
 * Its parts, rungs and models are the top-level ladder settings of the saved configuration.
@@ -5971,8 +5829,7 @@ const PLANNER_CLAUDE_TOOLS = [
 	"Read",
 	"Grep",
 	"Glob",
-	"Bash",
-	...Object.values(PLAN_TOOLS).map((tool) => `mcp__${PLANS_MCP}__${tool}`)
+	"Bash"
 ];
 const PLANNER_OPENCODE_DENY = ["edit", "task"];
 const PLANNER_PI_TOOLS = [
@@ -5980,8 +5837,7 @@ const PLANNER_PI_TOOLS = [
 	"grep",
 	"find",
 	"ls",
-	"bash",
-	"tool_search"
+	"bash"
 ];
 function planningOps(runtime, project, config) {
 	const tiers = config.tiers[runtime];
@@ -6042,14 +5898,6 @@ const CATALOG = [
 		settings: [],
 		discover: () => ({}),
 		ops: (entry, runtime, config) => planningOps(runtime, entry.project, config)
-	},
-	{
-		id: PLANS_MCP_ITEM,
-		title: "Plans MCP",
-		description: `the ${PLANS_MCP} MCP server: tools that read and write /planning plan stores on demand`,
-		settings: [],
-		discover: () => ({}),
-		ops: (entry, runtime) => [plansMcpOp(runtime, entry.project)]
 	},
 	{
 		id: "statusline",
@@ -6236,7 +6084,7 @@ function saveConfig(config) {
 }
 //#endregion
 //#region src/version.ts
-const VERSION = "0.14.0";
+const VERSION = "0.11.0";
 //#endregion
 //#region src/selfupdate.ts
 /** The checkout this CLI runs from (dist/cli.mjs and src/selfupdate.ts sit one level below). */
@@ -6611,7 +6459,7 @@ async function chooseModels(config, runtimes) {
 		log.step(import_picocolors.default.bold(RUNTIME_LABELS[runtime]));
 		for (const tier of TIERS) {
 			const current = config.tiers[runtime][tier];
-			const model = ask(await text$1({
+			const model = ask(await text({
 				message: `${tier} — ${TIER_LABELS[tier]}`,
 				placeholder: runtime === "codex" ? "empty = session model" : defaultTierMap(runtime)[tier].model,
 				initialValue: current.model
@@ -6681,7 +6529,7 @@ async function ladderFlow(config) {
 	await chooseModels(config, runtimes);
 	if (config.components.includes("review-models")) await chooseReviewTiers(config);
 	if (config.components.includes("read-guard") && runtimes.includes("claude")) {
-		const value = ask(await text$1({
+		const value = ask(await text({
 			message: "Read guard: block whole reads of files with at least how many lines?",
 			initialValue: String(config.minLines),
 			validate: (v) => /^\d+$/.test(v ?? "") && Number(v) > 0 ? void 0 : "Enter a positive whole number"
@@ -6779,7 +6627,7 @@ async function catalogFlow() {
 			label: "Project",
 			hint: "one repository, committed with it"
 		}]
-	})) === "project" ? resolve(ask(await text$1({
+	})) === "project" ? resolve(ask(await text({
 		message: "Project directory",
 		initialValue: process.cwd(),
 		validate: (v) => {
@@ -6803,7 +6651,7 @@ async function catalogFlow() {
 	for (const s of item.settings) {
 		const known = defaults.settings[s.key];
 		const from = known?.source === "discovered" ? project ? " (from your user config; written into the repository)" : " (from your existing config)" : "";
-		const raw = ask(await text$1({
+		const raw = ask(await text({
 			message: `${s.message}${from}`,
 			placeholder: s.placeholder,
 			initialValue: known?.value ?? "",
@@ -6979,1882 +6827,6 @@ async function runTui() {
 	}
 	outro("Done.");
 	return 0;
-}
-//#endregion
-//#region src/plans.ts
-/** Directories a store search never enters. */
-const SKIPPED_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git"]);
-var MissingPathError = class extends Error {};
-function collect(dir, found) {
-	for (const entry of readdirSync(dir, { withFileTypes: true })) {
-		const path = join(dir, entry.name);
-		if (entry.isDirectory()) {
-			if (!SKIPPED_DIRS.has(entry.name)) collect(path, found);
-		} else if (entry.name === "plan.sqlite") found.push(path);
-	}
-}
-/** A file is one store; a directory is searched for stores. A missing path throws. */
-function findStores(paths) {
-	const found = [];
-	for (const given of paths) {
-		const path = resolve(given);
-		let isDir;
-		try {
-			isDir = statSync(path).isDirectory();
-		} catch {
-			throw new MissingPathError(`${given} does not exist`);
-		}
-		if (isDir) collect(path, found);
-		else found.push(path);
-	}
-	return [...new Set(found)];
-}
-const message$2 = (error) => error instanceof Error ? error.message : String(error);
-/** How long a connection waits for another writer's lock before failing. */
-const BUSY_TIMEOUT_MS = 5e3;
-function versionOf(db) {
-	return Number(db.prepare("PRAGMA user_version").get().user_version);
-}
-/** The version a store may be upgraded from; a newer one was written by a newer agent-config. */
-function checkVersion(from) {
-	if (from > 1) throw new Error(`store version ${from} is newer than the 1 this agent-config supports; run agent-config update`);
-}
-/**
-* Brings each store to the current schema version in one transaction, applying the migrations it
-* is missing; a store that fails does not stop the rest. A dry run reads each store read-only.
-*/
-async function upgradeStores(stores, dryRun = false) {
-	const { DatabaseSync } = await import("node:sqlite");
-	const to = 1;
-	const results = [];
-	for (const path of stores) try {
-		const db = new DatabaseSync(path, { readOnly: dryRun });
-		try {
-			if (dryRun) {
-				const from = versionOf(db);
-				checkVersion(from);
-				results.push({
-					path,
-					status: from === to ? "current" : "pending",
-					from,
-					to
-				});
-				continue;
-			}
-			db.exec("BEGIN IMMEDIATE");
-			try {
-				const from = versionOf(db);
-				checkVersion(from);
-				if (from === to) {
-					db.exec("ROLLBACK");
-					results.push({
-						path,
-						status: "current",
-						from,
-						to
-					});
-					continue;
-				}
-				for (const migration of PLAN_MIGRATIONS.slice(from, to)) db.exec(migration);
-				db.exec(`PRAGMA user_version = ${to}`);
-				db.exec("COMMIT");
-				results.push({
-					path,
-					status: "upgraded",
-					from,
-					to
-				});
-			} catch (error) {
-				try {
-					db.exec("ROLLBACK");
-				} catch {}
-				throw error;
-			}
-		} finally {
-			db.close();
-		}
-	} catch (error) {
-		results.push({
-			path,
-			status: "failed",
-			error: message$2(error)
-		});
-	}
-	return results;
-}
-/** Ticket statuses the schema allows, as the progress counts use them. */
-const STATUS_TODO = "todo";
-const STATUS_IN_PROGRESS = "in_progress";
-const STATUS_DONE = "done";
-/** Reads one store without writing to it; a store newer than this agent-config throws. */
-async function readPlan(path) {
-	const { DatabaseSync } = await import("node:sqlite");
-	const db = new DatabaseSync(path, { readOnly: true });
-	try {
-		db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-		const version = versionOf(db);
-		checkVersion(version);
-		const all = (sql) => db.prepare(sql).all();
-		const plan = db.prepare("SELECT title, kind, request, outcome, status, tracker, created_at AS createdAt FROM plan WHERE id = 1").get() ?? null;
-		const epics = all("SELECT id, title, goal, done_when AS doneWhen, position, tracker_id AS trackerId FROM epics ORDER BY position, id");
-		const blockedBy = /* @__PURE__ */ new Map();
-		for (const row of all("SELECT blocker, blocked FROM blocks ORDER BY blocker")) blockedBy.set(row.blocked, [...blockedBy.get(row.blocked) ?? [], row.blocker]);
-		const waves = new Map(all("SELECT ticket_id, wave FROM waves").map((row) => [row.ticket_id, Number(row.wave)]));
-		const tickets = all("SELECT id, epic_id AS epicId, kind, title, outcome, done_when AS doneWhen, size, touches, status, tracker_id AS trackerId FROM tickets ORDER BY rowid").map((ticket) => ({
-			...ticket,
-			blockedBy: blockedBy.get(ticket.id) ?? [],
-			wave: waves.get(ticket.id) ?? null
-		}));
-		const count = (status) => tickets.filter((t) => t.status === status).length;
-		return {
-			path,
-			version,
-			plan,
-			epics,
-			tickets,
-			decisions: all("SELECT id, topic, question, answer, why, decided_by AS decidedBy FROM decisions ORDER BY id"),
-			facts: all("SELECT id, topic, fact, source FROM facts ORDER BY id"),
-			findings: all("SELECT id, kind, lens, detail, why, recommendation, status, resolution, ticket_id AS ticketId FROM findings ORDER BY id"),
-			progress: {
-				todo: count(STATUS_TODO),
-				inProgress: count(STATUS_IN_PROGRESS),
-				done: count(STATUS_DONE),
-				total: tickets.length
-			}
-		};
-	} finally {
-		db.close();
-	}
-}
-//#endregion
-//#region src/mcp.ts
-/** Protocol versions this server speaks, newest first. */
-const SUPPORTED_VERSIONS = [
-	"2025-11-25",
-	"2025-06-18",
-	"2025-03-26",
-	"2024-11-05"
-];
-const PARSE_ERROR = -32700;
-const INVALID_REQUEST = -32600;
-const METHOD_NOT_FOUND = -32601;
-const INVALID_PARAMS = -32602;
-const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-function typeOf(value) {
-	if (value === null) return "null";
-	if (Array.isArray(value)) return "array";
-	if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
-	return typeof value;
-}
-/** Whether `value` is of JSON type `type` (an integer is also a number). */
-const matchesType = (value, type) => typeOf(value) === type || type === "number" && typeOf(value) === "integer";
-/** Returns the first problem found with `value` against `schema`, or null; `path` names the field. */
-function validate(value, schema, path) {
-	if (schema.type !== void 0) {
-		const types = Array.isArray(schema.type) ? schema.type : [schema.type];
-		if (!types.some((type) => matchesType(value, type))) return `${path} must be of type ${types.join(" or ")}`;
-	}
-	if (schema.enum && !schema.enum.includes(value)) return `${path} must be one of ${schema.enum.map((v) => JSON.stringify(v)).join(", ")}`;
-	if (typeof value === "string" && schema.minLength !== void 0) {
-		if (value.length < schema.minLength) return `${path} must be at least ${schema.minLength} characters`;
-	}
-	if (typeof value === "number" && schema.minimum !== void 0 && value < schema.minimum) return `${path} must be at least ${schema.minimum}`;
-	if (Array.isArray(value) && schema.items) for (const [index, item] of value.entries()) {
-		const problem = validate(item, schema.items, `${path}[${index}]`);
-		if (problem) return problem;
-	}
-	if (isObject(value)) {
-		for (const key of schema.required ?? []) if (!(key in value)) return `${path}.${key} is required`;
-		for (const [key, item] of Object.entries(value)) {
-			const child = schema.properties?.[key];
-			if (child) {
-				const problem = validate(item, child, `${path}.${key}`);
-				if (problem) return problem;
-			} else if (schema.additionalProperties === false) return `${path}.${key} is not an allowed property`;
-		}
-	}
-	return null;
-}
-const message$1 = (error) => error instanceof Error ? error.message : String(error);
-/** Serves `tools` until `options.input` ends. Only JSON-RPC replies are written to `output`. */
-async function serveMcp(tools, options) {
-	const send = (id, body) => {
-		options.output.write(`${JSON.stringify({
-			jsonrpc: "2.0",
-			id,
-			...body
-		})}\n`);
-	};
-	const fail = (id, code, text) => send(id, { error: {
-		code,
-		message: text
-	} });
-	async function callTool(id, params) {
-		const name = isObject(params) ? params.name : void 0;
-		const tool = tools.find((t) => t.name === name);
-		if (!tool) return fail(id, INVALID_PARAMS, `Unknown tool: ${String(name)}`);
-		const args = isObject(params) && params.arguments !== void 0 ? params.arguments : {};
-		try {
-			const problem = validate(args, tool.inputSchema, "arguments");
-			if (problem) throw new Error(problem);
-			const result = await tool.handler(args);
-			send(id, { result: {
-				content: [{
-					type: "text",
-					text: JSON.stringify(result, null, 2)
-				}],
-				structuredContent: result,
-				isError: false
-			} });
-		} catch (error) {
-			send(id, { result: {
-				content: [{
-					type: "text",
-					text: message$1(error)
-				}],
-				isError: true
-			} });
-		}
-	}
-	async function handle(line) {
-		let request;
-		try {
-			request = JSON.parse(line);
-		} catch {
-			return fail(null, PARSE_ERROR, "Parse error");
-		}
-		if (!isObject(request) || typeof request.method !== "string") return fail(null, INVALID_REQUEST, "Invalid request");
-		if (!("id" in request)) return;
-		const { id, method, params } = request;
-		switch (method) {
-			case "initialize": {
-				const asked = isObject(params) ? params.protocolVersion : void 0;
-				const protocolVersion = SUPPORTED_VERSIONS.find((v) => v === asked) ?? SUPPORTED_VERSIONS[0];
-				return send(id, { result: {
-					protocolVersion,
-					capabilities: { tools: { listChanged: false } },
-					serverInfo: {
-						name: options.name,
-						version: options.version
-					},
-					...options.instructions ? { instructions: options.instructions } : {}
-				} });
-			}
-			case "ping": return send(id, { result: {} });
-			case "tools/list": return send(id, { result: { tools: tools.map((t) => ({
-				name: t.name,
-				description: t.description,
-				inputSchema: t.inputSchema,
-				annotations: { readOnlyHint: t.readOnly }
-			})) } });
-			case "tools/call": return callTool(id, params);
-			default: return fail(id, METHOD_NOT_FOUND, `Method not found: ${method}`);
-		}
-	}
-	const lines = createInterface({
-		input: options.input,
-		crlfDelay: Infinity
-	});
-	for await (const line of lines) if (line.trim() !== "") await handle(line);
-}
-//#endregion
-//#region src/plans-mcp.ts
-const PLANS_MCP_INSTRUCTIONS = `Plan stores live at ${PLAN_STORE_PATH} under the repository root. Pass absolute store paths (plan_list returns them). Read with plan_get sections or small plan_query selects, not a full dump.`;
-/** Most rows plan_query returns; more are cut and flagged as truncated. */
-const MAX_QUERY_ROWS = 500;
-/** A plan title: lowercase words joined by single hyphens, as it names the store folder. */
-const TITLE_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const MAX_TITLE_LENGTH = 80;
-const PLAN_SECTIONS = [
-	"plan",
-	"epics",
-	"tickets",
-	"decisions",
-	"facts",
-	"findings",
-	"progress"
-];
-/**
-* Resolves `store` against `cwd` to a plan store: a directory means its plan.sqlite, and the file
-* must exist at `.plans/<month>/<title>/plan.sqlite`.
-*/
-function resolveStore(store, cwd) {
-	let path = isAbsolute(store) ? store : resolve(cwd, store);
-	if (existsSync(path) && statSync(path).isDirectory()) path = join(path, PLAN_DB);
-	const plansDir = basename(dirname(dirname(dirname(path))));
-	if (basename(path) !== "plan.sqlite" || plansDir !== ".plans") throw new Error(`${store} is not a plan store; expected ${PLAN_STORE_PATH}`);
-	if (!existsSync(path)) throw new Error(`${path} does not exist`);
-	return path;
-}
-const message = (error) => error instanceof Error ? error.message : String(error);
-/**
-* Runs `change` in one immediate transaction on a store at the current schema version, with foreign
-* keys on. A failed change rolls back and rethrows its own error.
-*/
-async function writeStore(store, cwd, change) {
-	const path = resolveStore(store, cwd);
-	const { DatabaseSync } = await import("node:sqlite");
-	const db = new DatabaseSync(path);
-	try {
-		db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-		db.exec("PRAGMA foreign_keys = ON");
-		const version = versionOf(db);
-		checkVersion(version);
-		if (version < 1) throw new Error(`store is schema v${version}; run agent-config plans ${PLANS_UPGRADE} <path> first`);
-		db.exec("BEGIN IMMEDIATE");
-		try {
-			const result = change(db);
-			db.exec("COMMIT");
-			return result;
-		} catch (error) {
-			try {
-				db.exec("ROLLBACK");
-			} catch {}
-			throw error;
-		}
-	} finally {
-		db.close();
-	}
-}
-/** The arguments the caller gave, minus `store` and the key, as column values. */
-const given = (args, columns) => Object.fromEntries(columns.filter((c) => args[c] !== void 0).map((c) => [c, args[c]]));
-function insertRow(db, table, values) {
-	const columns = Object.keys(values);
-	const marks = columns.map(() => "?").join(", ");
-	const result = db.prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${marks})`).run(...Object.values(values));
-	return Number(result.lastInsertRowid);
-}
-function updateRow(db, table, key, id, values) {
-	const columns = Object.keys(values);
-	if (columns.length === 0) return;
-	db.prepare(`UPDATE ${table} SET ${columns.map((c) => `${c} = ?`).join(", ")} WHERE ${key} = ?`).run(...Object.values(values), id);
-}
-const selectRow = (db, table, key, id) => db.prepare(`SELECT * FROM ${table} WHERE ${key} = ?`).get(id);
-/** Updates the given columns of row `id`, or inserts it when new; an insert needs `required` too. */
-function saveRow(db, table, id, args, columns, required) {
-	const values = given(args, columns);
-	if (selectRow(db, table, "id", id)) updateRow(db, table, "id", id, values);
-	else {
-		const missing = required.filter((c) => values[c] === void 0);
-		if (missing.length > 0) throw new Error(`${table} ${String(id)} is new; missing ${missing.join(", ")}`);
-		insertRow(db, table, {
-			id,
-			...values
-		});
-	}
-	return selectRow(db, table, "id", id);
-}
-const text = (description) => ({
-	type: "string",
-	minLength: 1,
-	description
-});
-const nullableText = { type: ["string", "null"] };
-const choice = (values) => ({
-	type: "string",
-	enum: [...values]
-});
-const storeProp = text("Absolute path of the plan.sqlite");
-const object = (properties, required = []) => ({
-	type: "object",
-	properties,
-	required,
-	additionalProperties: false
-});
-const EPIC_FIELDS = {
-	title: text(),
-	goal: text(),
-	done_when: text(),
-	position: { type: "integer" },
-	tracker_id: nullableText
-};
-const EPIC_REQUIRED = [
-	"title",
-	"goal",
-	"done_when",
-	"position"
-];
-const TICKET_FIELDS = {
-	epic_id: nullableText,
-	kind: choice(TICKET_KINDS),
-	title: text(),
-	outcome: text(),
-	done_when: text(),
-	size: choice(STORY_SIZES),
-	touches: text(),
-	status: choice(TICKET_STATUSES),
-	tracker_id: nullableText
-};
-const TICKET_REQUIRED = [
-	"title",
-	"outcome",
-	"done_when",
-	"size",
-	"touches"
-];
-const BLOCK_FIELDS = {
-	blocker: text(),
-	blocked: text()
-};
-const atLeastOne = (args, columns) => {
-	const values = given(args, columns);
-	if (Object.keys(values).length === 0) throw new Error(`give at least one of ${columns.join(", ")}`);
-	return values;
-};
-function planTools(cwd) {
-	return [
-		{
-			name: PLAN_TOOLS.plan_list,
-			description: `Lists the plan stores under a repository's ${PLANS_DIR} folder with each plan's title, kind, status and ticket progress. Start here to find a store path.`,
-			readOnly: true,
-			inputSchema: {
-				type: "object",
-				properties: { root: {
-					type: "string",
-					description: "Repository root (default: the server's directory)"
-				} },
-				additionalProperties: false
-			},
-			async handler(args) {
-				const root = typeof args.root === "string" ? resolve(cwd, args.root) : cwd;
-				const dir = join(root, PLANS_DIR);
-				const paths = existsSync(dir) ? findStores([dir]) : [];
-				const stores = [];
-				for (const store of paths) try {
-					const { plan, version, progress } = await readPlan(store);
-					stores.push({
-						store,
-						title: plan?.title ?? null,
-						kind: plan?.kind ?? null,
-						status: plan?.status ?? null,
-						version,
-						progress
-					});
-				} catch (error) {
-					stores.push({
-						store,
-						error: message(error)
-					});
-				}
-				return { stores };
-			}
-		},
-		{
-			name: PLAN_TOOLS.plan_get,
-			description: "Reads a plan store, optionally only some sections (plan, epics, tickets, decisions, facts, findings, progress). Prefer asking for the sections you need.",
-			readOnly: true,
-			inputSchema: {
-				type: "object",
-				properties: {
-					store: {
-						type: "string",
-						minLength: 1,
-						description: "Absolute path of the plan.sqlite"
-					},
-					sections: {
-						type: "array",
-						items: {
-							type: "string",
-							enum: PLAN_SECTIONS
-						}
-					}
-				},
-				required: ["store"],
-				additionalProperties: false
-			},
-			async handler(args) {
-				const detail = await readPlan(resolveStore(String(args.store), cwd));
-				const wanted = args.sections ?? PLAN_SECTIONS;
-				const result = {
-					store: detail.path,
-					version: detail.version
-				};
-				for (const section of wanted) result[section] = detail[section];
-				return result;
-			}
-		},
-		{
-			name: PLAN_TOOLS.plan_query,
-			description: `Runs one read-only SQL statement against a plan store and returns up to ${MAX_QUERY_ROWS} rows. Use small selects, for example SELECT * FROM waves ORDER BY wave.`,
-			readOnly: true,
-			inputSchema: {
-				type: "object",
-				properties: {
-					store: {
-						type: "string",
-						minLength: 1,
-						description: "Absolute path of the plan.sqlite"
-					},
-					sql: {
-						type: "string",
-						minLength: 1
-					},
-					params: {
-						type: "array",
-						items: { type: [
-							"string",
-							"number",
-							"null"
-						] }
-					}
-				},
-				required: ["store", "sql"],
-				additionalProperties: false
-			},
-			async handler(args) {
-				const path = resolveStore(String(args.store), cwd);
-				const { DatabaseSync } = await import("node:sqlite");
-				const db = new DatabaseSync(path, { readOnly: true });
-				try {
-					db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-					const params = args.params ?? [];
-					const rows = db.prepare(String(args.sql)).all(...params);
-					return {
-						rows: rows.slice(0, MAX_QUERY_ROWS),
-						truncated: rows.length > MAX_QUERY_ROWS
-					};
-				} finally {
-					db.close();
-				}
-			}
-		},
-		{
-			name: PLAN_TOOLS.plan_create,
-			description: `Creates a plan store at ${PLAN_STORE_PATH} under the root and returns its absolute path. Refuses when that store already exists.`,
-			readOnly: false,
-			inputSchema: object({
-				root: text("Repository root (default: the server's directory)"),
-				title: text("Kebab-case plan title, at most 80 characters"),
-				kind: choice(PLAN_KIND_NAMES),
-				request: text("What the user asked to plan")
-			}, [
-				"title",
-				"kind",
-				"request"
-			]),
-			async handler(args) {
-				const title = String(args.title);
-				if (title.length > MAX_TITLE_LENGTH || !TITLE_PATTERN.test(title)) throw new Error(`title must be kebab-case (${TITLE_PATTERN.source}) and at most ${MAX_TITLE_LENGTH} characters`);
-				const root = typeof args.root === "string" ? resolve(cwd, args.root) : cwd;
-				const now = /* @__PURE__ */ new Date();
-				const month = `${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
-				const store = join(root, PLANS_DIR, month, title, PLAN_DB);
-				mkdirSync(dirname(store), { recursive: true });
-				try {
-					closeSync(openSync(store, "wx"));
-				} catch (error) {
-					if (error.code === "EEXIST") throw new Error(`${store} already exists`);
-					throw error;
-				}
-				const { DatabaseSync } = await import("node:sqlite");
-				try {
-					const db = new DatabaseSync(store);
-					try {
-						db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-						db.exec(PLAN_SCHEMA);
-						insertRow(db, "plan", {
-							id: 1,
-							title,
-							kind: args.kind,
-							request: args.request
-						});
-					} finally {
-						db.close();
-					}
-				} catch (error) {
-					rmSync(store, { force: true });
-					throw error;
-				}
-				return { store };
-			}
-		},
-		{
-			name: PLAN_TOOLS.plan_update,
-			description: "Sets the kind, outcome, status or tracker of the plan and returns the plan row. Give at least one field.",
-			readOnly: false,
-			inputSchema: object({
-				store: storeProp,
-				kind: choice(PLAN_KIND_NAMES),
-				outcome: text(),
-				status: choice(PLAN_STATUSES),
-				tracker: choice(PLAN_TRACKERS)
-			}, ["store"]),
-			handler: (args) => writeStore(String(args.store), cwd, (db) => {
-				updateRow(db, "plan", "id", 1, atLeastOne(args, [
-					"kind",
-					"outcome",
-					"status",
-					"tracker"
-				]));
-				return selectRow(db, "plan", "id", 1);
-			})
-		},
-		{
-			name: PLAN_TOOLS.fact_add,
-			description: "Records a fact found while exploring, with where it came from. Returns its id.",
-			readOnly: false,
-			inputSchema: object({
-				store: storeProp,
-				topic: text(),
-				fact: text(),
-				source: text()
-			}, [
-				"store",
-				"topic",
-				"fact",
-				"source"
-			]),
-			handler: (args) => writeStore(String(args.store), cwd, (db) => ({ id: insertRow(db, "facts", given(args, [
-				"topic",
-				"fact",
-				"source"
-			])) }))
-		},
-		{
-			name: PLAN_TOOLS.decision_add,
-			description: "Records a decision: the question, the answer, why, and whether the user or a recommendation decided it. Returns its id.",
-			readOnly: false,
-			inputSchema: object({
-				store: storeProp,
-				topic: text(),
-				question: text(),
-				answer: text(),
-				why: text(),
-				decided_by: choice(DECIDED_BY)
-			}, [
-				"store",
-				"topic",
-				"question",
-				"answer",
-				"decided_by"
-			]),
-			handler: (args) => writeStore(String(args.store), cwd, (db) => ({ id: insertRow(db, "decisions", given(args, [
-				"topic",
-				"question",
-				"answer",
-				"why",
-				"decided_by"
-			])) }))
-		},
-		{
-			name: PLAN_TOOLS.finding_add,
-			description: "Records a gap, red flag, smell or risk found by a review lens, with why it matters. Returns its id.",
-			readOnly: false,
-			inputSchema: object({
-				store: storeProp,
-				kind: choice(FINDING_KINDS),
-				lens: text(),
-				detail: text(),
-				why: text(),
-				recommendation: text()
-			}, [
-				"store",
-				"kind",
-				"lens",
-				"detail",
-				"why"
-			]),
-			handler: (args) => writeStore(String(args.store), cwd, (db) => ({ id: insertRow(db, "findings", given(args, [
-				"kind",
-				"lens",
-				"detail",
-				"why",
-				"recommendation"
-			])) }))
-		},
-		{
-			name: PLAN_TOOLS.finding_update,
-			description: "Sets the status, resolution or ticket of a finding and returns the finding row. Give at least one field.",
-			readOnly: false,
-			inputSchema: object({
-				store: storeProp,
-				id: { type: "integer" },
-				status: choice(FINDING_STATUSES),
-				resolution: text(),
-				ticket_id: text()
-			}, ["store", "id"]),
-			handler: (args) => writeStore(String(args.store), cwd, (db) => {
-				const values = atLeastOne(args, [
-					"status",
-					"resolution",
-					"ticket_id"
-				]);
-				if (!selectRow(db, "findings", "id", args.id)) throw new Error(`finding ${String(args.id)} not found`);
-				updateRow(db, "findings", "id", args.id, values);
-				return selectRow(db, "findings", "id", args.id);
-			})
-		},
-		{
-			name: PLAN_TOOLS.epic_save,
-			description: "Updates the given fields of an epic, or creates it when the id is new (then title, goal, done_when and position are required). Returns the epic row.",
-			readOnly: false,
-			inputSchema: object({
-				store: storeProp,
-				id: text(),
-				...EPIC_FIELDS
-			}, ["store", "id"]),
-			handler: (args) => writeStore(String(args.store), cwd, (db) => saveRow(db, "epics", args.id, args, Object.keys(EPIC_FIELDS), EPIC_REQUIRED))
-		},
-		{
-			name: PLAN_TOOLS.ticket_save,
-			description: "Updates the given fields of a ticket, or creates it when the id is new (then title, outcome, done_when, size and touches are required). Also how ticket progress is recorded: set status. Returns the ticket row.",
-			readOnly: false,
-			inputSchema: object({
-				store: storeProp,
-				id: text(),
-				...TICKET_FIELDS
-			}, ["store", "id"]),
-			handler: (args) => writeStore(String(args.store), cwd, (db) => saveRow(db, "tickets", args.id, args, Object.keys(TICKET_FIELDS), TICKET_REQUIRED))
-		},
-		{
-			name: PLAN_TOOLS.block_add,
-			description: "Makes one ticket block another: the blocked ticket waits for the blocker.",
-			readOnly: false,
-			inputSchema: object({
-				store: storeProp,
-				...BLOCK_FIELDS
-			}, [
-				"store",
-				"blocker",
-				"blocked"
-			]),
-			handler: (args) => writeStore(String(args.store), cwd, (db) => {
-				insertRow(db, "blocks", given(args, ["blocker", "blocked"]));
-				return {
-					blocker: args.blocker,
-					blocked: args.blocked
-				};
-			})
-		},
-		{
-			name: PLAN_TOOLS.block_remove,
-			description: "Removes a blocker link between two tickets; a link that does not exist is an error.",
-			readOnly: false,
-			inputSchema: object({
-				store: storeProp,
-				...BLOCK_FIELDS
-			}, [
-				"store",
-				"blocker",
-				"blocked"
-			]),
-			handler: (args) => writeStore(String(args.store), cwd, (db) => {
-				const result = db.prepare("DELETE FROM blocks WHERE blocker = ? AND blocked = ?").run(args.blocker, args.blocked);
-				if (Number(result.changes) === 0) throw new Error(`${String(args.blocker)} does not block ${String(args.blocked)}`);
-				return {
-					blocker: args.blocker,
-					blocked: args.blocked
-				};
-			})
-		},
-		{
-			name: PLAN_TOOLS.draft_replace,
-			description: "Replaces the whole draft in one transaction: deletes every block, ticket and epic, then inserts the given ones. Returns the counts and the waves the tickets can start in; on any error the earlier draft stays.",
-			readOnly: false,
-			inputSchema: object({
-				store: storeProp,
-				epics: {
-					type: "array",
-					items: object({
-						id: text(),
-						...EPIC_FIELDS
-					}, ["id", ...EPIC_REQUIRED])
-				},
-				tickets: {
-					type: "array",
-					items: object({
-						id: text(),
-						...TICKET_FIELDS
-					}, ["id", ...TICKET_REQUIRED])
-				},
-				blocks: {
-					type: "array",
-					items: object(BLOCK_FIELDS, ["blocker", "blocked"])
-				}
-			}, [
-				"store",
-				"epics",
-				"tickets",
-				"blocks"
-			]),
-			handler: (args) => writeStore(String(args.store), cwd, (db) => {
-				const epics = args.epics;
-				const tickets = args.tickets;
-				const blocks = args.blocks;
-				for (const table of [
-					"blocks",
-					"tickets",
-					"epics"
-				]) db.exec(`DELETE FROM ${table}`);
-				const epicColumns = ["id", ...Object.keys(EPIC_FIELDS)];
-				const ticketColumns = ["id", ...Object.keys(TICKET_FIELDS)];
-				for (const epic of epics) insertRow(db, "epics", given(epic, epicColumns));
-				for (const ticket of tickets) insertRow(db, "tickets", given(ticket, ticketColumns));
-				for (const block of blocks) insertRow(db, "blocks", given(block, ["blocker", "blocked"]));
-				return {
-					epics: epics.length,
-					tickets: tickets.length,
-					blocks: blocks.length,
-					waves: db.prepare("SELECT epic_id, ticket_id, wave FROM waves ORDER BY wave, ticket_id").all()
-				};
-			})
-		}
-	];
-}
-//#endregion
-//#region src/serve.ts
-const TOKEN_BYTES = 18;
-const PLAN_ID_LENGTH = 16;
-const ALLOWED_METHODS = "GET, HEAD";
-const PLAN_ROUTE = /^\/plan\/([^/]+)$/;
-const STATUS_CLASS_UNSAFE = /[^a-z_]/g;
-const HTML = "text/html; charset=utf-8";
-const PLAIN = "text/plain; charset=utf-8";
-const SECURITY_HEADERS = {
-	"Cache-Control": "no-store",
-	"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-	"X-Content-Type-Options": "nosniff",
-	"Referrer-Policy": "no-referrer"
-};
-const ESCAPES = {
-	"&": "&amp;",
-	"<": "&lt;",
-	">": "&gt;",
-	"\"": "&quot;",
-	"'": "&#39;"
-};
-const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ESCAPES[c]);
-const planId = (storePath) => createHash("sha256").update(storePath).digest("base64url").slice(0, PLAN_ID_LENGTH);
-const shown = (path) => relative(process.cwd(), path) || ".";
-const STYLE = `
-:root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--fg:#1c2026;--muted:#5d6672;--line:#dde1e6;--todo:#6b7280;--progress:#b45309;--done:#15803d;--open:#b91c1c;--link:#1d4ed8}
-@media(prefers-color-scheme:dark){:root{--bg:#111418;--card:#1b2026;--fg:#e6e9ed;--muted:#9aa4b0;--line:#2d343c;--todo:#9ca3af;--progress:#fbbf24;--done:#4ade80;--open:#f87171;--link:#7aa7ff}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:56rem;margin:0 auto;padding:1rem}
-a{color:var(--link)}
-h1{font-size:1.5rem;margin:.5rem 0}h2{font-size:1.1rem;margin:0}h3{font-size:1rem;margin:.75rem 0 .25rem}
-.card{background:var(--card);border:1px solid var(--line);border-radius:.6rem;padding:.75rem 1rem;margin:.75rem 0}
-.meta{color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
-.text{white-space:pre-wrap;overflow-wrap:anywhere;margin:.25rem 0}
-.label{color:var(--muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
-.badge{display:inline-block;padding:0 .5rem;border-radius:1rem;border:1px solid currentColor;font-size:.8rem}
-.s-todo,.s-interview,.s-store,.s-resolved,.s-dismissed{color:var(--todo)}
-.s-in_progress,.s-review,.s-ticketed{color:var(--progress)}
-.s-done,.s-written{color:var(--done)}
-.s-open{color:var(--open)}
-progress{width:100%;height:.8rem}
-details{margin:1rem 0}summary{cursor:pointer;font-weight:600}
-`;
-function page(title, body) {
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body><main>${body}</main></body></html>`;
-}
-const badge = (status) => `<span class="badge s-${escapeHtml(status.replace(STATUS_CLASS_UNSAFE, ""))}">${escapeHtml(status)}</span>`;
-const field = (label, value) => value ? `<div class="label">${escapeHtml(label)}</div><div class="text">${escapeHtml(value)}</div>` : "";
-const section = (title, count, body) => `<details open><summary>${escapeHtml(title)} (${count})</summary>${body}</details>`;
-const progressText = (p) => `${p.done}/${p.total} done, ${p.inProgress} in progress`;
-const progressBar = (p) => `<progress max="${p.total}" value="${p.done}"></progress> <span class="meta">${escapeHtml(progressText(p))}</span>`;
-function titleOf(detail) {
-	return detail.plan?.title ?? basename(dirname(detail.path));
-}
-function indexPage(roots, cards) {
-	const rootText = roots.map(shown).join(", ");
-	const body = cards.length ? cards.map((card) => {
-		const id = planId(card.path);
-		if ("error" in card) return `<div class="card"><h2>${escapeHtml(shown(card.path))}</h2><div class="text">${escapeHtml(card.error)}</div></div>`;
-		const open = card.findings.filter((f) => f.status === "open").length;
-		return `<div class="card"><h2><a href="plan/${id}">${escapeHtml(titleOf(card))}</a></h2>
-<div>${card.plan ? `${escapeHtml(card.plan.kind)} ${badge(card.plan.status)} <span class="meta">tracker ${escapeHtml(card.plan.tracker)}, created ${escapeHtml(card.plan.createdAt)}</span>` : ""}</div>
-<div>${progressBar(card.progress)}</div>
-<div class="meta">${open} open findings</div>
-<div class="meta">${escapeHtml(shown(card.path))}</div></div>`;
-	}).join("") : `<div class="card">No plan stores found yet in ${escapeHtml(rootText)}. Ask your agent to run /planning, then reload this page.</div>`;
-	return page("Plans", `<h1>Plans</h1><div class="meta">Searched: ${escapeHtml(rootText)}</div>${body}`);
-}
-const ticketAnchor = (id) => escapeHtml(`ticket-${id}`);
-function ticketCard(t, anchored) {
-	const blockers = t.blockedBy.map((id) => `<a href="#${ticketAnchor(id)}">${escapeHtml(id)}</a>`).join(", ");
-	return `<div class="card"${anchored ? ` id="${ticketAnchor(t.id)}"` : ""}>
-<h3>${escapeHtml(t.id)} ${escapeHtml(t.title)} ${badge(t.status)}</h3>
-<div class="meta">${escapeHtml(t.kind)}, size ${escapeHtml(t.size)}, wave ${t.wave ?? "none"}${t.trackerId ? `, tracker ${escapeHtml(t.trackerId)}` : ""}</div>
-${field("Outcome", t.outcome)}${field("Done when", t.doneWhen)}${field("Touches", t.touches)}
-${blockers ? `<div class="label">Blocked by</div><div>${blockers}</div>` : ""}</div>`;
-}
-function planPage(d) {
-	const byId = new Map(d.tickets.map((t) => [t.id, t]));
-	const open = d.tickets.filter((t) => t.status !== "done");
-	const waves = [...new Set(open.map((t) => t.wave).filter((w) => w !== null))].sort((a, b) => a - b);
-	const stuck = open.filter((t) => t.wave === null);
-	const waveHtml = waves.map((w) => `<h3>Wave ${w}</h3>${open.filter((t) => t.wave === w).map((t) => ticketCard(t, false)).join("")}`).join("") + (stuck.length ? `<h3>Stuck</h3><div class="meta">In or behind a dependency cycle.</div>${stuck.map((t) => ticketCard(t, false)).join("")}` : "");
-	const epicIds = new Set(d.epics.map((e) => e.id));
-	const loose = d.tickets.filter((t) => t.epicId === null || !epicIds.has(t.epicId));
-	const epicHtml = d.epics.map((e) => `<div class="card"><h3>${escapeHtml(e.id)} ${escapeHtml(e.title)}${e.trackerId ? ` <span class="meta">tracker ${escapeHtml(e.trackerId)}</span>` : ""}</h3>${field("Goal", e.goal)}${field("Done when", e.doneWhen)}${d.tickets.filter((t) => t.epicId === e.id).map((t) => ticketCard(t, true)).join("")}</div>`).join("") + (loose.length ? `<h3>No epic</h3>${loose.map((t) => ticketCard(t, true)).join("")}` : "");
-	const findingHtml = [...d.findings].sort((a, b) => Number(b.status === "open") - Number(a.status === "open") || a.id - b.id).map((f) => `<div class="card"><h3>${escapeHtml(f.kind)} <span class="meta">${escapeHtml(f.lens)}</span> ${badge(f.status)}</h3>${field("Detail", f.detail)}${field("Why", f.why)}${field("Recommendation", f.recommendation)}${field("Resolution", f.resolution)}${f.ticketId && byId.has(f.ticketId) ? `<div><a href="#${ticketAnchor(f.ticketId)}">${escapeHtml(f.ticketId)}</a></div>` : ""}</div>`).join("");
-	const decisionHtml = d.decisions.map((x) => `<div class="card"><h3>${escapeHtml(x.topic)}</h3>${field("Question", x.question)}${field("Answer", x.answer)}${field("Why", x.why)}<div class="meta">decided by ${escapeHtml(x.decidedBy)}</div></div>`).join("");
-	const factHtml = d.facts.map((x) => `<div class="card"><h3>${escapeHtml(x.topic)}</h3>${field("Fact", x.fact)}${field("Source", x.source)}</div>`).join("");
-	const p = d.plan;
-	const head = `<p><a href="../">All plans</a></p><h1>${escapeHtml(titleOf(d))}</h1>
-<div class="meta">${p ? `${escapeHtml(p.kind)} ${badge(p.status)} tracker ${escapeHtml(p.tracker)}, created ${escapeHtml(p.createdAt)}, ` : ""}schema v${d.version}</div>
-<div class="meta">${escapeHtml(shown(d.path))}</div>${p ? field("Request", p.request) + field("Outcome", p.outcome) : ""}
-<div class="card">${progressBar(d.progress)}</div>`;
-	return page(titleOf(d), head + section("Waves", open.length, waveHtml) + section("Epics", d.epics.length, epicHtml) + section("Findings", d.findings.length, findingHtml) + section("Decisions", d.decisions.length, decisionHtml) + section("Facts", d.facts.length, factHtml));
-}
-function send(res, status, type, body, extra = {}) {
-	res.writeHead(status, {
-		"Content-Type": type,
-		...SECURITY_HEADERS,
-		...extra
-	});
-	res.end(body);
-}
-/** Every store under `roots`; a root that is gone contributes none. */
-function discover(roots) {
-	const found = [];
-	for (const root of roots) try {
-		found.push(...findStores([root]));
-	} catch (error) {
-		if (!(error instanceof MissingPathError)) throw error;
-	}
-	return [...new Set(found)];
-}
-async function route(roots, token, req, res) {
-	if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, PLAIN, "Method not allowed", { Allow: ALLOWED_METHODS });
-	const { pathname } = new URL(req.url ?? "/", "http://localhost");
-	const given = Buffer.from(pathname.split("/")[1] ?? "");
-	if (given.length !== token.length || !timingSafeEqual(given, token)) return send(res, 404, PLAIN, "Not found");
-	const rest = pathname.slice(1 + token.length);
-	const stores = discover(roots);
-	if (rest === "/") {
-		const cards = await Promise.all(stores.map((path) => readPlan(path).catch((error) => ({
-			path,
-			error: error instanceof Error ? error.message : String(error)
-		}))));
-		const created = (c) => "error" in c ? "" : c.plan?.createdAt ?? "";
-		cards.sort((a, b) => (created(b) ? 1 : 0) - (created(a) ? 1 : 0) || created(b).localeCompare(created(a)) || a.path.localeCompare(b.path));
-		return send(res, 200, HTML, indexPage(roots, cards));
-	}
-	const id = PLAN_ROUTE.exec(rest)?.[1];
-	const path = id === void 0 ? void 0 : stores.find((s) => planId(s) === id);
-	if (path === void 0) return send(res, 404, HTML, page("Not found", "<h1>Not found</h1>"));
-	try {
-		return send(res, 200, HTML, planPage(await readPlan(path)));
-	} catch (error) {
-		const msg = error instanceof Error ? error.message : String(error);
-		return send(res, 500, HTML, page("Plan unreadable", `<p><a href="../">All plans</a></p><h1>Cannot read this plan</h1><div class="meta">${escapeHtml(shown(path))}</div><div class="text">${escapeHtml(msg)}</div>`));
-	}
-}
-/** Starts the server; `host` defaults to every interface. */
-async function servePlans(roots, options = {}) {
-	const secret = randomBytes(TOKEN_BYTES).toString("base64url");
-	const token = Buffer.from(secret);
-	const server = createServer((req, res) => {
-		route(roots, token, req, res).catch(() => {
-			if (!res.headersSent) send(res, 500, PLAIN, "Internal error");
-			else res.end();
-		});
-	});
-	await new Promise((resolve, reject) => {
-		server.once("error", reject);
-		server.listen(0, options.host, resolve);
-	});
-	const address = server.address();
-	const port = typeof address === "object" && address ? address.port : 0;
-	const network = Object.values(networkInterfaces()).flatMap((list) => list ?? []).filter((i) => i.family === "IPv4" && !i.internal).map((i) => `http://${i.address}:${port}/${secret}/`);
-	return {
-		port,
-		urls: {
-			local: `http://localhost:${port}/${secret}/`,
-			network
-		},
-		close: () => new Promise((resolve) => {
-			server.close(() => resolve());
-			server.closeAllConnections();
-		})
-	};
-}
-//#endregion
-//#region node_modules/.pnpm/uqr@0.1.3/node_modules/uqr/dist/index.mjs
-var QrCodeDataType = /* @__PURE__ */ ((QrCodeDataType2) => {
-	QrCodeDataType2[QrCodeDataType2["Border"] = -1] = "Border";
-	QrCodeDataType2[QrCodeDataType2["Data"] = 0] = "Data";
-	QrCodeDataType2[QrCodeDataType2["Function"] = 1] = "Function";
-	QrCodeDataType2[QrCodeDataType2["Position"] = 2] = "Position";
-	QrCodeDataType2[QrCodeDataType2["Timing"] = 3] = "Timing";
-	QrCodeDataType2[QrCodeDataType2["Alignment"] = 4] = "Alignment";
-	return QrCodeDataType2;
-})(QrCodeDataType || {});
-const LOW = [0, 1];
-const MEDIUM = [1, 0];
-const QUARTILE = [2, 3];
-const HIGH = [3, 2];
-const EccMap = {
-	L: LOW,
-	M: MEDIUM,
-	Q: QUARTILE,
-	H: HIGH
-};
-const NUMERIC_REGEX = /^\d*$/;
-const ALPHANUMERIC_REGEX = /^[A-Z0-9 $%*+./:-]*$/;
-const ALPHANUMERIC_CHARSET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
-const MIN_VERSION = 1;
-const MAX_VERSION = 40;
-const PENALTY_N1 = 3;
-const PENALTY_N2 = 3;
-const PENALTY_N3 = 40;
-const PENALTY_N4 = 10;
-const ECC_CODEWORDS_PER_BLOCK = [
-	[
-		-1,
-		7,
-		10,
-		15,
-		20,
-		26,
-		18,
-		20,
-		24,
-		30,
-		18,
-		20,
-		24,
-		26,
-		30,
-		22,
-		24,
-		28,
-		30,
-		28,
-		28,
-		28,
-		28,
-		30,
-		30,
-		26,
-		28,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30
-	],
-	[
-		-1,
-		10,
-		16,
-		26,
-		18,
-		24,
-		16,
-		18,
-		22,
-		22,
-		26,
-		30,
-		22,
-		22,
-		24,
-		24,
-		28,
-		28,
-		26,
-		26,
-		26,
-		26,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28,
-		28
-	],
-	[
-		-1,
-		13,
-		22,
-		18,
-		26,
-		18,
-		24,
-		18,
-		22,
-		20,
-		24,
-		28,
-		26,
-		24,
-		20,
-		30,
-		24,
-		28,
-		28,
-		26,
-		30,
-		28,
-		30,
-		30,
-		30,
-		30,
-		28,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30
-	],
-	[
-		-1,
-		17,
-		28,
-		22,
-		16,
-		22,
-		28,
-		26,
-		26,
-		24,
-		28,
-		24,
-		28,
-		22,
-		24,
-		24,
-		30,
-		28,
-		28,
-		26,
-		28,
-		30,
-		24,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30,
-		30
-	]
-];
-const NUM_ERROR_CORRECTION_BLOCKS = [
-	[
-		-1,
-		1,
-		1,
-		1,
-		1,
-		1,
-		2,
-		2,
-		2,
-		2,
-		4,
-		4,
-		4,
-		4,
-		4,
-		6,
-		6,
-		6,
-		6,
-		7,
-		8,
-		8,
-		9,
-		9,
-		10,
-		12,
-		12,
-		12,
-		13,
-		14,
-		15,
-		16,
-		17,
-		18,
-		19,
-		19,
-		20,
-		21,
-		22,
-		24,
-		25
-	],
-	[
-		-1,
-		1,
-		1,
-		1,
-		2,
-		2,
-		4,
-		4,
-		4,
-		5,
-		5,
-		5,
-		8,
-		9,
-		9,
-		10,
-		10,
-		11,
-		13,
-		14,
-		16,
-		17,
-		17,
-		18,
-		20,
-		21,
-		23,
-		25,
-		26,
-		28,
-		29,
-		31,
-		33,
-		35,
-		37,
-		38,
-		40,
-		43,
-		45,
-		47,
-		49
-	],
-	[
-		-1,
-		1,
-		1,
-		2,
-		2,
-		4,
-		4,
-		6,
-		6,
-		8,
-		8,
-		8,
-		10,
-		12,
-		16,
-		12,
-		17,
-		16,
-		18,
-		21,
-		20,
-		23,
-		23,
-		25,
-		27,
-		29,
-		34,
-		34,
-		35,
-		38,
-		40,
-		43,
-		45,
-		48,
-		51,
-		53,
-		56,
-		59,
-		62,
-		65,
-		68
-	],
-	[
-		-1,
-		1,
-		1,
-		2,
-		4,
-		4,
-		4,
-		5,
-		6,
-		8,
-		8,
-		11,
-		11,
-		16,
-		16,
-		18,
-		16,
-		19,
-		21,
-		25,
-		25,
-		25,
-		34,
-		30,
-		32,
-		35,
-		37,
-		40,
-		42,
-		45,
-		48,
-		51,
-		54,
-		57,
-		60,
-		63,
-		66,
-		70,
-		74,
-		77,
-		81
-	]
-];
-var QrCode = class {
-	constructor(version, ecc, dataCodewords, msk) {
-		this.version = version;
-		this.ecc = ecc;
-		if (version < MIN_VERSION || version > MAX_VERSION) throw new RangeError("Version value out of range");
-		if (msk < -1 || msk > 7) throw new RangeError("Mask value out of range");
-		this.size = version * 4 + 17;
-		const row = Array.from({ length: this.size }).fill(false);
-		for (let i = 0; i < this.size; i++) {
-			this.modules.push(row.slice());
-			this.types.push(row.map(() => 0));
-		}
-		this.drawFunctionPatterns();
-		const allCodewords = this.addEccAndInterleave(dataCodewords);
-		this.drawCodewords(allCodewords);
-		if (msk === -1) {
-			let minPenalty = 1e9;
-			for (let i = 0; i < 8; i++) {
-				this.applyMask(i);
-				this.drawFormatBits(i);
-				const penalty = this.getPenaltyScore();
-				if (penalty < minPenalty) {
-					msk = i;
-					minPenalty = penalty;
-				}
-				this.applyMask(i);
-			}
-		}
-		this.mask = msk;
-		this.applyMask(msk);
-		this.drawFormatBits(msk);
-	}
-	size;
-	mask;
-	modules = [];
-	types = [];
-	getModule(x, y) {
-		return x >= 0 && x < this.size && y >= 0 && y < this.size && this.modules[y][x];
-	}
-	drawFunctionPatterns() {
-		for (let i = 0; i < this.size; i++) {
-			this.setFunctionModule(6, i, i % 2 === 0, QrCodeDataType.Timing);
-			this.setFunctionModule(i, 6, i % 2 === 0, QrCodeDataType.Timing);
-		}
-		this.drawFinderPattern(3, 3);
-		this.drawFinderPattern(this.size - 4, 3);
-		this.drawFinderPattern(3, this.size - 4);
-		const alignPatPos = this.getAlignmentPatternPositions();
-		const numAlign = alignPatPos.length;
-		for (let i = 0; i < numAlign; i++) for (let j = 0; j < numAlign; j++) if (!(i === 0 && j === 0 || i === 0 && j === numAlign - 1 || i === numAlign - 1 && j === 0)) this.drawAlignmentPattern(alignPatPos[i], alignPatPos[j]);
-		this.drawFormatBits(0);
-		this.drawVersion();
-	}
-	drawFormatBits(mask) {
-		const data = this.ecc[1] << 3 | mask;
-		let rem = data;
-		for (let i = 0; i < 10; i++) rem = rem << 1 ^ (rem >>> 9) * 1335;
-		const bits = (data << 10 | rem) ^ 21522;
-		for (let i = 0; i <= 5; i++) this.setFunctionModule(8, i, getBit(bits, i));
-		this.setFunctionModule(8, 7, getBit(bits, 6));
-		this.setFunctionModule(8, 8, getBit(bits, 7));
-		this.setFunctionModule(7, 8, getBit(bits, 8));
-		for (let i = 9; i < 15; i++) this.setFunctionModule(14 - i, 8, getBit(bits, i));
-		for (let i = 0; i < 8; i++) this.setFunctionModule(this.size - 1 - i, 8, getBit(bits, i));
-		for (let i = 8; i < 15; i++) this.setFunctionModule(8, this.size - 15 + i, getBit(bits, i));
-		this.setFunctionModule(8, this.size - 8, true);
-	}
-	drawVersion() {
-		if (this.version < 7) return;
-		let rem = this.version;
-		for (let i = 0; i < 12; i++) rem = rem << 1 ^ (rem >>> 11) * 7973;
-		const bits = this.version << 12 | rem;
-		for (let i = 0; i < 18; i++) {
-			const color = getBit(bits, i);
-			const a = this.size - 11 + i % 3;
-			const b = Math.floor(i / 3);
-			this.setFunctionModule(a, b, color);
-			this.setFunctionModule(b, a, color);
-		}
-	}
-	drawFinderPattern(x, y) {
-		for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
-			const dist = Math.max(Math.abs(dx), Math.abs(dy));
-			const xx = x + dx;
-			const yy = y + dy;
-			if (xx >= 0 && xx < this.size && yy >= 0 && yy < this.size) this.setFunctionModule(xx, yy, dist !== 2 && dist !== 4, QrCodeDataType.Position);
-		}
-	}
-	drawAlignmentPattern(x, y) {
-		for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) this.setFunctionModule(x + dx, y + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1, QrCodeDataType.Alignment);
-	}
-	setFunctionModule(x, y, isDark, type = QrCodeDataType.Function) {
-		this.modules[y][x] = isDark;
-		this.types[y][x] = type;
-	}
-	addEccAndInterleave(data) {
-		const ver = this.version;
-		const ecl = this.ecc;
-		if (data.length !== getNumDataCodewords(ver, ecl)) throw new RangeError("Invalid argument");
-		const numBlocks = NUM_ERROR_CORRECTION_BLOCKS[ecl[0]][ver];
-		const blockEccLen = ECC_CODEWORDS_PER_BLOCK[ecl[0]][ver];
-		const rawCodewords = Math.floor(getNumRawDataModules(ver) / 8);
-		const numShortBlocks = numBlocks - rawCodewords % numBlocks;
-		const shortBlockLen = Math.floor(rawCodewords / numBlocks);
-		const blocks = [];
-		const rsDiv = reedSolomonComputeDivisor(blockEccLen);
-		for (let i = 0, k = 0; i < numBlocks; i++) {
-			const dat = data.slice(k, k + shortBlockLen - blockEccLen + (i < numShortBlocks ? 0 : 1));
-			k += dat.length;
-			const ecc = reedSolomonComputeRemainder(dat, rsDiv);
-			if (i < numShortBlocks) dat.push(0);
-			blocks.push(dat.concat(ecc));
-		}
-		const result = [];
-		for (let i = 0; i < blocks[0].length; i++) blocks.forEach((block, j) => {
-			if (i !== shortBlockLen - blockEccLen || j >= numShortBlocks) result.push(block[i]);
-		});
-		return result;
-	}
-	drawCodewords(data) {
-		if (data.length !== Math.floor(getNumRawDataModules(this.version) / 8)) throw new RangeError("Invalid argument");
-		let i = 0;
-		for (let right = this.size - 1; right >= 1; right -= 2) {
-			if (right === 6) right = 5;
-			for (let vert = 0; vert < this.size; vert++) for (let j = 0; j < 2; j++) {
-				const x = right - j;
-				const y = (right + 1 & 2) === 0 ? this.size - 1 - vert : vert;
-				if (!this.types[y][x] && i < data.length * 8) {
-					this.modules[y][x] = getBit(data[i >>> 3], 7 - (i & 7));
-					i++;
-				}
-			}
-		}
-	}
-	applyMask(mask) {
-		if (mask < 0 || mask > 7) throw new RangeError("Mask value out of range");
-		for (let y = 0; y < this.size; y++) for (let x = 0; x < this.size; x++) {
-			let invert;
-			switch (mask) {
-				case 0:
-					invert = (x + y) % 2 === 0;
-					break;
-				case 1:
-					invert = y % 2 === 0;
-					break;
-				case 2:
-					invert = x % 3 === 0;
-					break;
-				case 3:
-					invert = (x + y) % 3 === 0;
-					break;
-				case 4:
-					invert = (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0;
-					break;
-				case 5:
-					invert = x * y % 2 + x * y % 3 === 0;
-					break;
-				case 6:
-					invert = (x * y % 2 + x * y % 3) % 2 === 0;
-					break;
-				case 7:
-					invert = ((x + y) % 2 + x * y % 3) % 2 === 0;
-					break;
-				default: throw new Error("Unreachable");
-			}
-			if (!this.types[y][x] && invert) this.modules[y][x] = !this.modules[y][x];
-		}
-	}
-	getPenaltyScore() {
-		let result = 0;
-		for (let y = 0; y < this.size; y++) {
-			let runColor = false;
-			let runX = 0;
-			const runHistory = [
-				0,
-				0,
-				0,
-				0,
-				0,
-				0,
-				0
-			];
-			for (let x = 0; x < this.size; x++) if (this.modules[y][x] === runColor) {
-				runX++;
-				if (runX === 5) result += PENALTY_N1;
-				else if (runX > 5) result++;
-			} else {
-				this.finderPenaltyAddHistory(runX, runHistory);
-				if (!runColor) result += this.finderPenaltyCountPatterns(runHistory) * PENALTY_N3;
-				runColor = this.modules[y][x];
-				runX = 1;
-			}
-			result += this.finderPenaltyTerminateAndCount(runColor, runX, runHistory) * PENALTY_N3;
-		}
-		for (let x = 0; x < this.size; x++) {
-			let runColor = false;
-			let runY = 0;
-			const runHistory = [
-				0,
-				0,
-				0,
-				0,
-				0,
-				0,
-				0
-			];
-			for (let y = 0; y < this.size; y++) if (this.modules[y][x] === runColor) {
-				runY++;
-				if (runY === 5) result += PENALTY_N1;
-				else if (runY > 5) result++;
-			} else {
-				this.finderPenaltyAddHistory(runY, runHistory);
-				if (!runColor) result += this.finderPenaltyCountPatterns(runHistory) * PENALTY_N3;
-				runColor = this.modules[y][x];
-				runY = 1;
-			}
-			result += this.finderPenaltyTerminateAndCount(runColor, runY, runHistory) * PENALTY_N3;
-		}
-		for (let y = 0; y < this.size - 1; y++) for (let x = 0; x < this.size - 1; x++) {
-			const color = this.modules[y][x];
-			if (color === this.modules[y][x + 1] && color === this.modules[y + 1][x] && color === this.modules[y + 1][x + 1]) result += PENALTY_N2;
-		}
-		let dark = 0;
-		for (const row of this.modules) dark = row.reduce((sum, color) => sum + (color ? 1 : 0), dark);
-		const total = this.size * this.size;
-		const k = Math.ceil(Math.abs(dark * 20 - total * 10) / total) - 1;
-		result += k * PENALTY_N4;
-		return result;
-	}
-	getAlignmentPatternPositions() {
-		if (this.version === 1) return [];
-		else {
-			const numAlign = Math.floor(this.version / 7) + 2;
-			const step = this.version === 32 ? 26 : Math.ceil((this.version * 4 + 4) / (numAlign * 2 - 2)) * 2;
-			const result = [6];
-			for (let pos = this.size - 7; result.length < numAlign; pos -= step) result.splice(1, 0, pos);
-			return result;
-		}
-	}
-	finderPenaltyCountPatterns(runHistory) {
-		const n = runHistory[1];
-		const core = n > 0 && runHistory[2] === n && runHistory[3] === n * 3 && runHistory[4] === n && runHistory[5] === n;
-		return (core && runHistory[0] >= n * 4 && runHistory[6] >= n ? 1 : 0) + (core && runHistory[6] >= n * 4 && runHistory[0] >= n ? 1 : 0);
-	}
-	finderPenaltyTerminateAndCount(currentRunColor, currentRunLength, runHistory) {
-		if (currentRunColor) {
-			this.finderPenaltyAddHistory(currentRunLength, runHistory);
-			currentRunLength = 0;
-		}
-		currentRunLength += this.size;
-		this.finderPenaltyAddHistory(currentRunLength, runHistory);
-		return this.finderPenaltyCountPatterns(runHistory);
-	}
-	finderPenaltyAddHistory(currentRunLength, runHistory) {
-		if (runHistory[0] === 0) currentRunLength += this.size;
-		runHistory.pop();
-		runHistory.unshift(currentRunLength);
-	}
-};
-function appendBits(val, len, bb) {
-	if (len < 0 || len > 31 || val >>> len !== 0) throw new RangeError("Value out of range");
-	for (let i = len - 1; i >= 0; i--) bb.push(val >>> i & 1);
-}
-function getBit(x, i) {
-	return (x >>> i & 1) !== 0;
-}
-var QrSegment = class {
-	constructor(mode, numChars, bitData) {
-		this.mode = mode;
-		this.numChars = numChars;
-		this.bitData = bitData;
-		if (numChars < 0) throw new RangeError("Invalid argument");
-		this.bitData = bitData.slice();
-	}
-	getData() {
-		return this.bitData.slice();
-	}
-};
-const MODE_NUMERIC = [
-	1,
-	10,
-	12,
-	14
-];
-const MODE_ALPHANUMERIC = [
-	2,
-	9,
-	11,
-	13
-];
-const MODE_BYTE = [
-	4,
-	8,
-	16,
-	16
-];
-function numCharCountBits(mode, ver) {
-	return mode[Math.floor((ver + 7) / 17) + 1];
-}
-function makeBytes(data) {
-	const bb = [];
-	for (const b of data) appendBits(b, 8, bb);
-	return new QrSegment(MODE_BYTE, data.length, bb);
-}
-function makeNumeric(digits) {
-	if (!isNumeric(digits)) throw new RangeError("String contains non-numeric characters");
-	const bb = [];
-	for (let i = 0; i < digits.length;) {
-		const n = Math.min(digits.length - i, 3);
-		appendBits(Number.parseInt(digits.substring(i, i + n), 10), n * 3 + 1, bb);
-		i += n;
-	}
-	return new QrSegment(MODE_NUMERIC, digits.length, bb);
-}
-function makeAlphanumeric(text) {
-	if (!isAlphanumeric(text)) throw new RangeError("String contains unencodable characters in alphanumeric mode");
-	const bb = [];
-	let i = 0;
-	for (; i + 2 <= text.length; i += 2) {
-		let temp = ALPHANUMERIC_CHARSET.indexOf(text.charAt(i)) * 45;
-		temp += ALPHANUMERIC_CHARSET.indexOf(text.charAt(i + 1));
-		appendBits(temp, 11, bb);
-	}
-	if (i < text.length) appendBits(ALPHANUMERIC_CHARSET.indexOf(text.charAt(i)), 6, bb);
-	return new QrSegment(MODE_ALPHANUMERIC, text.length, bb);
-}
-function makeSegments(text) {
-	if (text === "") return [];
-	else if (isNumeric(text)) return [makeNumeric(text)];
-	else if (isAlphanumeric(text)) return [makeAlphanumeric(text)];
-	else return [makeBytes(toUtf8ByteArray(text))];
-}
-function isNumeric(text) {
-	return NUMERIC_REGEX.test(text);
-}
-function isAlphanumeric(text) {
-	return ALPHANUMERIC_REGEX.test(text);
-}
-function getTotalBits(segs, version) {
-	let result = 0;
-	for (const seg of segs) {
-		const ccbits = numCharCountBits(seg.mode, version);
-		if (seg.numChars >= 1 << ccbits) return Number.POSITIVE_INFINITY;
-		result += 4 + ccbits + seg.bitData.length;
-	}
-	return result;
-}
-function toUtf8ByteArray(str) {
-	str = encodeURI(str);
-	const result = [];
-	for (let i = 0; i < str.length; i++) if (str.charAt(i) !== "%") result.push(str.charCodeAt(i));
-	else {
-		result.push(Number.parseInt(str.substring(i + 1, i + 3), 16));
-		i += 2;
-	}
-	return result;
-}
-function getNumRawDataModules(ver) {
-	if (ver < MIN_VERSION || ver > MAX_VERSION) throw new RangeError("Version number out of range");
-	let result = (16 * ver + 128) * ver + 64;
-	if (ver >= 2) {
-		const numAlign = Math.floor(ver / 7) + 2;
-		result -= (25 * numAlign - 10) * numAlign - 55;
-		if (ver >= 7) result -= 36;
-	}
-	return result;
-}
-function getNumDataCodewords(ver, ecl) {
-	return Math.floor(getNumRawDataModules(ver) / 8) - ECC_CODEWORDS_PER_BLOCK[ecl[0]][ver] * NUM_ERROR_CORRECTION_BLOCKS[ecl[0]][ver];
-}
-function reedSolomonComputeDivisor(degree) {
-	if (degree < 1 || degree > 255) throw new RangeError("Degree out of range");
-	const result = [];
-	for (let i = 0; i < degree - 1; i++) result.push(0);
-	result.push(1);
-	let root = 1;
-	for (let i = 0; i < degree; i++) {
-		for (let j = 0; j < result.length; j++) {
-			result[j] = reedSolomonMultiply(result[j], root);
-			if (j + 1 < result.length) result[j] ^= result[j + 1];
-		}
-		root = reedSolomonMultiply(root, 2);
-	}
-	return result;
-}
-function reedSolomonComputeRemainder(data, divisor) {
-	const result = divisor.map((_) => 0);
-	for (const b of data) {
-		const factor = b ^ result.shift();
-		result.push(0);
-		divisor.forEach((coef, i) => result[i] ^= reedSolomonMultiply(coef, factor));
-	}
-	return result;
-}
-function reedSolomonMultiply(x, y) {
-	if (x >>> 8 !== 0 || y >>> 8 !== 0) throw new RangeError("Byte out of range");
-	let z = 0;
-	for (let i = 7; i >= 0; i--) {
-		z = z << 1 ^ (z >>> 7) * 285;
-		z ^= (y >>> i & 1) * x;
-	}
-	return z;
-}
-function encodeSegments(segs, ecl, minVersion = 1, maxVersion = 40, mask = -1, boostEcl = true) {
-	if (!(MIN_VERSION <= minVersion && minVersion <= maxVersion && maxVersion <= MAX_VERSION) || mask < -1 || mask > 7) throw new RangeError("Invalid value");
-	let version;
-	let dataUsedBits;
-	for (version = minVersion;; version++) {
-		const dataCapacityBits2 = getNumDataCodewords(version, ecl) * 8;
-		const usedBits = getTotalBits(segs, version);
-		if (usedBits <= dataCapacityBits2) {
-			dataUsedBits = usedBits;
-			break;
-		}
-		if (version >= maxVersion) throw new RangeError("Data too long");
-	}
-	for (const newEcl of [
-		MEDIUM,
-		QUARTILE,
-		HIGH
-	]) if (boostEcl && dataUsedBits <= getNumDataCodewords(version, newEcl) * 8) ecl = newEcl;
-	const bb = [];
-	for (const seg of segs) {
-		appendBits(seg.mode[0], 4, bb);
-		appendBits(seg.numChars, numCharCountBits(seg.mode, version), bb);
-		for (const b of seg.getData()) bb.push(b);
-	}
-	const dataCapacityBits = getNumDataCodewords(version, ecl) * 8;
-	appendBits(0, Math.min(4, dataCapacityBits - bb.length), bb);
-	appendBits(0, (8 - bb.length % 8) % 8, bb);
-	for (let padByte = 236; bb.length < dataCapacityBits; padByte ^= 253) appendBits(padByte, 8, bb);
-	const dataCodewords = Array.from({ length: Math.ceil(bb.length / 8) }, () => 0);
-	bb.forEach((b, i) => dataCodewords[i >>> 3] |= b << 7 - (i & 7));
-	return new QrCode(version, ecl, dataCodewords, mask);
-}
-function encode(data, options) {
-	const { ecc = "L", boostEcc = false, minVersion = 1, maxVersion = 40, maskPattern = -1, border = 1 } = options || {};
-	const segment = typeof data === "string" ? makeSegments(data) : Array.isArray(data) ? [makeBytes(data)] : void 0;
-	if (!segment) throw new Error(`uqr only supports encoding string and binary data, but got: ${typeof data}`);
-	const qr = encodeSegments(segment, EccMap[ecc], minVersion, maxVersion, maskPattern, boostEcc);
-	const result = addBorder({
-		version: qr.version,
-		maskPattern: qr.mask,
-		size: qr.size,
-		data: qr.modules,
-		types: qr.types
-	}, border);
-	if (options?.invert) result.data = result.data.map((row) => row.map((mod) => !mod));
-	options?.onEncoded?.(result);
-	return result;
-}
-function addBorder(input, border = 1) {
-	if (!border) return input;
-	const { size } = input;
-	const newSize = size + border * 2;
-	input.size = newSize;
-	input.data.forEach((row) => {
-		for (let i = 0; i < border; i++) {
-			row.unshift(false);
-			row.push(false);
-		}
-	});
-	for (let i = 0; i < border; i++) {
-		input.data.unshift(Array.from({ length: newSize }, (_) => false));
-		input.data.push(Array.from({ length: newSize }, (_) => false));
-	}
-	const b = QrCodeDataType.Border;
-	input.types.forEach((row) => {
-		for (let i = 0; i < border; i++) {
-			row.unshift(b);
-			row.push(b);
-		}
-	});
-	for (let i = 0; i < border; i++) {
-		input.types.unshift(Array.from({ length: newSize }, (_) => b));
-		input.types.push(Array.from({ length: newSize }, (_) => b));
-	}
-	return input;
-}
-function getDataAt(data, x, y, defaults = false) {
-	if (x < 0 || y < 0 || x >= data.length || y >= data.length) return defaults;
-	return data[y][x];
-}
-function renderUnicodeCompact(data, options = {}) {
-	const palette = {
-		WHITE_ALL: "█",
-		WHITE_BLACK: "▀",
-		BLACK_WHITE: "▄",
-		BLACK_ALL: " "
-	};
-	const result = encode(data, options);
-	const WHITE = false;
-	const BLACK = true;
-	const at = (x, y) => getDataAt(result.data, x, y, true);
-	const lines = [];
-	let line = "";
-	for (let row = 0; row < result.size; row += 2) {
-		for (let col = 0; col < result.size; col++) if (at(col, row) === WHITE && at(col, row + 1) === WHITE) line += palette.WHITE_ALL;
-		else if (at(col, row) === WHITE && at(col, row + 1) === BLACK) line += palette.WHITE_BLACK;
-		else if (at(col, row) === BLACK && at(col, row + 1) === WHITE) line += palette.BLACK_WHITE;
-		else line += palette.BLACK_ALL;
-		lines.push(line);
-		line = "";
-	}
-	return lines.join("\n");
 }
 //#endregion
 //#region src/delegate.ts
@@ -9146,9 +7118,6 @@ Usage:
   agent-config install <item>      add a catalog item, e.g. \`agi install model-ladder\` or
                                    \`agi install kaneo\` (--project <dir> for one repository
                                    instead of your user config; not model-ladder)
-  agent-config configure <item>    install a catalog item and choose where: system (your user config) or
-                                   a project, e.g. \`agi configure plans-mcp\` (asks in a terminal;
-                                   --project <dir> skips the question; otherwise system)
   agent-config catalog             list catalog items and where they are installed
   agent-config status              list what agent-config installed and whether it changed
   agent-config uninstall [flags]   remove it and restore what it replaced
@@ -9161,14 +7130,6 @@ Usage:
                                    run a ladder read or edit headlessly and print only its reply;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
-  agent-config plans ${PLANS_UPGRADE} [<path> ...]
-                                   upgrade /planning plan stores (default: ./.plans; a directory is
-                                   searched for plan.sqlite; --dry-run lists them)
-  agent-config plans ${PLANS_SERVE} [<path> ...]
-                                   serve plan stores read-only as a web page, with a QR code for
-                                   a phone on the same network (default: ./.plans)
-  agent-config plans mcp
-                                   stdio MCP server with plan-store tools for agents
 
 Flags:
   --runtime <id>                 claude | opencode | codex | pi (repeatable; default: saved, else detected)
@@ -9303,33 +7264,6 @@ function catalogTarget(id, values, forUninstall = false) {
 	};
 	throw new UsageError(`--project ${project} is not a directory`);
 }
-/**
-* The flags `configure <id>` installs with: `--project` when given, else the scope the user picks
-* in a terminal (System or the current directory), else user scope. A user-only item skips it.
-*/
-async function configureScope(id, values, json) {
-	const { item } = catalogTarget(id, values);
-	const terminal = process.stdin.isTTY && process.stdout.isTTY && !json;
-	if (values.project !== void 0 || item.userOnly || !terminal) return values;
-	const cwd = process.cwd();
-	const answer = await select({
-		message: `Where should ${item.id} be configured?`,
-		options: [{
-			value: "system",
-			label: "System",
-			hint: "your home config, every project"
-		}, {
-			value: "project",
-			label: "Project",
-			hint: `this repository: ${cwd}`
-		}]
-	});
-	if (isCancel(answer)) throw new Cancelled();
-	return answer === "project" ? {
-		...values,
-		project: cwd
-	} : values;
-}
 /** Resolves the entry `install <id>` names, applies the ladder flags to it, and saves it in `config`. */
 async function saveEntryFor(id, config, values) {
 	const { item, project } = catalogTarget(id, values);
@@ -9363,7 +7297,7 @@ async function catalogEntryFor(item, project, config, values) {
 			if (known.source === "discovered" && project) process.stderr.write(`agent-config: using ${s.message.toLowerCase()} ${value} from your user config; it is written into ${project}. Pass --${s.flag} to choose another.\n`);
 		} else {
 			if (!process.stdin.isTTY || !process.stdout.isTTY) throw new UsageError(`${item.id} needs --${s.flag} <${s.placeholder}>`);
-			const answer = await text$1({
+			const answer = await text({
 				message: s.message,
 				placeholder: s.placeholder,
 				validate: (v) => s.normalize(v ?? "") ? void 0 : `Enter a value like ${s.placeholder}`
@@ -9496,8 +7430,7 @@ async function main(argv) {
 	const itemId = [
 		"install",
 		"apply",
-		"uninstall",
-		"configure"
+		"uninstall"
 	].includes(command) ? positionals[1] : void 0;
 	const catalogFlag = given.find((k) => CATALOG_ONLY.includes(k));
 	if (catalogFlag && (!itemId || catalogFlag === "url" && command === "uninstall")) throw new UsageError(`--${catalogFlag} only applies to ${catalogFlag === "url" ? "install (or apply)" : "install or uninstall"} <item>`);
@@ -9518,11 +7451,6 @@ async function main(argv) {
 			if (config.catalog.length === 0) throw new UsageError(`nothing to install yet; add a catalog item, e.g. \`agent-config install ${LADDER_ITEM}\` (see \`agent-config catalog\`)`);
 			for (const w of missingProjectWarnings(config)) process.stderr.write(`agent-config: warning: ${w}\n`);
 			return applyAndReport(buildPlan(config), config, values, json);
-		}
-		case "configure": {
-			if (!itemId) throw new UsageError("configure needs a catalog item, e.g. `agent-config configure plans-mcp` (see `agent-config catalog`)");
-			const config = loadConfig();
-			return applyAndReport(buildPlan(config, [entryKey(await saveEntryFor(itemId, config, await configureScope(itemId, values, json)))]), config, values, json);
 		}
 		case "catalog": {
 			const config = loadConfig();
@@ -9655,81 +7583,6 @@ async function main(argv) {
 			}, last?.reply ?? "");
 			if (!last || last.status === "error") return 1;
 			return last.status === "done" ? 0 : 3;
-		}
-		case "plans": {
-			const sub = positionals[1];
-			if (sub !== "upgrade" && sub !== "serve" && sub !== "mcp") throw new UsageError(`plans expects "${PLANS_UPGRADE}", "${PLANS_SERVE}" or "mcp"`);
-			if (sub === "mcp") {
-				await serveMcp(planTools(process.cwd()), {
-					name: "agent-config-plans",
-					version: VERSION,
-					instructions: PLANS_MCP_INSTRUCTIONS,
-					input: process.stdin,
-					output: process.stdout
-				});
-				return 0;
-			}
-			const given = positionals.slice(2);
-			const hasStoreDir = existsSync(resolve(PLANS_DIR));
-			if (sub === "serve") {
-				const roots = given.length > 0 ? given.map((p) => resolve(p)) : [resolve(PLANS_DIR)];
-				if (given.length > 0) try {
-					findStores(given);
-				} catch (error) {
-					if (error instanceof MissingPathError) throw new UsageError(error.message);
-					throw error;
-				}
-				const server = await servePlans(roots);
-				const { local, network } = server.urls;
-				if (json) process.stdout.write(`${JSON.stringify({
-					port: server.port,
-					urls: server.urls
-				})}\n`);
-				else {
-					const lines = [
-						`Serving plans from ${roots.map((r) => relative(process.cwd(), r) || ".").join(", ")} (read-only, re-read on every request). Press Ctrl+C to stop.`,
-						`  Local:   ${local}`,
-						...network.map((url) => `  Network: ${url}`),
-						network.length > 0 ? "Anyone on your network with this link can read these plans." : "No network address found; the page is reachable from this machine only."
-					];
-					if (network.length > 0) lines.push(renderUnicodeCompact(network[0]), "Scan to open on a phone or another device on the same network.");
-					process.stdout.write(`${lines.join("\n")}\n`);
-				}
-				await new Promise((done) => {
-					const stop = () => {
-						process.off("SIGINT", stop);
-						process.off("SIGTERM", stop);
-						done();
-					};
-					process.on("SIGINT", stop);
-					process.on("SIGTERM", stop);
-				});
-				await server.close();
-				return 0;
-			}
-			if (given.length === 0 && !hasStoreDir) {
-				out(json, { stores: [] }, "No plan stores found.");
-				return 0;
-			}
-			let stores;
-			try {
-				stores = findStores(given.length > 0 ? given : [resolve(PLANS_DIR)]);
-			} catch (error) {
-				if (error instanceof MissingPathError) throw new UsageError(error.message);
-				throw error;
-			}
-			const dryRun = values["dry-run"] === true;
-			const results = await upgradeStores(stores, dryRun);
-			const lines = results.map((r) => {
-				switch (r.status) {
-					case "upgraded": return `upgraded ${r.path} (v${r.from} -> v${r.to})`;
-					case "current": return `current ${r.path} (v${r.from})`;
-					case "pending": return `would upgrade ${r.path} (v${r.from} -> v${r.to})`;
-					case "failed": return `failed ${r.path}: ${r.error}`;
-				}
-			});
-			out(json, { stores: results }, lines.length > 0 ? lines.join("\n") : "No plan stores found.");
-			return results.some((r) => r.status === "failed") ? 1 : 0;
 		}
 		case "update":
 		case "self-update": {
