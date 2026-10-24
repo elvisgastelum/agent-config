@@ -31,18 +31,13 @@ import {
   kaneoUrlWarning,
 } from "./kaneo.ts";
 import { LADDER_ITEM, opKey, type Op } from "./ops.ts";
-import {
-  KICK_OFF,
-  KICK_OFF_GUARD_FILE,
-  KICK_OFF_GUARD_MATCHER,
-  kickOffMarkdown,
-} from "./kickoff.ts";
+import { BRIEF, BRIEF_GUARD_FILE, BRIEF_GUARD_MATCHER, briefMarkdown } from "./brief.ts";
 import {
   claudeDir,
   claudeJsonPath,
   codexDir,
   home,
-  kickOffDir,
+  briefsDir,
   opencodeDir,
   piDir,
 } from "./paths.ts";
@@ -605,16 +600,16 @@ function continueOps(runtime: Runtime, project: string | undefined, config: Conf
   return actionOps(runtime, project, CONTINUE, content, "continue");
 }
 
-// ---------------------------------------------------------------- kick-off
+// ---------------------------------------------------------------- brief
 
 /** How the skill shows the home directory. */
 const HOME_SHORTHAND = "~";
 
 /**
- * `kickOffDir()` as a shell path, for a committed project skill that other machines run: it names
+ * `briefsDir()` as a shell path, for a committed project skill that other machines run: it names
  * no one's state directory.
  */
-const PORTABLE_BRIEF_DIR = "${XDG_STATE_HOME:-~/.local/state}/agent-config/kick-off";
+const PORTABLE_BRIEF_DIR = "${XDG_STATE_HOME:-~/.local/state}/agent-config/briefs";
 
 /**
  * The brief folder as the skill shows it: portable in a project, and under the home directory it
@@ -622,25 +617,25 @@ const PORTABLE_BRIEF_DIR = "${XDG_STATE_HOME:-~/.local/state}/agent-config/kick-
  */
 function briefDirText(project: string | undefined): string {
   if (project) return PORTABLE_BRIEF_DIR;
-  const dir = kickOffDir();
+  const dir = briefsDir();
   const root = home();
   return dir.startsWith(`${root}/`) ? `${HOME_SHORTHAND}${dir.slice(root.length)}` : dir;
 }
 
 /** Claude only: the guard that keeps phase rungs and the brief structure honest. */
-function kickOffGuardOps(project: string | undefined): Op[] {
+function briefGuardOps(project: string | undefined): Op[] {
   return guardHookOps(
     project,
-    KICK_OFF_GUARD_FILE,
-    KICK_OFF_GUARD_MATCHER,
-    "kick-off-guard hook script",
-    `PreToolUse hook (${KICK_OFF_GUARD_MATCHER}) kick-off guard`,
+    BRIEF_GUARD_FILE,
+    BRIEF_GUARD_MATCHER,
+    "brief-guard hook script",
+    `PreToolUse hook (${BRIEF_GUARD_MATCHER}) brief guard`,
   );
 }
 
-function kickOffOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
+function briefOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
   const tiers = config.tiers[runtime];
-  const content = kickOffMarkdown(
+  const content = briefMarkdown(
     runtime,
     {
       fast: modelName(runtime, tiers),
@@ -649,8 +644,8 @@ function kickOffOps(runtime: Runtime, project: string | undefined, config: Confi
     },
     briefDirText(project),
   );
-  const ops = actionOps(runtime, project, KICK_OFF, content, "kick-off");
-  if (runtime === "claude") ops.push(...kickOffGuardOps(project));
+  const ops = actionOps(runtime, project, BRIEF, content, "brief");
+  if (runtime === "claude") ops.push(...briefGuardOps(project));
   return ops;
 }
 
@@ -739,14 +734,14 @@ const continueItem: CatalogItem = {
   ops: (entry, runtime, config) => continueOps(runtime, entry.project, config),
 };
 
-const kickOff: CatalogItem = {
-  id: KICK_OFF,
-  title: "Kick off a Kaneo epic",
+const briefItem: CatalogItem = {
+  id: BRIEF,
+  title: "Brief a Kaneo epic for a fresh session",
   description:
-    "manual /kick-off action that diagnoses what a Kaneo epic is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
+    "manual /brief action that diagnoses what a Kaneo epic is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
   settings: [],
   discover: () => ({}),
-  ops: (entry, runtime, config) => kickOffOps(runtime, entry.project, config),
+  ops: (entry, runtime, config) => briefOps(runtime, entry.project, config),
 };
 
 const planningItem: CatalogItem = {
@@ -764,7 +759,7 @@ export const CATALOG: CatalogItem[] = [
   kaneo,
   commit,
   continueItem,
-  kickOff,
+  briefItem,
   planningItem,
   statusline,
 ];

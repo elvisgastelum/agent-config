@@ -1,6 +1,6 @@
-// The kick-off catalog item's text: a manual-only action that diagnoses what a Kaneo epic is
-// missing on the deep rung, asks how to run it, and copies a brief that starts with /continue, so a
-// fresh session works the whole epic: deep plans and risk calls, cheap edits, risk-routed reviews.
+// The brief catalog item's text: a manual-only action that diagnoses what a Kaneo epic is missing
+// on the deep rung, asks how to run it, and copies a brief that starts with /continue, so a fresh
+// session works the whole epic: deep plans and risk calls, cheap edits, risk-routed reviews.
 
 import { COMMIT_SKILL, COMMIT_WRITER } from "./commit.ts";
 import { CONTINUE, actionCommand, actionFrontmatter } from "./continue.ts";
@@ -15,13 +15,13 @@ import {
 } from "./loop.ts";
 import { agentName, type Runtime } from "./tiers.ts";
 
-export const KICK_OFF = "kick-off";
-export const KICK_OFF_GUARD_FILE = "kick-off-guard.mjs";
+export const BRIEF = "brief";
+export const BRIEF_GUARD_FILE = "brief-guard.mjs";
 
 const DESCRIPTION =
-  "Kick off a Kaneo epic: diagnose what it is missing, ask how to run it, and copy a /continue brief to the clipboard that works the whole epic in a fresh session.";
+  "Prepare a /continue brief for a Kaneo epic, ticket or bug: diagnose what it is missing, ask how to run it, and copy the brief to the clipboard, so a fresh session works the whole epic.";
 
-export const KICK_OFF_HINT = "<kaneo-epic-or-ticket-url | ticket-code>";
+export const BRIEF_HINT = "<kaneo-epic-or-ticket-url | ticket-code>";
 
 const CALL: Record<Runtime, (agent: string) => string> = {
   claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
@@ -31,15 +31,15 @@ const CALL: Record<Runtime, (agent: string) => string> = {
 };
 
 /** Models the action names, one per rung. */
-export type KickOffModels = LoopModels;
+export type BriefModels = LoopModels;
 
 export { PHASE_PREFIX };
 
 /** The line a user adds under the phase line to let a review run on the fast rung. */
 export const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
 
-/** The Claude tools the kick-off guard hook checks: agent handoffs, clipboard copies, brief writes. */
-export const KICK_OFF_GUARD_MATCHER = "Agent|Task|Bash|Write";
+/** The Claude tools the brief guard hook checks: agent handoffs, clipboard copies, brief writes. */
+export const BRIEF_GUARD_MATCHER = "Agent|Task|Bash|Write";
 
 /** Claude's tool for asking the user a question with options. */
 const CLAUDE_QUESTION_TOOL = "AskUserQuestion";
@@ -50,12 +50,12 @@ const FAST_READER = agentName("read", "fast");
 
 const agent = (name: string): string => `\`${name}\``;
 
-/** The brief's placeholders, filled in by the kick-off run that writes it. */
+/** The brief's placeholders, filled in by the brief run that writes it. */
 const BRANCH_PLACEHOLDER = "<branch>";
 const REVIEW_PLACEHOLDER = "<review routing>";
 
-export function kickOffMarkdown(runtime: Runtime, models: KickOffModels, briefDir: string): string {
-  const cmd = actionCommand(runtime, KICK_OFF);
+export function briefMarkdown(runtime: Runtime, models: BriefModels, briefDir: string): string {
+  const cmd = actionCommand(runtime, BRIEF);
   const cont = actionCommand(runtime, CONTINUE);
   const args =
     runtime === "codex"
@@ -67,7 +67,7 @@ export function kickOffMarkdown(runtime: Runtime, models: KickOffModels, briefDi
       : "in one message with numbered options";
   const guard =
     runtime === "claude"
-      ? " The kick-off guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or not in a command of its own."
+      ? " The brief guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or not in a command of its own."
       : "";
   const deepRead = agent(DEEP_READER);
   const balancedRead = agent(BALANCED_READER);
@@ -76,7 +76,7 @@ export function kickOffMarkdown(runtime: Runtime, models: KickOffModels, briefDi
   const phases = ticketPhases(BRANCH_PLACEHOLDER, REVIEW_PLACEHOLDER)
     .map((step, i) => `${i + 2}. ${step}`)
     .join("\n");
-  return `${actionFrontmatter(runtime, KICK_OFF, DESCRIPTION, KICK_OFF_HINT)}
+  return `${actionFrontmatter(runtime, BRIEF, DESCRIPTION, BRIEF_HINT)}
 
 ## Arguments
 
@@ -139,14 +139,14 @@ The first line is the command alone: \`${cont}\` for one ticket at a time, \`${c
 \`\`\`\`markdown
 ${cont} parallel <N>
 
-# Kick-off: <EPIC-ID> <epic title>
+# Brief: <EPIC-ID> <epic title>
 
 ## Epic
 
 - Ticket: [<EPIC-ID> <title>](<url>)
 - Goal: <one sentence>
 - Done when: <each acceptance criterion of the epic, one per line>
-- State: <done>/<total> tickets done, <open> open, <created> created by kick-off.
+- State: <done>/<total> tickets done, <open> open, <created> created by the brief run.
 - Integration branch: \`<branch>\`. Every ticket branch starts from \`origin/<branch>\` and every PR merges into it.
 
 ## Queue

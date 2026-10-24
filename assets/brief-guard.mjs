@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// agent-config kick-off guard: a Claude Code PreToolUse hook (Agent, Task, Bash, Write).
+// agent-config brief guard: a Claude Code PreToolUse hook (Agent, Task, Bash, Write).
 //
-// Holds a /kick-off run to its structure:
+// Holds a /brief run to its structure:
 // - A delegated handoff whose prompt starts with `Phase: <phase>` runs on the rung that phase
 //   allows: diagnose, plan and risk on deep; review on deep or balanced, and on fast only when the
 //   line right under the phase line is `Fast review: approved by the user`. Edit and fix handoffs
 //   are not checked.
-// - A kick-off brief (`agent-config/kick-off/<ID>.md`) must start with /continue and have every
+// - A brief (`agent-config/briefs/<ID>.md`) must start with /continue and have every
 //   section and phase the loop needs. A Write of a brief is checked before it lands. A Bash
 //   command that copies to the clipboard and names a brief must be the copy alone
 //   (`pbcopy < <brief>` or `cat <brief> | pbcopy`), since the guard runs before the command and
@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const GUARD = "kick-off-guard";
+const GUARD = "brief-guard";
 
 // ---------------------------------------------------------------- handoffs
 
@@ -64,14 +64,14 @@ const SHELL_TOOL = "Bash";
 /** Claude's file-writing tool; a brief written with it is checked before it lands. */
 const WRITE_TOOL = "Write";
 
-/** Briefs live in <state dir>/agent-config/kick-off; the skill's own kick-off folder does not match. */
-const BRIEF_PATH = /(^|\/)agent-config\/kick-off\/[^/]+\.md$/;
+/** Briefs live in <state dir>/agent-config/briefs; the skill's own brief folder does not match. */
+const BRIEF_PATH = /(^|\/)agent-config\/briefs\/[^/]+\.md$/;
 
 /** The command a brief opens with: `/continue` or `/continue parallel <n>`. */
 const CONTINUE_COMMAND = /^\/continue(\s|$)/;
 
 export const BRIEF_SECTIONS = [
-  "# Kick-off:",
+  "# Brief:",
   "## Epic",
   "## Queue",
   "## Loop per ticket",
@@ -205,7 +205,7 @@ export function briefProblems(text) {
 }
 
 function notReady(path, problems) {
-  return `${GUARD}: the brief ${path} is not ready: ${problems.join("; ")}.\nFix it from the template in the kick-off skill.`;
+  return `${GUARD}: the brief ${path} is not ready: ${problems.join("; ")}.\nFix it from the template in the brief skill.`;
 }
 
 function write({ file_path: path, content }) {

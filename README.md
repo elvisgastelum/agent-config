@@ -12,7 +12,7 @@ edits  ─┘                          └─ deep      Opus 5.5    last resort,
 
 It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the rungs for **Gentle AI review agents**, and undoes everything with one command.
 
-Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket, `agi install kick-off` adds a `/kick-off` action that briefs a whole Kaneo epic for `/continue`, `agi install statusline` adds a compact Claude Code status line. See [Catalog](#catalog).
+Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket, `agi install brief` adds a `/brief` action that prepares a `/continue` brief for a whole Kaneo epic, `agi install statusline` adds a compact Claude Code status line. See [Catalog](#catalog).
 
 ## Install
 
@@ -118,7 +118,7 @@ agi install kaneo --url https://kaneo.example.com   # user scope: every project
 agi install kaneo --project .                   # one repository, committed with it
 agi install commit                              # title-only commits, drafted by a cheap model
 agi install continue                            # /continue: work the next Kaneo ticket end to end
-agi install kick-off                            # /kick-off: brief a whole Kaneo epic for /continue
+agi install brief                               # /brief: prepare a /continue brief for a Kaneo epic
 agi install planning                            # /planning: plan work with you, then tickets for /continue
 agi install statusline                          # compact Claude Code status line
 agi uninstall kaneo [--project .]               # remove that copy only
@@ -173,7 +173,7 @@ A manual action that works Kaneo tickets end to end, moved here from [claude-con
 
 - `/continue` (`$continue` in Codex) picks the next unblocked ticket, moves it to In Progress, branches `<IDENTIFIER>/<description>`, implements it with tests and docs, commits with the `commit` skill and opens the PR.
 - `/continue [parallel [n] | parallel-wave]` (`$continue` with the same argument in Codex). `parallel [n]` (default 4) picks up to n tickets that do not block each other or touch the same area, builds each in its own worktree at `<repo-parent>/<repo-name>-worktrees/` with one sub-agent per ticket, then merges the PRs one at a time, bringing each branch up to date with the default branch first.
-- `/continue parallel-wave` picks an open Kaneo epic (it asks which one when several can start in any order, and takes the recommendation when you skip), splits the epic's open stories into waves (no unfinished blocker; stories whose `Touches:` areas overlap move to the next wave), and builds the first wave in parallel worktrees through the kick-off phases: plan and risk on the deep rung, cheap edits, risk-routed review. It merges one by one into the integration branch (the epic's kick-off brief, else `dev` when `origin/dev` exists, else the default branch) and ends with a plain-language summary of what changed and what the next wave holds. One wave per run.
+- `/continue parallel-wave` picks an open Kaneo epic (it asks which one when several can start in any order, and takes the recommendation when you skip), splits the epic's open stories into waves (no unfinished blocker; stories whose `Touches:` areas overlap move to the next wave), and builds the first wave in parallel worktrees through the brief phases: plan and risk on the deep rung, cheap edits, risk-routed review. It merges one by one into the integration branch (the epic's brief, else `dev` when `origin/dev` exists, else the default branch) and ends with a plain-language summary of what changed and what the next wave holds. One wave per run.
 - Cheap models: Kaneo reads and writes go through `kaneo-scribe`, file, log and CI reads through `ladder-read-fast`, mechanical edits through the ladder edit agents and commit titles through `commit-writer`. Parallel workers run on your balanced rung instead of the session model. The main session keeps only the decisions.
 - Never invoked by the model on its own: a Claude skill with `disable-model-invocation: true`, an OpenCode command, a Codex skill with `allow_implicit_invocation: false` in `agents/openai.yaml`, a Pi prompt template.
 
@@ -186,24 +186,24 @@ A manual action that works Kaneo tickets end to end, moved here from [claude-con
 
 A `~/.claude/skills/continue/SKILL.md` left by the old standalone installer is replaced and put back on uninstall.
 
-### kick-off
+### brief
 
-A manual action that reads a whole Kaneo epic, finds what is missing and writes a brief for `/continue`. Install `kaneo`, `continue` and `commit` with it (and the model ladder for its read and diagnosis agents).
+A manual action that reads a whole Kaneo epic, finds what is missing and writes a brief for `/continue`. It prepares the run; a fresh session that gets the brief does the work. Called `kick-off` before 0.16.0: a re-apply (`agi apply`) replaces the installed `/kick-off` with `/brief`. Install `kaneo`, `continue` and `commit` with it (and the model ladder for its read and diagnosis agents).
 
-- `/kick-off <kaneo-epic-or-ticket-url | ticket-code>` (`$kick-off` in Codex) is never invoked by the model on its own.
+- `/brief <kaneo-epic-or-ticket-url | ticket-code>` (`$brief` in Codex) is never invoked by the model on its own.
 - Step 1, what is missing to complete the epic: `kaneo-scribe` reads the epic and every related ticket (subtasks, related, blockers, done tickets and PR links); `ladder-read-deep` diagnoses the done and open tickets in dependency order, then finds missing tickets, gaps and parallel waves. The overview is shown to you.
 - Step 2 asks four questions: create the missing tickets now, list them or leave them out; run parallel waves (`/continue parallel N`) or one ticket at a time; the integration branch (`dev`, the default branch or another); and review routing by risk (balanced for none or low, deep for medium or high), always deep, or fast for none risk.
-- Step 3 writes a brief to `~/.local/state/agent-config/kick-off/<EPIC-ID>.md` (`$XDG_STATE_HOME/agent-config/kick-off`) and copies it with `pbcopy`, `wl-copy`, `xclip`, `xsel` or `clip.exe`. The brief starts with `/continue`, so a fresh session works the queue: Pick → Plan (deep, picks the edit rung, prefers fast) → Edit (fast or balanced, climbs) → Risk (deep: none, low, medium or high) → Review (routed by risk, never fast unless you approved it) → Fix until no findings (stops after 3 rounds) → PR into the integration branch, CI, merge, ticket Done → Next, until the epic's criteria are met.
-- Every delegated handoff starts with `Phase: <phase>`. Claude's kick-off guard (a PreToolUse hook on `Agent|Task|Bash|Write`, Node, no dependencies) denies diagnose, plan and risk handoffs that are not on the deep rung, and reviews on fast unless the line right under the phase line is exactly `Fast review: approved by the user`. A brief must start with `/continue` and have every section: the guard checks a brief as it is written and again when it is copied. A command that copies to the clipboard and names a brief must be the copy alone, `pbcopy < <brief>` or `cat <brief> | pbcopy` (any clipboard tool, behind `env` or `sudo` too), so nothing in it can rewrite the brief after the check; a copy of a missing or incomplete brief is denied. It reads commands the way the shell splits them (pipelines, quotes, escapes, redirects, heredocs, `~` and environment variables) but cannot see a variable set inside the same command; such a copy goes through unchecked, like any input the guard cannot read. The guard reads the rung from `planner-<rung>` names too.
+- Step 3 writes a brief to `~/.local/state/agent-config/briefs/<EPIC-ID>.md` (`$XDG_STATE_HOME/agent-config/briefs`) and copies it with `pbcopy`, `wl-copy`, `xclip`, `xsel` or `clip.exe`. The brief starts with `/continue`, so a fresh session works the queue: Pick → Plan (deep, picks the edit rung, prefers fast) → Edit (fast or balanced, climbs) → Risk (deep: none, low, medium or high) → Review (routed by risk, never fast unless you approved it) → Fix until no findings (stops after 3 rounds) → PR into the integration branch, CI, merge, ticket Done → Next, until the epic's criteria are met.
+- Every delegated handoff starts with `Phase: <phase>`. Claude's brief guard (a PreToolUse hook on `Agent|Task|Bash|Write`, Node, no dependencies) denies diagnose, plan and risk handoffs that are not on the deep rung, and reviews on fast unless the line right under the phase line is exactly `Fast review: approved by the user`. A brief must start with `/continue` and have every section: the guard checks a brief as it is written and again when it is copied. A command that copies to the clipboard and names a brief must be the copy alone, `pbcopy < <brief>` or `cat <brief> | pbcopy` (any clipboard tool, behind `env` or `sudo` too), so nothing in it can rewrite the brief after the check; a copy of a missing or incomplete brief is denied. It reads commands the way the shell splits them (pipelines, quotes, escapes, redirects, heredocs, `~` and environment variables) but cannot see a variable set inside the same command; such a copy goes through unchecked, like any input the guard cannot read. The guard reads the rung from `planner-<rung>` names too.
 - `/continue` treats every line after its first as the run's brief.
 
-| Runtime      | User scope (Claude / OpenCode / Codex / Pi)                                  | Project scope (`--project <dir>`)                                        |
-| ------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Claude       | `~/.claude/skills/kick-off/SKILL.md`                                         | `.claude/skills/kick-off/SKILL.md`                                       |
-| OpenCode     | `~/.config/opencode/commands/kick-off.md`                                    | `.opencode/commands/kick-off.md`                                         |
-| Codex        | `~/.codex/skills/kick-off/` (with `agents/openai.yaml`)                      | `.agents/skills/kick-off/`                                               |
-| Pi           | `~/.pi/agent/prompts/kick-off.md`                                            | `.pi/prompts/kick-off.md`                                                |
-| Claude guard | `~/.claude/hooks/agent-config/kick-off-guard.mjs`, `~/.claude/settings.json` | `.claude/hooks/agent-config/kick-off-guard.mjs`, `.claude/settings.json` |
+| Runtime      | User scope (Claude / OpenCode / Codex / Pi)                               | Project scope (`--project <dir>`)                                     |
+| ------------ | ------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Claude       | `~/.claude/skills/brief/SKILL.md`                                         | `.claude/skills/brief/SKILL.md`                                       |
+| OpenCode     | `~/.config/opencode/commands/brief.md`                                    | `.opencode/commands/brief.md`                                         |
+| Codex        | `~/.codex/skills/brief/` (with `agents/openai.yaml`)                      | `.agents/skills/brief/`                                               |
+| Pi           | `~/.pi/agent/prompts/brief.md`                                            | `.pi/prompts/brief.md`                                                |
+| Claude guard | `~/.claude/hooks/agent-config/brief-guard.mjs`, `~/.claude/settings.json` | `.claude/hooks/agent-config/brief-guard.mjs`, `.claude/settings.json` |
 
 ### planning
 
@@ -216,7 +216,7 @@ A manual action that plans a project, epic, feature, fix or ticket with you befo
 - The item also installs three sub-agents, `planner-fast`, `planner-balanced` and `planner-deep`: one planning specialist on the fast, balanced and deep models from the ladder settings. Classification, gap reviews and every review run on `planner-deep`. Drafting starts on the kind's planner (fix and ticket `planner-fast`, feat and epic `planner-balanced`, project `planner-deep`); `planner-deep` reviews each draft, and a failed review (or an `escalate` reply) climbs one rung with every earlier finding passed along, like the model ladder. When the deep planner's draft still fails, its open findings go to you in the final review. Planners write the draft straight into the plan store.
 - A final review repeats until nothing is open, or until you ask to write the tickets. Then each open gap becomes a `Gap:` ticket that blocks the work depending on it.
 - The plan lives in a SQLite store at `.plans/<MM-yyyy>/<plan-title>/plan.sqlite`: facts, decisions, findings, epics, tickets, blocks, and a `waves` view, so agents query exactly what they need.
-- With Kaneo it writes `Epic:` tasks and P5-or-smaller stories with `blocks` relations and `Touches:` lines, ready for `/continue parallel-wave` or `/kick-off`.
+- With Kaneo it writes `Epic:` tasks and P5-or-smaller stories with `blocks` relations and `Touches:` lines, ready for `/continue parallel-wave` or `/brief`.
 - Plans with a UI follow a design-system standard: every size token a multiple of 4 px, WCAG 2.2 AA accessibility, and scroll-driven motion as first-party components that animate only transform and opacity and honor `prefers-reduced-motion`.
 
 | Runtime  | User scope                                              | Project scope (`--project <dir>`)  |

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vite-plus/test";
 import { PARALLEL_WAVE, continueMarkdown } from "../src/continue.ts";
 import { WAVE_RULE } from "../src/kaneo.ts";
-import { kickOffMarkdown } from "../src/kickoff.ts";
+import { briefMarkdown } from "../src/brief.ts";
 import { ROUTED_REVIEW, ticketPhases } from "../src/loop.ts";
 
 const MODELS = { fast: "fast-model", balanced: "balanced-model", deep: "deep-model" };
-const BRIEF_DIR = "~/state/kick-off";
+const BRIEF_DIR = "~/state/briefs";
 const WAVE_SECTION = "## Parallel-wave mode";
 
 function waveSection(text: string): string {
@@ -22,7 +22,7 @@ describe("continueMarkdown", () => {
     expect(text).toContain(`argument-hint: "[parallel [n] | ${PARALLEL_WAVE}]"`);
   });
 
-  test("builds the wave with the kick-off phases, routing and brief", () => {
+  test("builds the wave with the brief phases, routing and brief", () => {
     const section = waveSection(continueMarkdown("claude", MODELS, BRIEF_DIR));
     expect(section).toContain(WAVE_RULE);
     expect(section).toContain(ROUTED_REVIEW);
@@ -49,9 +49,9 @@ describe("continueMarkdown", () => {
   });
 });
 
-describe("kickOffMarkdown", () => {
+describe("briefMarkdown", () => {
   test("numbers the shared ticket phases inside the brief's loop", () => {
-    const text = kickOffMarkdown("claude", MODELS, BRIEF_DIR);
+    const text = briefMarkdown("claude", MODELS, BRIEF_DIR);
     ticketPhases("<branch>", "<review routing>").forEach((step, i) =>
       expect(text).toContain(`${i + 2}. ${step}`),
     );

@@ -30,9 +30,9 @@ export function statePaths(): { dir: string; manifest: string; backups: string }
   return { dir, manifest: join(dir, "manifest.json"), backups: join(dir, "backups") };
 }
 
-/** Where the kick-off action leaves the briefs it writes. */
-export function kickOffDir(): string {
-  return join(statePaths().dir, "kick-off");
+/** Where the brief action leaves the briefs it writes. */
+export function briefsDir(): string {
+  return join(statePaths().dir, "briefs");
 }
 
 export function configPath(): string {

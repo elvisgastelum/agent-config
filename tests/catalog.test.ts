@@ -27,6 +27,7 @@ import {
   applyPlan,
   loadManifest,
   saveManifest,
+  sha256,
   uninstall,
   withBlock,
   type ManifestRecord,
@@ -448,6 +449,46 @@ describe("loadConfig catalog", () => {
     );
     const catalog = loadConfig().catalog;
     expect(catalog).toEqual([{ item: "kaneo", runtimes: ["claude"], settings: { url: URL } }]);
+  });
+
+  test("reads a saved kick-off entry as brief", () => {
+    put(
+      configPath(),
+      JSON.stringify({ catalog: [{ item: "kick-off", runtimes: ["claude"], settings: {} }] }),
+    );
+    expect(loadConfig().catalog).toEqual([{ item: "brief", runtimes: ["claude"], settings: {} }]);
+  });
+});
+
+describe("kick-off renamed to brief", () => {
+  test("a full re-apply removes the kick-off skill and installs brief", () => {
+    const oldDir = join(box.home, ".claude/skills/kick-off");
+    const oldSkill = join(oldDir, "SKILL.md");
+    const oldContent = "---\nname: kick-off\n---\n";
+    put(oldSkill, oldContent);
+    addRecords([
+      {
+        kind: "file",
+        runtime: "claude",
+        component: "catalog",
+        path: oldSkill,
+        label: "kick-off skill",
+        item: "kick-off@user",
+        createdDirs: [oldDir],
+        createdFile: true,
+        sha: sha256(oldContent),
+        version: "0.15.0",
+      },
+    ]);
+    put(
+      configPath(),
+      JSON.stringify({ catalog: [{ item: "kick-off", runtimes: ["claude"], settings: {} }] }),
+    );
+
+    expect(applyPlan(buildPlan(loadConfig())).errors).toEqual([]);
+    expect(existsSync(oldDir)).toBe(false);
+    expect(read(join(box.home, ".claude/skills/brief/SKILL.md"))).toContain("name: brief");
+    expect(loadManifest().records.some((r) => r.item === "kick-off@user")).toBe(false);
   });
 });
 

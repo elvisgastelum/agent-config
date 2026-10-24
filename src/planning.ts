@@ -13,7 +13,7 @@ import {
   TOUCHES_LINE,
   WAVE_RULE,
 } from "./kaneo.ts";
-import { KICK_OFF } from "./kickoff.ts";
+import { BRIEF } from "./brief.ts";
 import { phase } from "./loop.ts";
 import { LADDER_ITEM } from "./ops.ts";
 import { agentName, type Runtime, type Tier } from "./tiers.ts";
@@ -186,7 +186,7 @@ export interface PlanningModels {
 export const PLANNER_PREFIX = "planner-";
 export const plannerName = (tier: Tier): string => `${PLANNER_PREFIX}${tier}`;
 
-/** Drafting handoffs open with this phase: any rung may draft, so the kick-off guard allows it. */
+/** Drafting handoffs open with this phase: any rung may draft, so the brief guard allows it. */
 export const DRAFT_PHASE = "draft";
 
 /** The first line of a planner's draft reply, and of a review's. */
@@ -248,7 +248,7 @@ const code = (text: string): string => `\`${text}\``;
 export function planningMarkdown(runtime: Runtime, models: PlanningModels): string {
   const cmd = actionCommand(runtime, PLANNING);
   const cont = actionCommand(runtime, CONTINUE);
-  const kickOff = actionCommand(runtime, KICK_OFF);
+  const brief = actionCommand(runtime, BRIEF);
   const args =
     runtime === "codex"
       ? `Argument: the user's message after ${code(cmd)}.`
@@ -299,7 +299,7 @@ When one of these agents is not installed, do the step yourself with bounded rea
 | --- | --- |
 | ${code(KANEO_ITEM)} with a working MCP | Tickets become Kaneo epics and stories, as the ${code(KANEO_SKILL)} skill says. |
 | ${code(CONTINUE)} | Stories are cut to run in parallel waves; the report names ${code(`${cont} ${PARALLEL_WAVE}`)}. |
-| ${code(KICK_OFF)} | The report offers ${code(`${kickOff} <EPIC-ID>`)} to prepare a brief for a fresh session. |
+| ${code(BRIEF)} | The report offers ${code(`${brief} <EPIC-ID>`)} to prepare a brief for a fresh session. |
 | ${code(LADDER_ITEM)} | Code facts come from ${fast}. |
 
 A missing item costs nothing: say in one line what it would add, then go on.
@@ -388,7 +388,7 @@ In plain words: what will be built, the epics, the waves and the widest wave's s
 
 - ${code(`${cont} ${PARALLEL_WAVE}`)} builds the next wave of an epic in parallel;
 - ${code(`${cont} parallel <N>`)} works up to N tickets at once, ${code(cont)} one at a time;
-- ${code(`${kickOff} <EPIC-ID>`)} prepares a brief that works a whole epic in a fresh session.
+- ${code(`${brief} <EPIC-ID>`)} prepares a brief that works a whole epic in a fresh session.
 
 With none installed, say how to work the tickets by hand from the store.
 

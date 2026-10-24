@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vite-plus/test";
 // @ts-expect-error plain .mjs asset without type declarations
-import * as guard from "../assets/kick-off-guard.mjs";
-import { FAST_REVIEW_APPROVAL, PHASE_PREFIX, kickOffMarkdown } from "../src/kickoff.ts";
+import * as guard from "../assets/brief-guard.mjs";
+import { FAST_REVIEW_APPROVAL, PHASE_PREFIX, briefMarkdown } from "../src/brief.ts";
 
 const { BRIEF_PHASES, BRIEF_SECTIONS, briefProblems, decide } = guard;
 
@@ -18,14 +18,14 @@ const bash = (command: string, cwd?: string) =>
   decide({ tool_name: "Bash", cwd, tool_input: { command } });
 
 const dirs: string[] = [];
-const tempDir = (prefix = "kick-off-") => {
+const tempDir = (prefix = "brief-") => {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   dirs.push(dir);
   return dir;
 };
 const writeBrief = (dir: string, name: string, text: string) => {
-  mkdirSync(join(dir, "agent-config", "kick-off"), { recursive: true });
-  const path = join(dir, "agent-config", "kick-off", name);
+  mkdirSync(join(dir, "agent-config", "briefs"), { recursive: true });
+  const path = join(dir, "agent-config", "briefs", name);
   writeFileSync(path, text);
   return path;
 };
@@ -37,16 +37,16 @@ const brief = (
   [
     first,
     "",
-    ...sections.map((s) => (s === "# Kick-off:" ? `${s} FEX-1 Epic` : s)),
+    ...sections.map((s) => (s === "# Brief:" ? `${s} FEX-1 Epic` : s)),
     ...phases.map((p) => `Run ${p} for each ticket`),
   ].join("\n");
-const INCOMPLETE = "Continue the epic\n\n# Kick-off: FEX-2 Epic\n";
+const INCOMPLETE = "Continue the epic\n\n# Brief: FEX-2 Epic\n";
 
 afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("kick-off guard: phase rungs", () => {
+describe("brief guard: phase rungs", () => {
   test("Phase: plan runs only on the deep rung", () => {
     const prompt = "Phase: plan\nTicket: FEX-1";
     expect(agent(prompt, "ladder-read-deep")).toBeUndefined();
@@ -137,7 +137,7 @@ describe("kick-off guard: phase rungs", () => {
   });
 });
 
-describe("kick-off guard: brief copies", () => {
+describe("brief guard: brief copies", () => {
   test("a complete brief passes the checker and the clipboard command", () => {
     const dir = tempDir();
     const text = brief();
@@ -185,7 +185,7 @@ describe("kick-off guard: brief copies", () => {
   test("a relative brief path resolves against cwd", () => {
     const dir = tempDir();
     writeBrief(dir, "FEX-2.md", INCOMPLETE);
-    expect(bash("cat agent-config/kick-off/FEX-2.md | pbcopy", dir)).toBeDefined();
+    expect(bash("cat agent-config/briefs/FEX-2.md | pbcopy", dir)).toBeDefined();
   });
 
   test("$HOME in the brief path expands to the home directory", () => {
@@ -194,7 +194,7 @@ describe("kick-off guard: brief copies", () => {
     const original = process.env.HOME;
     try {
       process.env.HOME = dir;
-      expect(bash('wl-copy < "$HOME/agent-config/kick-off/FEX-3.md"')).toBeDefined();
+      expect(bash('wl-copy < "$HOME/agent-config/briefs/FEX-3.md"')).toBeDefined();
     } finally {
       if (original === undefined) delete process.env.HOME;
       else process.env.HOME = original;
@@ -202,7 +202,7 @@ describe("kick-off guard: brief copies", () => {
   });
 
   test("a brief path with spaces is checked, quoted or escaped", () => {
-    const dir = tempDir("kick off ");
+    const dir = tempDir("brief dir ");
     const path = writeBrief(dir, "FEX-6.md", INCOMPLETE);
     expect(bash(`pbcopy < "${path}"`)).toContain("/continue");
     expect(bash(`cat '${path}' | pbcopy`)).toContain("/continue");
@@ -215,7 +215,7 @@ describe("kick-off guard: brief copies", () => {
     const original = process.env.HOME;
     try {
       process.env.HOME = dir;
-      expect(bash("pbcopy < ~/agent-config/kick-off/FEX-14.md")).toContain("FEX-14.md");
+      expect(bash("pbcopy < ~/agent-config/briefs/FEX-14.md")).toContain("FEX-14.md");
     } finally {
       if (original === undefined) delete process.env.HOME;
       else process.env.HOME = original;
@@ -242,7 +242,7 @@ describe("kick-off guard: brief copies", () => {
     const dir = tempDir();
     writeBrief(join(dir, ".local", "state"), "FEX-19.md", brief());
     writeBrief(dir, "FEX-19.md", INCOMPLETE);
-    const copy = 'pbcopy < "${XDG_STATE_HOME:-~/.local/state}/agent-config/kick-off/FEX-19.md"';
+    const copy = 'pbcopy < "${XDG_STATE_HOME:-~/.local/state}/agent-config/briefs/FEX-19.md"';
     const original = { HOME: process.env.HOME, XDG_STATE_HOME: process.env.XDG_STATE_HOME };
     try {
       process.env.HOME = dir;
@@ -264,8 +264,8 @@ describe("kick-off guard: brief copies", () => {
     const original = process.env.XDG_STATE_HOME;
     try {
       process.env.XDG_STATE_HOME = dir;
-      expect(bash('pbcopy < "${XDG_STATE_HOME}/agent-config/kick-off/FEX-7.md"')).toBeDefined();
-      expect(bash("pbcopy < $XDG_STATE_HOME/agent-config/kick-off/FEX-7.md")).toBeDefined();
+      expect(bash('pbcopy < "${XDG_STATE_HOME}/agent-config/briefs/FEX-7.md"')).toBeDefined();
+      expect(bash("pbcopy < $XDG_STATE_HOME/agent-config/briefs/FEX-7.md")).toBeDefined();
     } finally {
       if (original === undefined) delete process.env.XDG_STATE_HOME;
       else process.env.XDG_STATE_HOME = original;
@@ -280,13 +280,13 @@ describe("kick-off guard: brief copies", () => {
 
   test("copying a brief that does not exist yet is denied", () => {
     const dir = tempDir();
-    expect(bash(`pbcopy < ${dir}/agent-config/kick-off/missing.md`)).toContain("does not exist");
+    expect(bash(`pbcopy < ${dir}/agent-config/briefs/missing.md`)).toContain("does not exist");
   });
 
   test("writing and copying a brief in one command is denied", () => {
     const dir = tempDir();
-    const fresh = join(dir, "agent-config", "kick-off", "FEX-8.md");
-    mkdirSync(join(dir, "agent-config", "kick-off"), { recursive: true });
+    const fresh = join(dir, "agent-config", "briefs", "FEX-8.md");
+    mkdirSync(join(dir, "agent-config", "briefs"), { recursive: true });
     const heredoc = `cat > ${fresh} <<'EOF'\n${brief()}\nEOF\npbcopy < ${fresh}`;
     expect(bash(heredoc)).toContain("a command of its own");
     const complete = writeBrief(dir, "FEX-9.md", brief());
@@ -298,7 +298,7 @@ describe("kick-off guard: brief copies", () => {
 
   test("a heredoc body is input, not shell code", () => {
     const dir = tempDir();
-    const fresh = join(dir, "agent-config", "kick-off", "FEX-17.md");
+    const fresh = join(dir, "agent-config", "briefs", "FEX-17.md");
     const body = "the ticket's criteria\n\tand the epic goal";
     expect(bash(`cat > ${fresh} <<'EOF'\n${body}\nEOF\npbcopy < ${fresh}`)).toContain(
       "a command of its own",
@@ -348,9 +348,9 @@ describe("kick-off guard: brief copies", () => {
     expect(bash(`pbcopy < ${complete} 2>/dev/null`)).toBeUndefined();
   });
 
-  test("copying a file outside the brief folder is allowed, even under a kick-off folder", () => {
+  test("copying a file outside the brief folder is allowed, even under a brief folder", () => {
     const dir = tempDir();
-    for (const folder of [join(dir, ".claude", "skills", "kick-off"), join(dir, "kick-off")]) {
+    for (const folder of [join(dir, ".claude", "skills", "brief"), join(dir, "briefs")]) {
       mkdirSync(folder, { recursive: true });
       writeFileSync(join(folder, "SKILL.md"), "# not a brief\n");
       expect(bash(`cat ${join(folder, "SKILL.md")} | pbcopy`)).toBeUndefined();
@@ -360,7 +360,7 @@ describe("kick-off guard: brief copies", () => {
   test("copying a brief's path as text is allowed", () => {
     const dir = tempDir();
     const incomplete = writeBrief(dir, "FEX-20.md", INCOMPLETE);
-    const missing = join(dir, "agent-config", "kick-off", "FEX-21.md");
+    const missing = join(dir, "agent-config", "briefs", "FEX-21.md");
     expect(bash(`echo ${incomplete} | pbcopy`)).toBeUndefined();
     expect(bash(`printf '%s' ${missing} | pbcopy`)).toBeUndefined();
     expect(bash(`echo hi < ${incomplete} | pbcopy`)).toContain("FEX-20.md");
@@ -371,10 +371,10 @@ describe("kick-off guard: brief copies", () => {
   });
 });
 
-describe("kick-off guard: brief writes", () => {
+describe("brief guard: brief writes", () => {
   const write = (file_path: string, content: string) =>
     decide({ tool_name: "Write", tool_input: { file_path, content } });
-  const path = join(tmpdir(), "state", "agent-config", "kick-off", "FEX-13.md");
+  const path = join(tmpdir(), "state", "agent-config", "briefs", "FEX-13.md");
 
   test("an incomplete brief is denied before it is written", () => {
     expect(write(path, INCOMPLETE)).toContain("/continue");
@@ -386,9 +386,9 @@ describe("kick-off guard: brief writes", () => {
   });
 });
 
-describe("kick-off guard: runs as a hook", () => {
+describe("brief guard: runs as a hook", () => {
   test("denies through stdout and lets anything else through", () => {
-    const script = join(import.meta.dirname, "..", "assets", "kick-off-guard.mjs");
+    const script = join(import.meta.dirname, "..", "assets", "brief-guard.mjs");
     const hook = (input: string) => execFileSync("node", [script], { input, encoding: "utf8" });
     const denied = JSON.parse(
       hook(
@@ -399,7 +399,7 @@ describe("kick-off guard: runs as a hook", () => {
       ),
     );
     expect(denied.hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(denied.hookSpecificOutput.permissionDecisionReason).toContain("kick-off-guard");
+    expect(denied.hookSpecificOutput.permissionDecisionReason).toContain("brief-guard");
     expect(
       hook(
         JSON.stringify({
@@ -412,15 +412,11 @@ describe("kick-off guard: runs as a hook", () => {
   });
 });
 
-describe("kick-off action: the brief template", () => {
+describe("brief action: the brief template", () => {
   test.each(["claude", "opencode", "pi"] as const)(
     "the %s template is a valid brief",
     (runtime) => {
-      const text = kickOffMarkdown(
-        runtime,
-        { fast: "f", balanced: "b", deep: "d" },
-        "~/x/kick-off",
-      );
+      const text = briefMarkdown(runtime, { fast: "f", balanced: "b", deep: "d" }, "~/x/briefs");
       const template = text.split("````markdown\n")[1]?.split("\n````")[0] ?? "";
       expect(template).not.toBe("");
       expect(briefProblems(template)).toEqual([]);

@@ -3017,11 +3017,11 @@ const BALANCED_READER$1 = agentName("read", "balanced");
 const FAST_EDITOR = agentName("edit", "fast");
 const BALANCED_EDITOR = agentName("edit", "balanced");
 const DEEP_EDITOR = agentName("edit", "deep");
-/** Kick-off's recommended review routing: the rung follows the diff's risk. */
+/** The brief's recommended review routing: the rung follows the diff's risk. */
 const ROUTED_REVIEW = `none and low risk: ${agent$1(BALANCED_READER$1)}; medium and high: ${agent$1(DEEP_READER$1)}`;
 /**
 * The phases one ticket goes through between its branch and its PR: plan, edit, risk, review and
-* fix. The kick-off brief numbers them inside its loop; /continue parallel-wave hands them to
+* fix. The brief numbers them inside its loop; /continue parallel-wave hands them to
 * every worker.
 */
 function ticketPhases(branch, review) {
@@ -3065,9 +3065,9 @@ function actionCommand(runtime, name) {
 function continueCommand(runtime) {
 	return actionCommand(runtime, CONTINUE);
 }
-const DESCRIPTION$2 = "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one. With `parallel-wave`, build the next wave of an epic the kick-off way and explain the result.";
+const DESCRIPTION$2 = "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one. With `parallel-wave`, build the next wave of an epic the way a brief works it and explain the result.";
 const ARGUMENT_HINT = `[parallel [n] | ${PARALLEL_WAVE}]`;
-/** In parallel-wave mode the kick-off phases name these instead of a brief's placeholders. */
+/** In parallel-wave mode the brief's phases name these instead of a brief's placeholders. */
 const WAVE_BRANCH = "<integration branch>";
 const WAVE_REVIEW = "the review routing above";
 /** Frontmatter for the file each runtime reads; every one keeps the action manual-only. */
@@ -3104,7 +3104,7 @@ ${args} Read them before doing anything else. Only their first line picks the mo
 
 If the first line holds anything other than \`parallel\` (optionally followed by a positive integer) or \`${PARALLEL_WAVE}\`, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel sections.
 
-A brief (such as the one the kick-off action copies) scopes the run: take tickets only from its queue, in its order, and follow its steps wherever they differ from the flows below. Keep working through its queue until it says to stop.
+A brief (such as the one the brief action copies) scopes the run: take tickets only from its queue, in its order, and follow its steps wherever they differ from the flows below. Keep working through its queue until it says to stop.
 
 ## Save context: cheap agents do the reading and the clerical work
 
@@ -3191,7 +3191,7 @@ Stop the loop and report when a conflict cannot be resolved with confidence, che
 
 ## Parallel-wave mode
 
-Goal: build the next wave of one epic, every story that can start now, all at once and the way the kick-off action works an epic; merge them one by one; then explain what changed at the user's level. One wave per run.
+Goal: build the next wave of one epic, every story that can start now, all at once and the way the brief action works an epic; merge them one by one; then explain what changed at the user's level. One wave per run.
 
 ### 1. Pick the epic
 
@@ -3206,9 +3206,9 @@ Goal: build the next wave of one epic, every story that can start now, all at on
 3. The first wave is this run's work, and its size is the parallel limit. A wave of one story runs the single-ticket flow, built through the phases in step 3. With no story ready, report the blockers and stop.
 4. Show the waves, the integration branch and the merge order before creating anything.
 
-### 3. Build the wave the kick-off way
+### 3. Build the wave the way a brief works it
 
-When the epic has a kick-off brief, \`${briefDir}/<EPIC-ID>.md\`, its integration branch, review routing and gaps apply. Without one, the integration branch is \`dev\` when \`origin/dev\` exists and the default branch otherwise, and reviews are routed by risk (${ROUTED_REVIEW}).
+When the epic has a brief, \`${briefDir}/<EPIC-ID>.md\`, its integration branch, review routing and gaps apply. Without one, the integration branch is \`dev\` when \`origin/dev\` exists and the default branch otherwise, and reviews are routed by risk (${ROUTED_REVIEW}).
 
 Run parallel mode steps 2 to 5 with the wave as the picked tickets, and these changes:
 
@@ -3254,9 +3254,9 @@ function statePaths() {
 		backups: join(dir, "backups")
 	};
 }
-/** Where the kick-off action leaves the briefs it writes. */
-function kickOffDir() {
-	return join(statePaths().dir, "kick-off");
+/** Where the brief action leaves the briefs it writes. */
+function briefsDir() {
+	return join(statePaths().dir, "briefs");
 }
 function configPath() {
 	return join(configRoot(), "agent-config", "config.json");
@@ -4335,11 +4335,11 @@ function uninstall(filter, force = false) {
 	return results;
 }
 //#endregion
-//#region src/kickoff.ts
-const KICK_OFF = "kick-off";
-const KICK_OFF_GUARD_FILE = "kick-off-guard.mjs";
-const DESCRIPTION$1 = "Kick off a Kaneo epic: diagnose what it is missing, ask how to run it, and copy a /continue brief to the clipboard that works the whole epic in a fresh session.";
-const KICK_OFF_HINT = "<kaneo-epic-or-ticket-url | ticket-code>";
+//#region src/brief.ts
+const BRIEF = "brief";
+const BRIEF_GUARD_FILE = "brief-guard.mjs";
+const DESCRIPTION$1 = "Prepare a /continue brief for a Kaneo epic, ticket or bug: diagnose what it is missing, ask how to run it, and copy the brief to the clipboard, so a fresh session works the whole epic.";
+const BRIEF_HINT = "<kaneo-epic-or-ticket-url | ticket-code>";
 const CALL = {
 	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
 	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
@@ -4348,29 +4348,29 @@ const CALL = {
 };
 /** The line a user adds under the phase line to let a review run on the fast rung. */
 const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
-/** The Claude tools the kick-off guard hook checks: agent handoffs, clipboard copies, brief writes. */
-const KICK_OFF_GUARD_MATCHER = "Agent|Task|Bash|Write";
+/** The Claude tools the brief guard hook checks: agent handoffs, clipboard copies, brief writes. */
+const BRIEF_GUARD_MATCHER = "Agent|Task|Bash|Write";
 /** Claude's tool for asking the user a question with options. */
 const CLAUDE_QUESTION_TOOL$1 = "AskUserQuestion";
 const DEEP_READER = agentName("read", "deep");
 const BALANCED_READER = agentName("read", "balanced");
 const FAST_READER$1 = agentName("read", "fast");
 const agent = (name) => `\`${name}\``;
-/** The brief's placeholders, filled in by the kick-off run that writes it. */
+/** The brief's placeholders, filled in by the brief run that writes it. */
 const BRANCH_PLACEHOLDER = "<branch>";
 const REVIEW_PLACEHOLDER = "<review routing>";
-function kickOffMarkdown(runtime, models, briefDir) {
-	const cmd = actionCommand(runtime, KICK_OFF);
+function briefMarkdown(runtime, models, briefDir) {
+	const cmd = actionCommand(runtime, BRIEF);
 	const cont = actionCommand(runtime, CONTINUE);
 	const args = runtime === "codex" ? `Argument: the user's message after \`${cmd}\`.` : "Argument: `$ARGUMENTS`.";
 	const ask = runtime === "claude" ? `with the ${CLAUDE_QUESTION_TOOL$1} tool` : "in one message with numbered options";
-	const guard = runtime === "claude" ? " The kick-off guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or not in a command of its own." : "";
+	const guard = runtime === "claude" ? " The brief guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or not in a command of its own." : "";
 	const deepRead = agent(DEEP_READER);
 	const balancedRead = agent(BALANCED_READER);
 	const fastRead = agent(FAST_READER$1);
 	const routed = ROUTED_REVIEW;
 	const phases = ticketPhases(BRANCH_PLACEHOLDER, REVIEW_PLACEHOLDER).map((step, i) => `${i + 2}. ${step}`).join("\n");
-	return `${actionFrontmatter(runtime, KICK_OFF, DESCRIPTION$1, KICK_OFF_HINT)}
+	return `${actionFrontmatter(runtime, BRIEF, DESCRIPTION$1, BRIEF_HINT)}
 
 ## Arguments
 
@@ -4433,14 +4433,14 @@ The first line is the command alone: \`${cont}\` for one ticket at a time, \`${c
 \`\`\`\`markdown
 ${cont} parallel <N>
 
-# Kick-off: <EPIC-ID> <epic title>
+# Brief: <EPIC-ID> <epic title>
 
 ## Epic
 
 - Ticket: [<EPIC-ID> <title>](<url>)
 - Goal: <one sentence>
 - Done when: <each acceptance criterion of the epic, one per line>
-- State: <done>/<total> tickets done, <open> open, <created> created by kick-off.
+- State: <done>/<total> tickets done, <open> open, <created> created by the brief run.
 - Integration branch: \`<branch>\`. Every ticket branch starts from \`origin/<branch>\` and every PR merges into it.
 
 ## Queue
@@ -4631,7 +4631,7 @@ const FAST_READER = agentName("read", "fast");
 /** The planner sub-agents this action installs, one per rung: `planner-fast` and so on. */
 const PLANNER_PREFIX = "planner-";
 const plannerName = (tier) => `${PLANNER_PREFIX}${tier}`;
-/** Drafting handoffs open with this phase: any rung may draft, so the kick-off guard allows it. */
+/** Drafting handoffs open with this phase: any rung may draft, so the brief guard allows it. */
 const DRAFT_PHASE = "draft";
 /** The first line of a planner's draft reply, and of a review's. */
 const DRAFT_STATUS = {
@@ -4689,7 +4689,7 @@ const code = (text) => `\`${text}\``;
 function planningMarkdown(runtime, models) {
 	const cmd = actionCommand(runtime, PLANNING);
 	const cont = actionCommand(runtime, CONTINUE);
-	const kickOff = actionCommand(runtime, KICK_OFF);
+	const brief = actionCommand(runtime, BRIEF);
 	const args = runtime === "codex" ? `Argument: the user's message after ${code(cmd)}.` : "Argument: `$ARGUMENTS`.";
 	const ask = runtime === "claude" ? `with the ${CLAUDE_QUESTION_TOOL} tool` : "in one message, numbered, with lettered options";
 	const deep = code(plannerName("deep"));
@@ -4736,7 +4736,7 @@ When one of these agents is not installed, do the step yourself with bounded rea
 | --- | --- |
 | ${code(KANEO_ITEM)} with a working MCP | Tickets become Kaneo epics and stories, as the ${code(KANEO_SKILL)} skill says. |
 | ${code(CONTINUE)} | Stories are cut to run in parallel waves; the report names ${code(`${cont} ${PARALLEL_WAVE}`)}. |
-| ${code(KICK_OFF)} | The report offers ${code(`${kickOff} <EPIC-ID>`)} to prepare a brief for a fresh session. |
+| ${code(BRIEF)} | The report offers ${code(`${brief} <EPIC-ID>`)} to prepare a brief for a fresh session. |
 | ${code(LADDER_ITEM)} | Code facts come from ${fast}. |
 
 A missing item costs nothing: say in one line what it would add, then go on.
@@ -4825,7 +4825,7 @@ In plain words: what will be built, the epics, the waves and the widest wave's s
 
 - ${code(`${cont} ${PARALLEL_WAVE}`)} builds the next wave of an epic in parallel;
 - ${code(`${cont} parallel <N>`)} works up to N tickets at once, ${code(cont)} one at a time;
-- ${code(`${kickOff} <EPIC-ID>`)} prepares a brief that works a whole epic in a fresh session.
+- ${code(`${brief} <EPIC-ID>`)} prepares a brief that works a whole epic in a fresh session.
 
 With none installed, say how to work the tickets by hand from the store.
 
@@ -5817,33 +5817,33 @@ function continueOps(runtime, project, config) {
 /** How the skill shows the home directory. */
 const HOME_SHORTHAND = "~";
 /**
-* `kickOffDir()` as a shell path, for a committed project skill that other machines run: it names
+* `briefsDir()` as a shell path, for a committed project skill that other machines run: it names
 * no one's state directory.
 */
-const PORTABLE_BRIEF_DIR = "${XDG_STATE_HOME:-~/.local/state}/agent-config/kick-off";
+const PORTABLE_BRIEF_DIR = "${XDG_STATE_HOME:-~/.local/state}/agent-config/briefs";
 /**
 * The brief folder as the skill shows it: portable in a project, and under the home directory it
 * reads `~/...`.
 */
 function briefDirText(project) {
 	if (project) return PORTABLE_BRIEF_DIR;
-	const dir = kickOffDir();
+	const dir = briefsDir();
 	const root = home();
 	return dir.startsWith(`${root}/`) ? `${HOME_SHORTHAND}${dir.slice(root.length)}` : dir;
 }
 /** Claude only: the guard that keeps phase rungs and the brief structure honest. */
-function kickOffGuardOps(project) {
-	return guardHookOps(project, KICK_OFF_GUARD_FILE, KICK_OFF_GUARD_MATCHER, "kick-off-guard hook script", `PreToolUse hook (${KICK_OFF_GUARD_MATCHER}) kick-off guard`);
+function briefGuardOps(project) {
+	return guardHookOps(project, BRIEF_GUARD_FILE, BRIEF_GUARD_MATCHER, "brief-guard hook script", `PreToolUse hook (${BRIEF_GUARD_MATCHER}) brief guard`);
 }
-function kickOffOps(runtime, project, config) {
+function briefOps(runtime, project, config) {
 	const tiers = config.tiers[runtime];
-	const content = kickOffMarkdown(runtime, {
+	const content = briefMarkdown(runtime, {
 		fast: modelName(runtime, tiers),
 		balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
 		deep: modelName(runtime, tiers, tiers.deep.effort, "deep")
 	}, briefDirText(project));
-	const ops = actionOps(runtime, project, KICK_OFF, content, "kick-off");
-	if (runtime === "claude") ops.push(...kickOffGuardOps(project));
+	const ops = actionOps(runtime, project, BRIEF, content, "brief");
+	if (runtime === "claude") ops.push(...briefGuardOps(project));
 	return ops;
 }
 /** What the planner agents may use: read the repository and run commands, never edit it. */
@@ -5906,12 +5906,12 @@ const CATALOG = [
 		ops: (entry, runtime, config) => continueOps(runtime, entry.project, config)
 	},
 	{
-		id: KICK_OFF,
-		title: "Kick off a Kaneo epic",
-		description: "manual /kick-off action that diagnoses what a Kaneo epic is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
+		id: BRIEF,
+		title: "Brief a Kaneo epic for a fresh session",
+		description: "manual /brief action that diagnoses what a Kaneo epic is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
 		settings: [],
 		discover: () => ({}),
-		ops: (entry, runtime, config) => kickOffOps(runtime, entry.project, config)
+		ops: (entry, runtime, config) => briefOps(runtime, entry.project, config)
 	},
 	{
 		id: PLANNING,
@@ -6083,11 +6083,16 @@ function loadConfig() {
 	});
 	return config;
 }
+/**
+* Catalog items saved under their old id. Only the saved entry is renamed: the manifest keeps the
+* old item's records, which a full re-apply undoes as retired while it installs the new ones.
+*/
+const RENAMED_ITEMS = { "kick-off": "brief" };
 /** A saved catalog entry, or nothing when it names an unknown item or is malformed. */
 function catalogEntry(raw) {
 	if (!raw || typeof raw !== "object") return [];
 	const e = raw;
-	const item = typeof e.item === "string" ? catalogItem(e.item) : void 0;
+	const item = typeof e.item === "string" ? catalogItem(RENAMED_ITEMS[e.item] ?? e.item) : void 0;
 	if (!item) return [];
 	if (e.project !== void 0 && (typeof e.project !== "string" || !isAbsolute(e.project) || item.userOnly)) return [];
 	const settings = {};

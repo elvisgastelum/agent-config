@@ -135,7 +135,7 @@ describe("planningMarkdown", () => {
 
   test("names the next commands in each runtime's form", () => {
     expect(planningMarkdown("codex", MODELS)).toContain("`$continue parallel-wave`");
-    expect(planningMarkdown("pi", MODELS)).toContain("`/kick-off <EPIC-ID>`");
+    expect(planningMarkdown("pi", MODELS)).toContain("`/brief <EPIC-ID>`");
   });
 });
 

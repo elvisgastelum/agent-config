@@ -86,11 +86,18 @@ export function loadConfig(): Config {
   return config;
 }
 
+/**
+ * Catalog items saved under their old id. Only the saved entry is renamed: the manifest keeps the
+ * old item's records, which a full re-apply undoes as retired while it installs the new ones.
+ */
+const RENAMED_ITEMS: Record<string, string> = { "kick-off": "brief" };
+
 /** A saved catalog entry, or nothing when it names an unknown item or is malformed. */
 function catalogEntry(raw: unknown): CatalogEntry[] {
   if (!raw || typeof raw !== "object") return [];
   const e = raw as Partial<CatalogEntry>;
-  const item = typeof e.item === "string" ? catalogItem(e.item) : undefined;
+  const item =
+    typeof e.item === "string" ? catalogItem(RENAMED_ITEMS[e.item] ?? e.item) : undefined;
   if (!item) return [];
   if (
     e.project !== undefined &&

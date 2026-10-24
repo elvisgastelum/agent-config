@@ -30,14 +30,14 @@ export function continueCommand(runtime: Runtime): string {
 }
 
 const DESCRIPTION =
-  "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one. With `parallel-wave`, build the next wave of an epic the kick-off way and explain the result.";
+  "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one. With `parallel-wave`, build the next wave of an epic the way a brief works it and explain the result.";
 
 export const ARGUMENT_HINT = `[parallel [n] | ${PARALLEL_WAVE}]`;
 
 /** Models the action names: fast for cheap agents, balanced for workers, deep for wave plans. */
 export type ContinueModels = LoopModels;
 
-/** In parallel-wave mode the kick-off phases name these instead of a brief's placeholders. */
+/** In parallel-wave mode the brief's phases name these instead of a brief's placeholders. */
 const WAVE_BRANCH = "<integration branch>";
 const WAVE_REVIEW = "the review routing above";
 
@@ -98,7 +98,7 @@ ${args} Read them before doing anything else. Only their first line picks the mo
 
 If the first line holds anything other than \`parallel\` (optionally followed by a positive integer) or \`${PARALLEL_WAVE}\`, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel sections.
 
-A brief (such as the one the kick-off action copies) scopes the run: take tickets only from its queue, in its order, and follow its steps wherever they differ from the flows below. Keep working through its queue until it says to stop.
+A brief (such as the one the brief action copies) scopes the run: take tickets only from its queue, in its order, and follow its steps wherever they differ from the flows below. Keep working through its queue until it says to stop.
 
 ## Save context: cheap agents do the reading and the clerical work
 
@@ -185,7 +185,7 @@ Stop the loop and report when a conflict cannot be resolved with confidence, che
 
 ## Parallel-wave mode
 
-Goal: build the next wave of one epic, every story that can start now, all at once and the way the kick-off action works an epic; merge them one by one; then explain what changed at the user's level. One wave per run.
+Goal: build the next wave of one epic, every story that can start now, all at once and the way the brief action works an epic; merge them one by one; then explain what changed at the user's level. One wave per run.
 
 ### 1. Pick the epic
 
@@ -200,9 +200,9 @@ Goal: build the next wave of one epic, every story that can start now, all at on
 3. The first wave is this run's work, and its size is the parallel limit. A wave of one story runs the single-ticket flow, built through the phases in step 3. With no story ready, report the blockers and stop.
 4. Show the waves, the integration branch and the merge order before creating anything.
 
-### 3. Build the wave the kick-off way
+### 3. Build the wave the way a brief works it
 
-When the epic has a kick-off brief, \`${briefDir}/<EPIC-ID>.md\`, its integration branch, review routing and gaps apply. Without one, the integration branch is \`dev\` when \`origin/dev\` exists and the default branch otherwise, and reviews are routed by risk (${ROUTED_REVIEW}).
+When the epic has a brief, \`${briefDir}/<EPIC-ID>.md\`, its integration branch, review routing and gaps apply. Without one, the integration branch is \`dev\` when \`origin/dev\` exists and the default branch otherwise, and reviews are routed by risk (${ROUTED_REVIEW}).
 
 Run parallel mode steps 2 to 5 with the wave as the picked tickets, and these changes:
 

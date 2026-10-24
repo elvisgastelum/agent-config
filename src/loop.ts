@@ -1,4 +1,4 @@
-// How one ticket is built between its branch and its PR, shared by the kick-off brief and the
+// How one ticket is built between its branch and its PR, shared by the brief action and the
 // /continue parallel-wave mode: deep plans and risk calls, cheap edits, risk-routed reviews.
 
 import { COMMIT_WRITER } from "./commit.ts";
@@ -25,12 +25,12 @@ const FAST_EDITOR = agentName("edit", "fast");
 const BALANCED_EDITOR = agentName("edit", "balanced");
 const DEEP_EDITOR = agentName("edit", "deep");
 
-/** Kick-off's recommended review routing: the rung follows the diff's risk. */
+/** The brief's recommended review routing: the rung follows the diff's risk. */
 export const ROUTED_REVIEW = `none and low risk: ${agent(BALANCED_READER)}; medium and high: ${agent(DEEP_READER)}`;
 
 /**
  * The phases one ticket goes through between its branch and its PR: plan, edit, risk, review and
- * fix. The kick-off brief numbers them inside its loop; /continue parallel-wave hands them to
+ * fix. The brief numbers them inside its loop; /continue parallel-wave hands them to
  * every worker.
  */
 export function ticketPhases(branch: string, review: string): string[] {
