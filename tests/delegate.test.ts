@@ -229,6 +229,43 @@ test("pi gets read tools for reads, and bash for edits only with --verify", () =
   );
 });
 
+test("explore, research and review run their agents with read-only tools per runtime", () => {
+  expect(run(["delegate", "explore", "--runtime", "claude", "map it"]).code).toBe(0);
+  run(["delegate", "research", "--runtime", "claude", "find it"]);
+  run(["delegate", "review", "--runtime", "claude", "--tier", "deep", "review it"]);
+  run(["delegate", "research", "--runtime", "codex", "find it"]);
+  run(["delegate", "review", "--runtime", "codex", "review it"]);
+  run(["delegate", "explore", "--runtime", "pi", "map it"]);
+  run(["delegate", "review", "--runtime", "pi", "review it"]);
+  const [explore, research, review, codexResearch, codexReview, piExplore, piReview] = calls();
+  expect(explore?.args).toEqual(expect.arrayContaining(["--agent", "ladder-explorer-fast"]));
+  expect(explore?.args.some((a) => a.startsWith("Bash") || a === "Edit")).toBe(false);
+  expect(research?.args).toEqual(
+    expect.arrayContaining(["--agent", "ladder-researcher-fast", "WebSearch", "WebFetch"]),
+  );
+  expect(review?.args).toEqual(
+    expect.arrayContaining(["--agent", "ladder-reviewer-deep", "Bash(git diff:*)"]),
+  );
+  expect(review?.args).not.toContain("Bash");
+  expect(review?.args).not.toContain("--permission-mode");
+  expect(codexResearch?.args.slice(0, 2)).toEqual(["--search", "exec"]);
+  expect(codexResearch?.args).toEqual(expect.arrayContaining(["-s", "read-only"]));
+  expect(codexResearch?.stdin).toContain("You are a researcher on the model ladder");
+  expect(codexReview?.args).toEqual(expect.arrayContaining(["-s", "read-only"]));
+  expect(codexReview?.args).not.toContain("--search");
+  expect(piExplore?.args).toEqual(expect.arrayContaining(["--tools", "read,grep,find,ls"]));
+  expect(piReview?.args).toEqual(expect.arrayContaining(["--tools", "read,grep,find,ls,bash"]));
+});
+
+test("opencode refuses a reviewer whose shell is no longer limited", () => {
+  const agent = join(dir, ".config/opencode/agents/ladder-reviewer-fast.md");
+  writeFileSync(agent, readFileSync(agent, "utf8").replace('    "*": deny\n', ""));
+  const res = run(["delegate", "review", "--runtime", "opencode", "--no-climb", "--json", "q"]);
+  expect(res.code).toBe(1);
+  expect(JSON.parse(res.stdout).attempts[0].error).toContain("no longer denies edit and bash");
+  expect(calls()).toHaveLength(0);
+});
+
 test("an edit that climbs tells the next rung which files are already changed", () => {
   const work = join(dir, "work");
   mkdirSync(work);
@@ -288,6 +325,10 @@ test("usage errors exit 2 without starting an agent", () => {
   expect(run(["delegate", "read", "--runtime", "claude", "--tier", "huge", "q"]).code).toBe(2);
   expect(run(["delegate", "read", "--runtime", "claude", "-"], {}, "").code).toBe(2);
   expect(run(["delegate", "read", "--runtime", "claude", "--verify", "x", "q"]).code).toBe(2);
+  expect(run(["delegate", "review", "--runtime", "claude", "--verify", "x", "q"]).code).toBe(2);
+  expect(run(["delegate", "write", "--runtime", "claude", "q"]).stderr).toContain(
+    "read, explore, research, edit, review",
+  );
   expect(
     run(["delegate", "read", "--runtime", "claude", "--cwd", join(dir, "nope"), "q"]).stderr,
   ).toContain("is not a directory");

@@ -2595,7 +2595,24 @@ const TIERS = [
 	"balanced",
 	"deep"
 ];
-const ROLES = ["read", "edit"];
+/** What a ladder agent does: answer a question, map code, research the web, write, or review. */
+const ROLES = [
+	"read",
+	"explore",
+	"research",
+	"edit",
+	"review"
+];
+/** The word each role puts in its agents' names: ladder-explorer-fast, ladder-reviewer-deep. */
+const ROLE_STEMS = {
+	read: "read",
+	explore: "explorer",
+	research: "researcher",
+	edit: "edit",
+	review: "reviewer"
+};
+/** The deep agent that leads one unit of work and hands its reads and writes to the ladder. */
+const ORCHESTRATOR = "ladder-orchestrator";
 const EFFORTS = [
 	"low",
 	"medium",
@@ -2663,7 +2680,10 @@ const DEFAULT_REVIEW_TIERS = {
 	"review-refuter": "balanced"
 };
 function agentName(role, tier) {
-	return `ladder-${role}-${tier}`;
+	return `ladder-${ROLE_STEMS[role]}-${tier}`;
+}
+function isRole(value) {
+	return ROLES.includes(value);
 }
 function isTier(value) {
 	return TIERS.includes(value);
@@ -4858,15 +4878,25 @@ const HOW_TO_CALL = {
 	codex: "a spawned sub-agent with the ladder agent name as its role (for example `ladder-read-fast`)",
 	pi: "the subagent tool with the ladder agent name (for example `ladder-read-fast`)"
 };
+const ROLE_COLUMNS = {
+	read: "Reads",
+	explore: "Explores",
+	research: "Research",
+	edit: "Edits",
+	review: "Reviews"
+};
 function agentTable(models) {
+	const row = (tier) => `| ${tier} | ${ROLES.map((r) => `\`${agentName(r, tier)}\``).join(" | ")} | ${models[tier]} |`;
 	return [
-		"| Rung | Reads | Edits | Model |",
-		"|------|-------|-------|-------|",
-		`| fast | \`${agentName("read", "fast")}\` | \`${agentName("edit", "fast")}\` | ${models.fast} |`,
-		`| balanced | \`${agentName("read", "balanced")}\` | \`${agentName("edit", "balanced")}\` | ${models.balanced} |`,
-		`| deep | \`${agentName("read", "deep")}\` | \`${agentName("edit", "deep")}\` | ${models.deep} |`
+		`| Rung | ${ROLES.map((r) => ROLE_COLUMNS[r]).join(" | ")} | Model |`,
+		`|------|${ROLES.map(() => "------|").join("")}-------|`,
+		row("fast"),
+		row("balanced"),
+		row("deep")
 	].join("\n");
 }
+/** The rung a reviewer runs on for each risk: the riskier the change, the smarter the reviewer. */
+const REVIEW_BY_RISK = `none and low risk: \`${agentName("review", "balanced")}\`; medium and high: \`${agentName("review", "deep")}\`; \`${agentName("review", "fast")}\` only when the user approved it`;
 function skillMarkdown(runtime, models, minLines) {
 	return `---
 name: ${SKILL_NAME}
@@ -4897,6 +4927,14 @@ Keep reads inline when:
 - the file is short and you need it once;
 - the question *is* the reasoning (root cause of a bug, design trade-off, security or concurrency review). Delegate the gathering; keep the judgment.
 
+## Exploration
+
+Before working in code you do not know yet, have an explorer map it: entry points, the flow between modules, where to change what, and the tests that cover it. Start at **fast**; start at **balanced** when the map crosses several modules. The explorer's map replaces reading the files yourself; read only the exact lines you then edit.
+
+## Research
+
+When the work needs facts from outside the repository (library docs, API behavior, release notes, error messages), ask a researcher one exact question. It searches the web, prefers primary sources, and replies with only the answer and its source URLs. Start at **fast**; **balanced** when sources disagree or the question needs several hops.
+
 ## Edits
 
 Delegate an edit when you can state the spec in a few lines and point at a reference file to copy:
@@ -4907,9 +4945,17 @@ Delegate an edit when you can state the spec in a few lines and point at a refer
 
 Keep in the main session: design decisions, debugging, anything touching auth, permissions, data migrations or concurrency, and the final verification of every delegated edit.
 
+## Reviews
+
+Every change another agent wrote gets a reviewer before it ships, on the rung its risk calls for: ${REVIEW_BY_RISK}. Risk is none for docs and comments, low for tests and isolated internals, medium for behavior other code calls, high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions. The reviewer reads the diff and returns findings (path:line, severity, fix, the fix's edit rung) or none; hand each finding to an edit agent, then review again. You still own the verdict: run the checks yourself before you call the work done.
+
+## Orchestrating a unit of work
+
+A unit of work that needs many reads and edits (a ticket in its own worktree, a parallel worker's share) goes to \`${ORCHESTRATOR}\` (${models.deep}). It plans, routes every read, exploration, research, edit and review to the cheapest capable ladder agent, climbs when a reply falls short, and reviews the result; it does not do the I/O itself. Give it the unit's goal, its criteria, its working directory, and the review routing.
+
 ## Handoff
 
-Reads:
+Reads, explorations and research:
 
 \`\`\`
 Question: <one question>
@@ -4928,6 +4974,14 @@ Verify: <one focused command>
 Previous attempt: <only when escalating: the lower rung's STATUS and failure excerpt>
 \`\`\`
 
+Reviews:
+
+\`\`\`
+Diff: <git diff range, e.g. origin/main...HEAD>
+Criteria: <what the change must do>
+Risk: <none | low | medium | high, with the reason>
+\`\`\`
+
 Every ladder agent replies with \`STATUS: done | partial | escalate\`. Edit agents never paste the code they wrote; check \`git diff --stat\` and run the verify command yourself.
 
 ## When you cannot spawn agents
@@ -4936,11 +4990,14 @@ If you are yourself a subagent or a parallel worker without an agent tool, run t
 
 \`\`\`sh
 agent-config delegate read --runtime ${runtime} "<the read handoff above>"
+agent-config delegate explore --runtime ${runtime} --cwd <worktree> "<what to map>"
+agent-config delegate research --runtime ${runtime} "<one exact question>"
+agent-config delegate review --runtime ${runtime} --tier deep "<the review handoff above>"
 agent-config delegate edit --runtime ${runtime} --tier balanced --verify "<verify command>" "<the edit handoff above>"
 printf '%s' "<long handoff>" | agent-config delegate read --runtime ${runtime} -
 \`\`\`
 
-It runs the ladder agent headlessly, climbs fast → balanced → deep by itself on \`partial\`, \`escalate\` or failure, and prints only the final reply (rung and timing go to stderr; \`--json\` for structured output, \`--no-climb\` to stay on one rung, \`-\` to read the task from stdin). Edits may run only the \`--verify\` command; without it the edit agent gets no shell. Exit codes: 0 done, 3 still partial after the last rung, 1 failed, 4 refused because you are already running inside a delegated agent: then do the work yourself or reply \`STATUS: escalate\`. Ladder agents never call it.
+It runs the ladder agent headlessly, climbs fast → balanced → deep by itself on \`partial\`, \`escalate\` or failure, and prints only the final reply (rung and timing go to stderr; \`--json\` for structured output, \`--no-climb\` to stay on one rung, \`-\` to read the task from stdin). Edits may run only the \`--verify\` command; without it the edit agent gets no shell. Reviews may run only read-only git commands where the runtime can limit the shell, and researchers get web search and fetch. Exit codes: 0 done, 3 still partial after the last rung, 1 failed, 4 refused because you are already running inside a delegated agent: then do the work yourself or reply \`STATUS: escalate\`. Ladder agents never call it.
 
 ## Climbing
 
@@ -4960,16 +5017,18 @@ function instructionsBlock(runtime, minLines) {
 Reads and edits go to the cheapest capable model; this session keeps the reasoning. Use the \`${SKILL_NAME}\` skill before reading many files, any file over about ${minLines} lines that you will not edit, logs or test output, and before writing boilerplate, tests or mechanical edits. Call ladder agents with ${HOW_TO_CALL[runtime]}.
 
 - Reads start at \`ladder-read-fast\`; edits start at \`ladder-edit-fast\` for pattern work and \`ladder-edit-balanced\` for new logic. Context offload is a named delegation reason.
+- Map unfamiliar code with \`ladder-explorer-fast\`, ask web questions of \`ladder-researcher-fast\`, review delegated changes with \`ladder-reviewer-balanced\` (\`ladder-reviewer-deep\` for medium or high risk), and hand a whole unit of work (a ticket in a worktree) to \`${ORCHESTRATOR}\`.
 - Climb one rung (fast → balanced → deep) only when a reply is \`partial\` or \`escalate\` or fails verification; after deep fails, do it yourself.
 - Before editing, read the exact lines yourself with offset/limit. Keep debugging, design and security, data or concurrency changes in this session, and verify every delegated edit.
-- Without an agent tool (for example as a parallel subagent), use \`agent-config delegate read|edit --runtime ${runtime} "<task>"\` from the shell instead.`;
+- Without an agent tool (for example as a parallel subagent), use \`agent-config delegate read|explore|research|edit|review --runtime ${runtime} "<task>"\` from the shell instead.`;
 }
+const NO_NESTING = "- You are already a ladder agent: never delegate further (no subagents, no `agent-config delegate`).";
 const ROLE_BODY = {
 	read: `You are a read-only worker on the model ladder. The parent session delegated a question so that file contents stay out of its context. Answer that question and nothing else.
 
 Rules:
 - Read, search and summarize only. Never edit files, never run commands that change anything.
-- You are already a ladder agent: never delegate further (no subagents, no \`agent-config delegate\`).
+${NO_NESTING}
 - Cite evidence as \`path:line\` using the line numbers your read tool shows. Never estimate a line number.
 - Quote at most 5 lines per excerpt, and only when the exact text matters. Never paste whole files.
 - Keep the whole reply under 300 words unless the parent set another budget.
@@ -4981,6 +5040,43 @@ STATUS: done | partial | escalate
 ANSWER:
 - <terse bullet with path:line>
 GAPS: <what you could not determine, or "none">`,
+	explore: `You are a read-only explorer on the model ladder. The parent session is about to work in code it does not know yet and delegated the mapping so that file contents stay out of its context. Map exactly the area it asked about.
+
+Rules:
+- Read, search and summarize only. Never edit files, never run commands that change anything.
+${NO_NESTING}
+- Find the entry points, follow the flow between modules, and note where each part of the asked change would go and which tests cover it.
+- Cite evidence as \`path:line\` using the line numbers your read tool shows. Never estimate a line number.
+- Quote at most 5 lines per excerpt, and only when the exact text matters. Never paste whole files.
+- Keep the whole reply under 500 words unless the parent set another budget.
+- Map; do not decide. Leave design choices, root causes and risk calls to the parent, and name them as open questions.
+
+Reply in exactly this shape:
+
+STATUS: done | partial | escalate
+MAP:
+- <entry point, module or flow step with path:line>
+CHANGE POINTS:
+- <where each part of the asked change goes, with path:line>
+TESTS: <test files that cover the area, or "none found">
+GAPS: <what you could not determine, or "none">`,
+	research: `You are a researcher on the model ladder. The parent session needs facts from outside the repository and delegated the search so that web pages stay out of its context. Answer its exact question and nothing else.
+
+Rules:
+- Search the web and read sources; you may read repository files only to understand the question. Never edit files.
+${NO_NESTING}
+- Prefer primary sources: official docs, specs, changelogs, source code, maintainers' issues. Note each source's date or version when it matters.
+- Give the exact answer the parent needs (the API, flag, version, value or steps), not a survey. Quote at most 5 lines per source.
+- When sources disagree or are older than the version in question, say so instead of choosing silently.
+- Keep the whole reply under 300 words unless the parent set another budget.
+
+Reply in exactly this shape:
+
+STATUS: done | partial | escalate
+ANSWER:
+- <the fact, with its source URL>
+SOURCES: <URLs used>
+GAPS: <what you could not confirm, or "none">`,
 	edit: `You are an edit worker on the model ladder. The parent session gives you a spec, the allowed edit surfaces, a reference file whose pattern to follow, and a verify command.
 
 Rules:
@@ -4988,7 +5084,7 @@ Rules:
 - Write only inside the allowed edit surfaces. If the change needs another file, stop and say so in STATUS.
 - Run the verify command once after the change. If it fails, fix and run it once more. If it still fails, stop.
 - Never commit, push, install dependencies, or run repository-wide formatters or generators.
-- You are already a ladder agent: never delegate further (no subagents, no \`agent-config delegate\`).
+${NO_NESTING}
 - Never paste the code you wrote into your reply. The parent reads the diff.
 
 Reply in exactly this shape:
@@ -4997,15 +5093,40 @@ STATUS: done | partial | escalate
 CHANGED:
 - <path> (+added/-removed lines)
 VERIFY: <command>: <pass | fail, with a one-line excerpt>
-NOTES: <deviations from the spec or assumptions, or "none">`
+NOTES: <deviations from the spec or assumptions, or "none">`,
+	review: `You are a reviewer on the model ladder. Another agent implemented a change; the parent gives you its diff range, its criteria and its risk. Judge whether the change is correct and complete.
+
+Rules:
+- Read only: read files and run read-only git commands (\`git diff\`, \`git log\`, \`git show\`, \`git status\`). Never edit files, never run anything that changes the repository.
+${NO_NESTING}
+- Check the diff against the criteria: wrong behavior, missed cases, broken callers, missing or weak tests, security and data risks, and docs that no longer match.
+- Report only real defects the diff causes, each with \`path:line\`, severity (blocker | major | minor), the fix, and its edit rung (fast for pattern work, balanced for new logic). Style preferences are not findings.
+- Never estimate a line number; cite what your read tool shows.
+- Keep the whole reply under 400 words unless the parent set another budget.
+
+Reply in exactly this shape:
+
+STATUS: done | partial | escalate
+VERDICT: approve | changes
+FINDINGS:
+- <severity> <path:line>: <defect>. Fix: <fix> (rung: fast | balanced)
+GAPS: <what you could not check, or "none">`
 };
 const TIER_NOTE = {
 	fast: "You are the fast rung. If the task turns out to need multi-step reasoning, reply STATUS: escalate early: that costs less than a wrong answer.",
 	balanced: "You are the balanced rung. When the parent includes a previous attempt, avoid repeating its failure.",
 	deep: "You are the deep rung: cheaper rungs already failed this task. Read the previous attempt the parent included, be thorough, and still keep the reply short."
 };
+const ROLE_SUMMARY = {
+	read: "Read-only: answers questions about many or large files, logs and test output with terse path:line bullets, so their contents stay out of the main context.",
+	explore: "Read-only: maps unfamiliar code (entry points, flows, change points, covering tests) with path:line bullets before work starts there.",
+	research: "Searches the web for one exact question (docs, APIs, versions, errors) and returns only the answer with its source URLs.",
+	edit: "Writes code from a short spec and a reference file (tests, boilerplate, config, mechanical edits) and runs one verify command.",
+	review: "Read-only: reviews a diff another agent wrote against its criteria and risk, and returns findings with path:line, severity, fix and edit rung."
+};
 function agentDescription(role, tier, model) {
-	return `Model ladder ${role} agent (${model || "session model"}). ${role === "read" ? "Read-only: answers questions about many or large files, logs and test output with terse path:line bullets, so their contents stay out of the main context." : "Writes code from a short spec and a reference file (tests, boilerplate, config, mechanical edits) and runs one verify command."} ${{
+	const what = ROLE_SUMMARY[role];
+	return `Model ladder ${role} agent (${model || "session model"}). ${what} ${{
 		fast: "First rung.",
 		balanced: "Second rung: use after the fast rung replies partial/escalate or for multi-step work.",
 		deep: "Last rung: use only after the balanced rung failed."
@@ -5013,6 +5134,67 @@ function agentDescription(role, tier, model) {
 }
 function agentBody(role, tier) {
 	return `${ROLE_BODY[role]}\n\n${TIER_NOTE[tier]}\n`;
+}
+function orchestratorDescription(model) {
+	return `Model ladder orchestrator (${model || "session model"}, always the deep rung). Leads one unit of work, such as a ticket in its own worktree: plans it, hands every read, exploration, research, edit and review to the cheapest capable ladder agent, climbs when a reply falls short, and reviews the final result itself.`;
+}
+/** The orchestrator's prompt: the deep lead that decides and reviews while ladder agents do the I/O. */
+function orchestratorBody(runtime, models) {
+	const shell = (role, extra = "") => `\`agent-config delegate ${role} --runtime ${runtime} --cwd <your worktree>${extra} "<handoff>"\``;
+	return `You are the orchestrator on the model ladder: the deep rung (${models.deep}), leading one unit of work, usually one ticket in its own worktree. You are expensive. Your job is judgment: planning, routing, risk calls and the final review. Reading files and writing code is I/O, and I/O goes to cheaper ladder agents.
+
+## Strong opinions
+
+- **Delegate the I/O, keep the judgment.** Never read a whole file to understand it, never scan logs or test output yourself, never write more than a few lines yourself. Each of those goes to a ladder agent and comes back as a short answer.
+- **Cheapest rung first.** Start every read, exploration, research and pattern edit on fast; new logic starts on balanced. Climb one rung only on \`STATUS: partial\` or \`escalate\`, a failed verify, or an answer that contradicts what you already know. After deep fails, do that one step yourself.
+- **Map before you plan.** In code you have not seen, have an explorer map it first; plan from the map.
+- **Ask, do not guess, about the outside world.** Library behavior, API details, versions and error messages go to a researcher with one exact question.
+- **Review with a reviewer whose intelligence matches the risk.** Every diff gets a ladder reviewer before it ships: ${REVIEW_BY_RISK}. Classify the risk yourself from \`git diff --stat\` and the plan: none for docs and comments, low for tests and isolated internals, medium for behavior other code calls, high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions.
+- **You are the top-level reviewer.** A reviewer's approval informs you; it does not replace you. Before you report done, run every verify command and the project's checks yourself, read \`git diff --stat\`, and read the exact lines of anything a finding or a failed check points at.
+- **Hand off by reference.** Give agents paths, criteria and commands, never pasted file contents. Each handoff starts with its phase line when the caller gave you one (\`Phase: plan\`).
+
+## The ladder
+
+| Work | Agent | Starts on |
+| --- | --- | --- |
+| Map unfamiliar code | \`ladder-explorer-<rung>\` | fast (balanced across several modules) |
+| Facts from the web | \`ladder-researcher-<rung>\` | fast |
+| Questions about files, logs, test and CI output | \`ladder-read-<rung>\` | fast |
+| Edits from a spec and a reference file | \`ladder-edit-<rung>\` | fast for pattern work, balanced for new logic |
+| Review of a diff | \`ladder-reviewer-<rung>\` | by risk, as above |
+
+Rungs: fast ${models.fast}, balanced ${models.balanced}, deep ${models.deep}.
+
+## How to reach them
+
+Call the agent by name with ${HOW_TO_CALL[runtime].replace("ladder-read-fast", "ladder-explorer-fast")} when you have such a tool. When you do not (a sub-agent usually cannot start agents), use the shell, from your worktree:
+
+- explore: ${shell("explore")}
+- research: ${shell("research")}
+- read: ${shell("read")}
+- edit: ${shell("edit", " --tier <fast|balanced> --verify \"<verify command>\"")}
+- review: ${shell("review", " --tier <rung for the risk>")}
+
+\`agent-config delegate\` runs the agent headlessly, climbs fast → balanced → deep by itself (\`--no-climb\` keeps one rung), and prints only the final reply; \`-\` reads a long handoff from stdin. Exit code 4 means you are already inside a delegated agent: then do the step yourself. When neither works, say so in your report and do the work with bounded reads (line ranges, \`--stat\`, \`tail\`).
+
+## Handoffs
+
+- Explore, read, research: \`Question\`, \`Scope\`, \`Answer shape\`, \`Budget\`.
+- Edit: \`Spec\`, \`Allowed edit surfaces\`, \`Reference\`, \`Verify\`, and \`Previous attempt\` when climbing.
+- Review: \`Diff\` (the git range), \`Criteria\`, \`Risk\` with its reason.
+
+## Loop
+
+1. Explore what the work touches; research what the repository cannot tell you.
+2. Plan: a task list, each task with its spec, allowed paths, reference file, verify command and edit rung.
+3. Edit each task on its rung and run its verify command yourself.
+4. Classify the risk and review on the matching rung. Hand each finding to an edit agent on the rung it names, verify, and review again (back to risk when a fix changed what the diff touches). Stop and report after 3 review rounds that still have findings.
+5. Final review: the checks pass, the diff matches the criteria, nothing outside the allowed paths changed.
+
+Follow the caller's own steps (commit, push, PR, ticket updates) wherever they are more specific than this loop. Never nest an orchestrator: you are the only one for this unit of work.
+
+Report in at most ten lines: what was done, the risk and review rounds, the checks run with their results, which rungs did the work (and every climb), and anything blocked or left open.
+`;
 }
 //#endregion
 //#region src/runtimes.ts
@@ -5076,6 +5258,109 @@ const PI_THINKING = {
 	medium: "medium",
 	high: "high"
 };
+/** Read-only git commands a reviewer may run where the runtime can limit the shell. */
+const REVIEW_GIT_COMMANDS = [
+	"git diff",
+	"git log",
+	"git show",
+	"git status"
+];
+/** Each role's tools in Claude Code's names. Edits add Bash; reviewers need git to read the diff. */
+const CLAUDE_TOOLS = {
+	read: [
+		"Read",
+		"Grep",
+		"Glob"
+	],
+	explore: [
+		"Read",
+		"Grep",
+		"Glob"
+	],
+	research: [
+		"WebSearch",
+		"WebFetch",
+		"Read",
+		"Grep",
+		"Glob"
+	],
+	edit: [
+		"Read",
+		"Edit",
+		"Write",
+		"Grep",
+		"Glob",
+		"Bash"
+	],
+	review: [
+		"Read",
+		"Grep",
+		"Glob",
+		"Bash"
+	]
+};
+/** Each role's tools in Pi's names. Pi has no web tool and cannot limit bash: researchers and reviewers get it. */
+const PI_TOOLS = {
+	read: [
+		"read",
+		"grep",
+		"find",
+		"ls"
+	],
+	explore: [
+		"read",
+		"grep",
+		"find",
+		"ls"
+	],
+	research: [
+		"read",
+		"grep",
+		"find",
+		"ls",
+		"bash"
+	],
+	edit: [
+		"read",
+		"grep",
+		"find",
+		"ls",
+		"edit",
+		"write",
+		"bash"
+	],
+	review: [
+		"read",
+		"grep",
+		"find",
+		"ls",
+		"bash"
+	]
+};
+/** Roles that never write; Codex runs them in its read-only sandbox. */
+function readOnlyRole(role) {
+	return role !== "edit";
+}
+/** OpenCode permission lines for a role, under `permission:`. */
+function opencodePermissions(role) {
+	switch (role) {
+		case "read":
+		case "explore":
+		case "research": return [
+			"  edit: deny",
+			"  bash: deny",
+			"  task: deny"
+		];
+		case "review": return [
+			"  edit: deny",
+			"  bash:",
+			"    \"*\": deny",
+			...REVIEW_GIT_COMMANDS.map((c) => `    "${c}*": allow`),
+			"  task: deny"
+		];
+		case "edit": return ["  task: deny"];
+	}
+}
 function agentFile(runtime, role, tier, tiers) {
 	const name = agentName(role, tier);
 	const { model, effort } = tiers[tier];
@@ -5083,14 +5368,13 @@ function agentFile(runtime, role, tier, tiers) {
 	const body = agentBody(role, tier);
 	switch (runtime) {
 		case "claude": {
-			const tools = role === "read" ? "Read, Grep, Glob" : "Read, Edit, Write, Grep, Glob, Bash";
 			const lines = [
 				"---",
 				`name: ${name}`,
 				`description: ${yamlString(description)}`
 			];
 			if (model) lines.push(`model: ${model}`);
-			lines.push(`tools: ${tools}`, "---", "", body);
+			lines.push(`tools: ${CLAUDE_TOOLS[role].join(", ")}`, "---", "", body);
 			return {
 				path: join(claudeDir(), "agents", `${name}.md`),
 				content: lines.join("\n")
@@ -5103,9 +5387,7 @@ function agentFile(runtime, role, tier, tiers) {
 				"mode: subagent"
 			];
 			if (model) lines.push(`model: ${model}`);
-			lines.push("permission:");
-			if (role === "read") lines.push("  edit: deny", "  bash: deny");
-			lines.push("  task: deny", "---", "", body);
+			lines.push("permission:", ...opencodePermissions(role), "---", "", body);
 			return {
 				path: join(opencodeDir(), "agents", `${name}.md`),
 				content: lines.join("\n")
@@ -5114,36 +5396,80 @@ function agentFile(runtime, role, tier, tiers) {
 		case "codex": {
 			const lines = [`name = ${JSON.stringify(name)}`, `description = ${JSON.stringify(description)}`];
 			if (model) lines.push(`model = ${JSON.stringify(model)}`);
-			lines.push(`model_reasoning_effort = ${JSON.stringify(effort)}`, `sandbox_mode = ${JSON.stringify(role === "read" ? "read-only" : "workspace-write")}`, `developer_instructions = ${tomlMultiline(body)}`, "");
+			lines.push(`model_reasoning_effort = ${JSON.stringify(effort)}`, `sandbox_mode = ${JSON.stringify(readOnlyRole(role) ? "read-only" : "workspace-write")}`);
+			if (role === "research") lines.push("web_search = \"live\"");
+			lines.push(`developer_instructions = ${tomlMultiline(body)}`, "");
 			return {
 				path: join(codexDir(), "agents", `${name}.toml`),
 				content: lines.join("\n")
 			};
 		}
 		case "pi": {
-			const tools = role === "read" ? [
-				"read",
-				"grep",
-				"find",
-				"ls"
-			] : [
-				"read",
-				"grep",
-				"find",
-				"ls",
-				"edit",
-				"write",
-				"bash"
-			];
 			const lines = [
 				"---",
 				`name: ${name}`,
 				`description: ${yamlString(description)}`
 			];
 			if (model) lines.push(`model: ${model}`);
-			lines.push(`thinking: ${PI_THINKING[effort]}`, "tools:", ...tools.map((t) => `  - ${t}`), "---", "", body);
+			lines.push(`thinking: ${PI_THINKING[effort]}`, "tools:", ...PI_TOOLS[role].map((t) => `  - ${t}`), "---", "", body);
 			return {
 				path: join(piDir(), "agents", `${name}.md`),
+				content: lines.join("\n")
+			};
+		}
+	}
+}
+/** The orchestrator runs on the deep rung with the runtime's full tool set, so it can delegate. */
+function orchestratorFile(runtime, tiers) {
+	const { model, effort } = tiers.deep;
+	const description = orchestratorDescription(model);
+	const body = orchestratorBody(runtime, modelNames(runtime, tiers));
+	switch (runtime) {
+		case "claude": {
+			const lines = [
+				"---",
+				`name: ${ORCHESTRATOR}`,
+				`description: ${yamlString(description)}`
+			];
+			if (model) lines.push(`model: ${model}`);
+			lines.push("---", "", body);
+			return {
+				path: join(claudeDir(), "agents", `${ORCHESTRATOR}.md`),
+				content: lines.join("\n")
+			};
+		}
+		case "opencode": {
+			const lines = [
+				"---",
+				`description: ${yamlString(description)}`,
+				"mode: subagent"
+			];
+			if (model) lines.push(`model: ${model}`);
+			lines.push("---", "", body);
+			return {
+				path: join(opencodeDir(), "agents", `${ORCHESTRATOR}.md`),
+				content: lines.join("\n")
+			};
+		}
+		case "codex": {
+			const lines = [`name = ${JSON.stringify(ORCHESTRATOR)}`, `description = ${JSON.stringify(description)}`];
+			if (model) lines.push(`model = ${JSON.stringify(model)}`);
+			lines.push(`model_reasoning_effort = ${JSON.stringify(effort)}`, `sandbox_mode = "workspace-write"`, `developer_instructions = ${tomlMultiline(body)}`, "");
+			return {
+				path: join(codexDir(), "agents", `${ORCHESTRATOR}.toml`),
+				content: lines.join("\n")
+			};
+		}
+		case "pi": {
+			const lines = [
+				"---",
+				`name: ${ORCHESTRATOR}`,
+				`description: ${yamlString(description)}`
+			];
+			if (model) lines.push(`model: ${model}`);
+			lines.push(`thinking: ${PI_THINKING[effort]}`, "---", "", body);
+			return {
+				path: join(piDir(), "agents", `${ORCHESTRATOR}.md`),
 				content: lines.join("\n")
 			};
 		}
@@ -5278,15 +5604,26 @@ function runtimeOps(runtime, config) {
 	const wanted = config.components.filter((c) => RUNTIME_COMPONENTS[runtime].includes(c));
 	const tiers = config.tiers[runtime];
 	const ops = [];
-	if (wanted.includes("agents")) for (const role of ROLES) for (const tier of TIERS) {
-		const { path, content } = agentFile(runtime, role, tier, tiers);
+	if (wanted.includes("agents")) {
+		for (const role of ROLES) for (const tier of TIERS) {
+			const { path, content } = agentFile(runtime, role, tier, tiers);
+			ops.push({
+				runtime,
+				component: "agents",
+				kind: "file",
+				path,
+				content,
+				label: `${agentName(role, tier)} (${tiers[tier].model || `session model, ${tiers[tier].effort}`})`
+			});
+		}
+		const { path, content } = orchestratorFile(runtime, tiers);
 		ops.push({
 			runtime,
 			component: "agents",
 			kind: "file",
 			path,
 			content,
-			label: `${agentName(role, tier)} (${tiers[tier].model || `session model, ${tiers[tier].effort}`})`
+			label: `${ORCHESTRATOR} (${tiers.deep.model || `session model, ${tiers.deep.effort}`})`
 		});
 	}
 	if (wanted.includes("skill")) ops.push({
@@ -6885,6 +7222,7 @@ function invocation(req, tier, tiers, prompt, scratch) {
 	const task = safePrompt(withVerify(prompt, role === "edit" ? verify : void 0));
 	switch (runtime) {
 		case "claude": {
+			const shell = role === "edit" ? verify ? [`Bash(${verify})`] : [] : role === "review" ? REVIEW_GIT_COMMANDS.map((c) => `Bash(${c}:*)`) : [];
 			const args = [
 				"-p",
 				"--agent",
@@ -6892,18 +7230,7 @@ function invocation(req, tier, tiers, prompt, scratch) {
 				"--output-format",
 				"json",
 				"--allowedTools",
-				...role === "read" ? [
-					"Read",
-					"Grep",
-					"Glob"
-				] : [
-					"Read",
-					"Edit",
-					"Write",
-					"Grep",
-					"Glob",
-					...verify ? [`Bash(${verify})`] : []
-				]
+				...[...CLAUDE_TOOLS[role].filter((t) => t !== "Bash"), ...shell]
 			];
 			if (role === "edit") args.push("--permission-mode", "acceptEdits");
 			if (model) args.push("--model", model);
@@ -6931,13 +7258,14 @@ function invocation(req, tier, tiers, prompt, scratch) {
 		case "codex": {
 			const outFile = join(scratch, "last-message.txt");
 			const args = [
+				...role === "research" ? ["--search"] : [],
 				"exec",
 				"--skip-git-repo-check",
 				"--ephemeral",
 				"-C",
 				cwd,
 				"-s",
-				role === "read" ? "read-only" : "workspace-write",
+				readOnlyRole(role) ? "read-only" : "workspace-write",
 				"-c",
 				`model_reasoning_effort="${effort}"`,
 				"-o",
@@ -6956,20 +7284,7 @@ function invocation(req, tier, tiers, prompt, scratch) {
 				"-p",
 				"--no-session",
 				"--tools",
-				(role === "read" ? [
-					"read",
-					"grep",
-					"find",
-					"ls"
-				] : [
-					"read",
-					"grep",
-					"find",
-					"ls",
-					"edit",
-					"write",
-					...verify ? ["bash"] : []
-				]).join(","),
+				PI_TOOLS[role].filter((t) => t !== "bash" || role !== "edit" || Boolean(verify)).join(","),
 				"--thinking",
 				effort
 			];
@@ -6992,9 +7307,12 @@ function agentFileProblem(runtime, role, tier) {
 	if (!file) return void 0;
 	const fix = `run \`agent-config install model-ladder --runtime ${runtime}\``;
 	if (!existsSync(file)) return `${name} is not installed for ${runtime}; ${fix}`;
-	if (runtime === "opencode" && role === "read") {
+	if (runtime === "opencode" && readOnlyRole(role)) {
 		const text = readFileSync(file, "utf8");
-		if (!/^\s+edit:\s*deny\s*$/m.test(text) || !/^\s+bash:\s*deny\s*$/m.test(text)) return `${name} no longer denies edit and bash (changed since install); ${fix}`;
+		const denies = (line) => line.test(text);
+		const edit = denies(/^\s+edit:\s*deny\s*$/m);
+		const bash = role === "review" ? denies(/^\s+"\*":\s*deny\s*$/m) : denies(/^\s+bash:\s*deny\s*$/m);
+		if (!edit || !bash) return `${name} no longer denies edit and bash (changed since install); ${fix}`;
 	}
 }
 function parseStatus(reply) {
@@ -7162,8 +7480,9 @@ Usage:
   agent-config config              print the saved configuration and its path
   agent-config self-update         update agent-config itself (--dry-run only checks);
                                    \`agent-config update\` and \`agi u\` are the same command
-  agent-config delegate <read|edit> [--tier t] [--runtime r] "<task>"
-                                   run a ladder read or edit headlessly and print only its reply;
+  agent-config delegate <role> [--tier t] [--runtime r] "<task>"
+                                   run a ladder agent headlessly and print only its reply; role is
+                                   read | explore | research | edit | review;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
 
@@ -7575,7 +7894,7 @@ async function main(argv) {
 				return 4;
 			}
 			const role = positionals[1];
-			if (role !== "read" && role !== "edit") throw new UsageError("delegate expects read or edit");
+			if (!role || !isRole(role)) throw new UsageError(`delegate expects one of ${ROLES.join(", ")}`);
 			const tier = values.tier ?? "fast";
 			if (!isTier(tier)) throw new UsageError(`unknown tier "${tier}"`);
 			const verify = values.verify?.trim();

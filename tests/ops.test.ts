@@ -63,6 +63,49 @@ describe("install", () => {
     }
   });
 
+  test("writes explorer, researcher and reviewer rungs and the deep orchestrator", () => {
+    install(config(["claude", "opencode", "codex", "pi"]));
+    const h = box.home;
+    const claude = (name: string) => read(join(h, ".claude/agents", `${name}.md`));
+    expect(claude("ladder-explorer-fast")).toContain("tools: Read, Grep, Glob\n");
+    expect(claude("ladder-researcher-balanced")).toContain(
+      "tools: WebSearch, WebFetch, Read, Grep, Glob\n",
+    );
+    expect(claude("ladder-reviewer-deep")).toContain("model: claude-opus-5-5");
+    expect(claude("ladder-reviewer-deep")).toContain("tools: Read, Grep, Glob, Bash\n");
+    const orchestrator = claude("ladder-orchestrator");
+    expect(orchestrator).toContain("model: claude-opus-5-5");
+    expect(orchestrator).not.toContain("tools:");
+    expect(orchestrator).toContain("agent-config delegate explore --runtime claude");
+    expect(orchestrator).toContain("ladder-reviewer-deep");
+
+    const review = read(join(h, ".config/opencode/agents/ladder-reviewer-balanced.md"));
+    expect(review).toContain('  bash:\n    "*": deny\n    "git diff*": allow');
+    expect(review).toContain("  edit: deny");
+    expect(read(join(h, ".config/opencode/agents/ladder-researcher-fast.md"))).toContain(
+      "  bash: deny",
+    );
+    expect(read(join(h, ".config/opencode/agents/ladder-orchestrator.md"))).not.toContain(
+      "permission:",
+    );
+
+    const research = read(join(h, ".codex/agents/ladder-researcher-fast.toml"));
+    expect(research).toContain('sandbox_mode = "read-only"');
+    expect(research).toContain('web_search = "live"');
+    expect(read(join(h, ".codex/agents/ladder-reviewer-fast.toml"))).toContain(
+      'sandbox_mode = "read-only"',
+    );
+    const codexLead = read(join(h, ".codex/agents/ladder-orchestrator.toml"));
+    expect(codexLead).toContain('model_reasoning_effort = "high"');
+    expect(codexLead).toContain('sandbox_mode = "workspace-write"');
+
+    expect(read(join(h, ".pi/agent/agents/ladder-explorer-fast.md"))).not.toContain("  - bash");
+    expect(read(join(h, ".pi/agent/agents/ladder-researcher-fast.md"))).toContain("  - bash");
+    const piLead = read(join(h, ".pi/agent/agents/ladder-orchestrator.md"));
+    expect(piLead).toContain("thinking: high");
+    expect(piLead).not.toContain("tools:");
+  });
+
   test("is idempotent: a second plan has nothing to change", () => {
     const c = config(["claude", "opencode", "codex", "pi"]);
     install(c);
@@ -77,7 +120,12 @@ describe("install", () => {
     const changed = buildPlan(c).filter((x) => x.action === "update");
     expect(changed.map((x) => x.op.label)).toEqual([
       "ladder-read-fast (claude-sonnet-5-5)",
+      "ladder-explorer-fast (claude-sonnet-5-5)",
+      "ladder-researcher-fast (claude-sonnet-5-5)",
       "ladder-edit-fast (claude-sonnet-5-5)",
+      "ladder-reviewer-fast (claude-sonnet-5-5)",
+      // The orchestrator's prompt names every rung's model.
+      "ladder-orchestrator (claude-opus-5-5)",
       "skill model-ladder",
     ]);
   });

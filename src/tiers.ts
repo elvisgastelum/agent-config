@@ -7,8 +7,21 @@ export type Runtime = (typeof RUNTIMES)[number];
 export const TIERS = ["fast", "balanced", "deep"] as const;
 export type Tier = (typeof TIERS)[number];
 
-export const ROLES = ["read", "edit"] as const;
+/** What a ladder agent does: answer a question, map code, research the web, write, or review. */
+export const ROLES = ["read", "explore", "research", "edit", "review"] as const;
 export type Role = (typeof ROLES)[number];
+
+/** The word each role puts in its agents' names: ladder-explorer-fast, ladder-reviewer-deep. */
+const ROLE_STEMS: Record<Role, string> = {
+  read: "read",
+  explore: "explorer",
+  research: "researcher",
+  edit: "edit",
+  review: "reviewer",
+};
+
+/** The deep agent that leads one unit of work and hands its reads and writes to the ladder. */
+export const ORCHESTRATOR = "ladder-orchestrator";
 
 export const EFFORTS = ["low", "medium", "high"] as const;
 export type Effort = (typeof EFFORTS)[number];
@@ -81,7 +94,11 @@ export const DEFAULT_REVIEW_TIERS: Record<ReviewLens, Tier> = {
 };
 
 export function agentName(role: Role, tier: Tier): string {
-  return `ladder-${role}-${tier}`;
+  return `ladder-${ROLE_STEMS[role]}-${tier}`;
+}
+
+export function isRole(value: string): value is Role {
+  return (ROLES as readonly string[]).includes(value);
 }
 
 export function isTier(value: string): value is Tier {
