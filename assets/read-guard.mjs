@@ -3,7 +3,9 @@
 //
 // Denies whole-file reads of large text files in the main session and tells Claude to
 // delegate the question to a ladder read agent, or to read only the range it will edit.
-// Subagents (input carries agent_id) and ranged reads (offset/limit) always pass.
+// The ladder-orchestrator subagent is guarded the same way, pointed at `agent-config delegate`
+// since a subagent cannot start agents. Other subagents (input carries agent_id) and ranged reads
+// (offset/limit) always pass.
 //
 //   AGENT_CONFIG_MIN_LINES  line threshold (default 350)
 //   AGENT_CONFIG_GUARD=off  disable the guard
@@ -15,6 +17,8 @@ import { extname, isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_MIN_LINES = 350;
+/** The one subagent that orchestrates instead of reading, so it is guarded like a main session. */
+const ORCHESTRATOR = "ladder-orchestrator";
 const NON_TEXT = new Set([
   ".png",
   ".jpg",
@@ -140,7 +144,8 @@ export function decide(input, env = process.env) {
   // AGENT_CONFIG_* settings, falling back to the pre-rename MODEL_LADDER_* names.
   const setting = (name) => env[`AGENT_CONFIG_${name}`] || env[`MODEL_LADDER_${name}`];
   if (setting("GUARD") === "off") return undefined;
-  if (input.agent_id || input.agent_type) return undefined;
+  const orchestrator = input.agent_type === ORCHESTRATOR;
+  if ((input.agent_id || input.agent_type) && !orchestrator) return undefined;
   const minLines = Number.parseInt(setting("MIN_LINES") ?? "", 10) || DEFAULT_MIN_LINES;
   const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
   const ti = input.tool_input ?? {};
@@ -158,7 +163,11 @@ export function decide(input, env = process.env) {
     if (lines >= minLines) {
       return (
         `agent-config: ${file} has ${minLines}+ lines; reading it whole fills the main context. ` +
-        `To understand it, delegate the question to the ladder-read-fast agent (Agent tool, subagent_type "ladder-read-fast") ` +
+        `To understand it, delegate the question to the ladder-read-fast agent (${
+          orchestrator
+            ? `\`agent-config delegate read --runtime claude "<question>"\`, or \`delegate explore\` to map unfamiliar code`
+            : 'Agent tool, subagent_type "ladder-read-fast"'
+        }) ` +
         `and keep only its answer. To edit it, find the lines with Grep (-n) and Read just that range with offset/limit. ` +
         `(Threshold: AGENT_CONFIG_MIN_LINES=${minLines}; AGENT_CONFIG_GUARD=off disables this guard.)`
       );

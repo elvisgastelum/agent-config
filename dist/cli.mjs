@@ -3033,38 +3033,49 @@ const PHASE_PREFIX = "Phase:";
 const phase = (name) => `${PHASE_PREFIX} ${name}`;
 const agent$1 = (name) => `\`${name}\``;
 const DEEP_READER$1 = agentName("read", "deep");
-const BALANCED_READER$1 = agentName("read", "balanced");
+const FAST_EXPLORER = agentName("explore", "fast");
+const BALANCED_EXPLORER = agentName("explore", "balanced");
+const FAST_RESEARCHER = agentName("research", "fast");
 const FAST_EDITOR = agentName("edit", "fast");
 const BALANCED_EDITOR = agentName("edit", "balanced");
 const DEEP_EDITOR = agentName("edit", "deep");
-/** The brief's recommended review routing: the rung follows the diff's risk. */
-const ROUTED_REVIEW = `none and low risk: ${agent$1(BALANCED_READER$1)}; medium and high: ${agent$1(DEEP_READER$1)}`;
+const BALANCED_REVIEWER$1 = agentName("review", "balanced");
+const DEEP_REVIEWER$1 = agentName("review", "deep");
+/** The brief's recommended review routing: the reviewer's rung follows the diff's risk. */
+const ROUTED_REVIEW = `none and low risk: ${agent$1(BALANCED_REVIEWER$1)}; medium and high: ${agent$1(DEEP_REVIEWER$1)}`;
 /**
-* The phases one ticket goes through between its branch and its PR: plan, edit, risk, review and
-* fix. The brief numbers them inside its loop; /continue parallel-wave hands them to
-* every worker.
+* The phases one ticket goes through between its branch and its PR: explore, plan, edit, risk,
+* review, fix and the final check. The brief numbers them inside its loop; /continue parallel
+* modes hand them to every worker, a `ladder-orchestrator`.
 */
 function ticketPhases(branch, review) {
 	const deepRead = agent$1(DEEP_READER$1);
+	const lead = agent$1(ORCHESTRATOR);
 	return [
-		`**Plan** (\`${phase("plan")}\`, ${deepRead}). Diagnose every change the ticket needs. Return a task list; each task has a spec, its allowed paths, a reference file, a verify command and its edit rung: fast for pattern work (tests, boilerplate, config, mechanical edits), balanced for new logic. Prefer fast.`,
+		`**Explore** (\`${phase("explore")}\`, ${agent$1(FAST_EXPLORER)}; ${agent$1(BALANCED_EXPLORER)} when the map crosses several modules). Map what the ticket touches: entry points, the flow, where each change goes, the tests that cover it. When the ticket needs facts from outside the repository (library docs, API behavior, versions), ask ${agent$1(FAST_RESEARCHER)} one exact question. Plan from these answers instead of reading the files yourself.`,
+		`**Plan** (\`${phase("plan")}\`, deep: a ${lead} plans itself; anyone else hands the map to ${deepRead}). Diagnose every change the ticket needs. Return a task list; each task has a spec, its allowed paths, a reference file, a verify command and its edit rung: fast for pattern work (tests, boilerplate, config, mechanical edits), balanced for new logic. Prefer fast.`,
 		`**Edit** (\`${phase("edit")}\`). Run each task on its rung, ${agent$1(FAST_EDITOR)} or ${agent$1(BALANCED_EDITOR)}. Climb one rung on a partial or escalate reply or a failed verify; ${agent$1(DEEP_EDITOR)} only after balanced failed. Run every verify command yourself.`,
-		`**Risk** (\`${phase("risk")}\`, ${deepRead}). Classify the diff (\`git diff origin/${branch}...HEAD\`) as none, low, medium or high per area, one reason each: none for docs and comments; low for tests and isolated internals; medium for behavior other code calls; high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions. The ticket takes the highest.`,
-		`**Review** (\`${phase("review")}\`): ${review}. Give the reviewer the diff, the ticket's criteria and the risk notes; it returns findings (path:line, severity, fix, and the fix's edit rung) or none. A review never runs on a fast agent unless the review routing allows it.`,
-		`**Fix** (\`${phase("fix")}\`). Hand each finding to an edit agent on its rung and verify it. Go back to Risk when a fix changed what the diff touches, otherwise to Review. Repeat until the review has no findings.`
+		`**Risk** (\`${phase("risk")}\`, deep: a ${lead} classifies itself; anyone else asks ${deepRead}). Classify the diff (\`git diff origin/${branch}...HEAD\`) as none, low, medium or high per area, one reason each: none for docs and comments; low for tests and isolated internals; medium for behavior other code calls; high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions. The ticket takes the highest.`,
+		`**Review** (\`${phase("review")}\`): ${review}. Give the reviewer the diff range, the ticket's criteria and the risk notes; it returns findings (path:line, severity, fix, and the fix's edit rung) or none. A review never runs on a fast agent unless the review routing allows it.`,
+		`**Fix** (\`${phase("fix")}\`). Hand each finding to an edit agent on its rung and verify it. Go back to Risk when a fix changed what the diff touches, otherwise to Review. Repeat until the review has no findings.`,
+		`**Final check**. You are the top-level reviewer: run every verify command and the project's checks, compare \`git diff --stat\` with the ticket's criteria and allowed paths, and read the exact lines any finding or failure pointed at. The reviewer's approval informs this check; it does not replace it.`
 	];
 }
-/** Which agent runs each phase, and how parallel workers reach a rung without an agent tool. */
+/** Which agent runs each phase, and how workers reach a rung without an agent tool. */
 function modelRouting(runtime, models, review) {
 	return `| Phase | Agent |
 | --- | --- |
 | Kaneo reads and writes | ${agent$1(SCRIBE)} (${models.fast}) |
-| plan, risk | ${agent$1(DEEP_READER$1)} (${models.deep}) |
+| parallel workers, one per ticket | ${agent$1(ORCHESTRATOR)} (${models.deep}) |
+| explore | ${agent$1(FAST_EXPLORER)} (${models.fast}), ${agent$1(BALANCED_EXPLORER)} (${models.balanced}) across several modules |
+| research | ${agent$1(FAST_RESEARCHER)} (${models.fast}), climbing when sources disagree |
+| plan, risk | a ${agent$1(ORCHESTRATOR)} itself, otherwise ${agent$1(DEEP_READER$1)} (${models.deep}) |
 | edit, fix | ${agent$1(FAST_EDITOR)} (${models.fast}) for pattern work, ${agent$1(BALANCED_EDITOR)} (${models.balanced}) for new logic, ${agent$1(DEEP_EDITOR)} only after balanced failed |
 | review | ${review} |
+| final check | the worker or session that owns the ticket |
 | commit titles | ${agent$1(COMMIT_WRITER)} |
 
-Parallel workers cannot start agents: they run each phase on its rung with \`agent-config delegate read|edit --runtime ${runtime} --tier <rung> --no-climb "<handoff>"\`.`;
+A worker that cannot start agents runs each phase on its rung from its worktree with \`agent-config delegate explore|research|read|edit|review --runtime ${runtime} --tier <rung> --cwd <worktree> "<handoff>"\`; it climbs by itself on a partial reply (\`--no-climb\` stays on the rung).`;
 }
 //#endregion
 //#region src/continue.ts
@@ -3131,9 +3142,10 @@ A brief (such as the one the brief action copies) scopes the run: take tickets o
 This session keeps the decisions (which ticket, the design, conflict resolution, whether checks really pass). Everything bulky goes to an agent on a cheaper model, so its output never fills this session:
 
 - **Kaneo**: read the board and every ticket write (status moves, comments) through ${scribe} (${models.fast}). Ask it for a short summary, never raw Kaneo JSON.
-- **Reads and edits**: follow the \`model-ladder\` skill. Large or many files, logs, CI and test output go to ${CALL$1[runtime]("ladder-read-fast")}; boilerplate, tests and mechanical edits to ${CALL$1[runtime]("ladder-edit-fast")} (${CALL$1[runtime]("ladder-edit-balanced")} for new logic). Climb a rung only when a reply is partial or fails verification.
+- **Reads and edits**: follow the \`model-ladder\` skill. Map unfamiliar code with ${CALL$1[runtime](agentName("explore", "fast"))} and look up outside facts with ${CALL$1[runtime](agentName("research", "fast"))}. Large or many files, logs, CI and test output go to ${CALL$1[runtime]("ladder-read-fast")}; boilerplate, tests and mechanical edits to ${CALL$1[runtime]("ladder-edit-fast")} (${CALL$1[runtime]("ladder-edit-balanced")} for new logic). Climb a rung only when a reply is partial or fails verification.
+- **Reviews**: every change gets a ladder reviewer on the rung its risk calls for (${ROUTED_REVIEW}) before it ships, and you still run the checks yourself.
 - **Commit titles**: the \`${COMMIT_SKILL}\` skill hands the staged diff to ${CALL$1[runtime](COMMIT_WRITER)}, which replies with one title.
-- **Parallel workers** run on the balanced rung (${models.balanced}), not this session's model, whenever the sub-agent tool lets you choose a model.
+- **Parallel workers** are \`${ORCHESTRATOR}\` agents (${models.deep}), started with ${CALL$1[runtime](ORCHESTRATOR)}: one deep lead per worktree that plans, hands every read and write to the ladder agents above (through \`agent-config delegate\` when it cannot start agents), and reviews the result. When it is not installed, use a sub-agent on the balanced rung (${models.balanced}) and give it these delegation rules.
 
 When one of these agents is not installed, do the step yourself with bounded reads (line ranges, \`--stat\`, \`tail\`).
 
@@ -3144,7 +3156,7 @@ Continue the next Kaneo ticket's work, move it to in progress, then commit and c
 1. Load the \`${KANEO_SKILL}\` skill. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order with their blocking relations, and pick the first one that is not blocked by an unfinished ticket.
 2. Have the scribe move it to In Progress.
 3. \`git fetch origin\` and create the branch \`<IDENTIFIER>/<short-kebab-description>\` (e.g. \`FEX-2/some-feature-getting-done\`) from the up-to-date default branch.
-4. Implement the ticket with tests and docs alongside the change, delegating reads and edits as above.
+4. Implement the ticket with tests and docs alongside the change, delegating reads and edits as above, and have a ladder reviewer check the diff on the rung its risk calls for.
 5. Run the project's checks and leave them passing; read long output through the ladder read agent.
 6. Commit with the \`${COMMIT_SKILL}\` skill, push the branch and open the PR (body starts with the Kaneo ticket link, no AI attribution).
 7. Have the scribe comment the PR URL on the ticket.
@@ -3175,11 +3187,12 @@ For each picked ticket:
 
 ### 3. Build every ticket until it is ready to merge
 
-Launch one sub-agent per worktree, all at once so they run concurrently, each on the balanced rung (${models.balanced}). Each sub-agent:
+Launch one \`${ORCHESTRATOR}\` (${models.deep}) per worktree with ${CALL$1[runtime](ORCHESTRATOR)}, all at once so they run concurrently. Each orchestrator:
 
 - works only inside its own worktree path, and never touches another worktree or the main checkout;
-- implements its ticket, with tests and docs alongside the change;
-- keeps its own context small: bounded reads (line ranges, \`--stat\`, \`tail\`), and the ladder, scribe and commit-writer agents when it can delegate;
+- implements its ticket, with tests and docs alongside the change, without doing the I/O itself: explorers map the code, researchers answer outside questions, edit agents write on the cheapest rung that works, and a reviewer on the rung the risk calls for checks the diff;
+- reaches those agents through \`agent-config delegate <explore|research|read|edit|review> --runtime ${runtime} --cwd <worktree path> "<handoff>"\` when it cannot start agents, and the scribe and commit-writer through the same rules when it can;
+- reviews the final work itself (checks, \`git diff --stat\` against the criteria) before it reports;
 - runs the project's checks and leaves them passing;
 - commits with the \`${COMMIT_SKILL}\` skill, pushes its branch, and opens the PR (body starts with the Kaneo ticket link, no AI attribution);
 - comments the PR URL on its Kaneo ticket;
@@ -4373,8 +4386,10 @@ const BRIEF_GUARD_MATCHER = "Agent|Task|Bash|Write";
 /** Claude's tool for asking the user a question with options. */
 const CLAUDE_QUESTION_TOOL$1 = "AskUserQuestion";
 const DEEP_READER = agentName("read", "deep");
-const BALANCED_READER = agentName("read", "balanced");
 const FAST_READER$1 = agentName("read", "fast");
+const FAST_REVIEWER = agentName("review", "fast");
+const BALANCED_REVIEWER = agentName("review", "balanced");
+const DEEP_REVIEWER = agentName("review", "deep");
 const agent = (name) => `\`${name}\``;
 /** The brief's placeholders, filled in by the brief run that writes it. */
 const BRANCH_PLACEHOLDER = "<branch>";
@@ -4386,10 +4401,12 @@ function briefMarkdown(runtime, models, briefDir) {
 	const ask = runtime === "claude" ? `with the ${CLAUDE_QUESTION_TOOL$1} tool` : "in one message with numbered options";
 	const guard = runtime === "claude" ? " The brief guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or not in a command of its own." : "";
 	const deepRead = agent(DEEP_READER);
-	const balancedRead = agent(BALANCED_READER);
 	const fastRead = agent(FAST_READER$1);
+	const deepReview = agent(DEEP_REVIEWER);
 	const routed = ROUTED_REVIEW;
-	const phases = ticketPhases(BRANCH_PLACEHOLDER, REVIEW_PLACEHOLDER).map((step, i) => `${i + 2}. ${step}`).join("\n");
+	const steps = ticketPhases(BRANCH_PLACEHOLDER, REVIEW_PLACEHOLDER);
+	const phases = steps.map((step, i) => `${i + 2}. ${step}`).join("\n");
+	const deliver = steps.length + 2;
 	return `${actionFrontmatter(runtime, BRIEF, DESCRIPTION$1, BRIEF_HINT)}
 
 ## Arguments
@@ -4402,6 +4419,7 @@ This session decides; everything bulky runs on an agent and comes back as a shor
 
 - **Kaneo**: every read and write goes through ${agent(SCRIBE)} (${models.fast}). Ask for summaries, never raw Kaneo JSON.
 - **Reasoning**: the diagnosis runs on ${deepRead} (${models.deep}). Every handoff starts with its phase line, \`${phase("<phase>")}\`.${guard}
+- **The brief's loop** runs the same way: explorers map, researchers look things up, edit agents write, reviewers on the rung the risk calls for check, and each parallel ticket is led by ${agent(ORCHESTRATOR)} (${models.deep}).
 - Anything else you read follows the \`model-ladder\` skill.
 
 When one of these agents is not installed, do the step yourself with bounded reads.
@@ -4430,15 +4448,15 @@ Ask these four ${ask}, recommending the first option of each, and wait for the a
 1. **Missing tickets**: create them in Kaneo now / list them in the brief for the new session to create first / leave them out.
 2. **Parallelism**: parallel waves of up to N tickets (\`${cont} parallel N\`, N = the widest wave) / one ticket at a time (\`${cont}\`). Recommend one at a time when no wave has two tickets.
 3. **Integration branch**: \`dev\` / the repository's default branch / another branch. Every ticket branch starts from it and every PR merges into it.
-4. **Reviews**: routed by risk (${routed}) / always ${deepRead} / fast allowed for none risk.
+4. **Reviews**: routed by risk (${routed}) / always ${deepReview} / fast allowed for none risk.
 
 When the user chose to create the missing tickets, have the scribe create them, sized, labelled and related as the \`${KANEO_SKILL}\` skill says, and put their identifiers in the queue.
 
 The brief's review routing, from answer 4:
 
 - Routed by risk: "${routed}."
-- Always deep: "${deepRead} for every risk."
-- Fast allowed for none risk: "none: ${fastRead}, with the line \`${FAST_REVIEW_APPROVAL}\` under the phase line; low: ${balancedRead}; medium and high: ${deepRead}."
+- Always deep: "${deepReview} for every risk."
+- Fast allowed for none risk: "none: ${agent(FAST_REVIEWER)}, with the line \`${FAST_REVIEW_APPROVAL}\` under the phase line; low: ${agent(BALANCED_REVIEWER)}; medium and high: ${deepReview}."
 
 ## 3. Write the brief and copy it
 
@@ -4477,12 +4495,12 @@ Work only these tickets, in this order. Tickets in one wave do not depend on eac
 
 ## Loop per ticket
 
-Agents run through ${CALL[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`${phase("plan")}\`, so the run can be checked.
+Agents run through ${CALL[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`${phase("plan")}\`, so the run can be checked. In parallel waves each ticket goes to one ${agent(ORCHESTRATOR)} worker in its own worktree, which runs steps 2 to ${deliver} there and hands every read and write to the ladder.
 
 1. **Pick.** Have ${agent(SCRIBE)} re-read the ticket and its blockers. Still blocked: skip it, say why and take the next. Otherwise move it to In Progress and branch \`<ID>/<short-kebab-description>\` from \`origin/<branch>\`.
 ${phases}
-7. **Deliver.** Run the project's checks and leave them passing. Commit with the \`${COMMIT_SKILL}\` skill (titles from ${agent(COMMIT_WRITER)}), push, and open the PR into \`<branch>\`: its body starts with the Kaneo ticket link and has no AI attribution. Have the scribe comment the PR URL on the ticket. Wait for CI; read failures through ${fastRead} and fix them through Plan, Edit and Review. Merge, have the scribe move the ticket to Done, then delete the branch and its worktree.
-8. **Next.** Back to Pick. After each wave, have the scribe re-read the epic: tickets added since go to the end of the queue in dependency order.
+${deliver}. **Deliver.** Run the project's checks and leave them passing. Commit with the \`${COMMIT_SKILL}\` skill (titles from ${agent(COMMIT_WRITER)}), push, and open the PR into \`<branch>\`: its body starts with the Kaneo ticket link and has no AI attribution. Have the scribe comment the PR URL on the ticket. Wait for CI; read failures through ${fastRead} and fix them through Plan, Edit and Review. Merge, have the scribe move the ticket to Done, then delete the branch and its worktree.
+${deliver + 1}. **Next.** Back to Pick. After each wave, have the scribe re-read the epic: tickets added since go to the end of the queue in dependency order.
 
 ## Model routing
 
@@ -4492,7 +4510,7 @@ ${modelRouting(runtime, models, REVIEW_PLACEHOLDER)}
 
 Stop and ask the user when a ticket stays blocked, the review still has findings after 3 rounds, CI fails twice after fixes, a merge conflict cannot be resolved with confidence, a PR cannot merge (required review, branch protection), or the epic's criteria are ambiguous.
 
-When the queue is empty, have ${deepRead} check the epic's "Done when" list against the merged code (\`${phase("review")}\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
+When the queue is empty, have ${deepReview} check the epic's "Done when" list against the merged code (\`${phase("review")}\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
 \`\`\`\`
 `;
 }

@@ -49,11 +49,36 @@ describe("continueMarkdown", () => {
   });
 });
 
+describe("ticketPhases", () => {
+  test("explores before planning, routes reviews to reviewers and ends with the owner's check", () => {
+    const steps = ticketPhases("dev", ROUTED_REVIEW);
+    expect(steps[0]).toContain("`Phase: explore`, `ladder-explorer-fast`");
+    expect(steps[0]).toContain("`ladder-researcher-fast`");
+    expect(steps.find((s) => s.includes("Phase: review"))).toContain(
+      "medium and high: `ladder-reviewer-deep`",
+    );
+    expect(steps.at(-1)).toContain("You are the top-level reviewer");
+  });
+});
+
 describe("briefMarkdown", () => {
   test("numbers the shared ticket phases inside the brief's loop", () => {
     const text = briefMarkdown("claude", MODELS, BRIEF_DIR);
-    ticketPhases("<branch>", "<review routing>").forEach((step, i) =>
-      expect(text).toContain(`${i + 2}. ${step}`),
+    const steps = ticketPhases("<branch>", "<review routing>");
+    steps.forEach((step, i) => expect(text).toContain(`${i + 2}. ${step}`));
+    expect(text).toContain(`${steps.length + 2}. **Deliver.**`);
+    expect(text).toContain(`${steps.length + 3}. **Next.**`);
+    expect(text).toContain(
+      `each ticket goes to one \`ladder-orchestrator\` worker in its own worktree, which runs steps 2 to ${steps.length + 2}`,
+    );
+  });
+
+  test("offers reviewer agents in every review routing", () => {
+    const text = briefMarkdown("claude", MODELS, BRIEF_DIR);
+    expect(text).toContain('Always deep: "`ladder-reviewer-deep` for every risk."');
+    expect(text).toContain("none: `ladder-reviewer-fast`, with the line");
+    expect(text).toContain(
+      "| parallel workers, one per ticket | `ladder-orchestrator` (deep-model) |",
     );
   });
 });

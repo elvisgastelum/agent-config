@@ -232,7 +232,12 @@ test("install continue adds a manual-only action per runtime that delegates to c
   expect(claude).toContain('`subagent_type: "kaneo-scribe"` (claude-haiku-5-5)');
   expect(claude).toContain('`subagent_type: "ladder-read-fast"`');
   expect(claude).toContain('`subagent_type: "commit-writer"`');
-  expect(claude).toContain("each on the balanced rung (claude-sonnet-5-5)");
+  expect(claude).toContain(
+    'Launch one `ladder-orchestrator` (claude-opus-5-5) per worktree with the Agent tool with `subagent_type: "ladder-orchestrator"`',
+  );
+  expect(claude).toContain(
+    "agent-config delegate <explore|research|read|edit|review> --runtime claude",
+  );
   expect(claude).toContain("every line after it is this run's brief");
   expect(claude).toContain(
     "If the first line holds anything other than `parallel` (optionally followed by a positive integer) or `parallel-wave`, stop",
