@@ -7,6 +7,8 @@ import {
   agentBody,
   agentDescription,
   instructionsBlock,
+  orchestratorBody,
+  orchestratorDescription,
   skillMarkdown,
   SKILL_NAME,
   type ModelNames,
@@ -15,6 +17,7 @@ import type { Config } from "./config.ts";
 import type { Component, Op } from "./ops.ts";
 import { claudeDir, codexDir, opencodeDir, piDir } from "./paths.ts";
 import {
+  ORCHESTRATOR,
   REVIEW_LENSES,
   ROLES,
   TIERS,
@@ -76,6 +79,52 @@ export function tomlMultiline(text: string): string {
 
 const PI_THINKING: Record<Effort, string> = { low: "low", medium: "medium", high: "high" };
 
+/** Read-only git commands a reviewer may run where the runtime can limit the shell. */
+export const REVIEW_GIT_COMMANDS = ["git diff", "git log", "git show", "git status"];
+
+/** Each role's tools in Claude Code's names. Edits add Bash; reviewers need git to read the diff. */
+export const CLAUDE_TOOLS: Record<Role, string[]> = {
+  read: ["Read", "Grep", "Glob"],
+  explore: ["Read", "Grep", "Glob"],
+  research: ["WebSearch", "WebFetch", "Read", "Grep", "Glob"],
+  edit: ["Read", "Edit", "Write", "Grep", "Glob", "Bash"],
+  review: ["Read", "Grep", "Glob", "Bash"],
+};
+
+/** Each role's tools in Pi's names. Pi has no web tool and cannot limit bash: researchers and reviewers get it. */
+export const PI_TOOLS: Record<Role, string[]> = {
+  read: ["read", "grep", "find", "ls"],
+  explore: ["read", "grep", "find", "ls"],
+  research: ["read", "grep", "find", "ls", "bash"],
+  edit: ["read", "grep", "find", "ls", "edit", "write", "bash"],
+  review: ["read", "grep", "find", "ls", "bash"],
+};
+
+/** Roles that never write; Codex runs them in its read-only sandbox. */
+export function readOnlyRole(role: Role): boolean {
+  return role !== "edit";
+}
+
+/** OpenCode permission lines for a role, under `permission:`. */
+function opencodePermissions(role: Role): string[] {
+  switch (role) {
+    case "read":
+    case "explore":
+    case "research":
+      return ["  edit: deny", "  bash: deny", "  task: deny"];
+    case "review":
+      return [
+        "  edit: deny",
+        "  bash:",
+        '    "*": deny',
+        ...REVIEW_GIT_COMMANDS.map((c) => `    "${c}*": allow`),
+        "  task: deny",
+      ];
+    case "edit":
+      return ["  task: deny"];
+  }
+}
+
 function agentFile(
   runtime: Runtime,
   role: Role,
@@ -88,18 +137,15 @@ function agentFile(
   const body = agentBody(role, tier);
   switch (runtime) {
     case "claude": {
-      const tools = role === "read" ? "Read, Grep, Glob" : "Read, Edit, Write, Grep, Glob, Bash";
       const lines = ["---", `name: ${name}`, `description: ${yamlString(description)}`];
       if (model) lines.push(`model: ${model}`);
-      lines.push(`tools: ${tools}`, "---", "", body);
+      lines.push(`tools: ${CLAUDE_TOOLS[role].join(", ")}`, "---", "", body);
       return { path: join(claudeDir(), "agents", `${name}.md`), content: lines.join("\n") };
     }
     case "opencode": {
       const lines = ["---", `description: ${yamlString(description)}`, "mode: subagent"];
       if (model) lines.push(`model: ${model}`);
-      lines.push("permission:");
-      if (role === "read") lines.push("  edit: deny", "  bash: deny");
-      lines.push("  task: deny", "---", "", body);
+      lines.push("permission:", ...opencodePermissions(role), "---", "", body);
       return { path: join(opencodeDir(), "agents", `${name}.md`), content: lines.join("\n") };
     }
     case "codex": {
@@ -110,28 +156,71 @@ function agentFile(
       if (model) lines.push(`model = ${JSON.stringify(model)}`);
       lines.push(
         `model_reasoning_effort = ${JSON.stringify(effort)}`,
-        `sandbox_mode = ${JSON.stringify(role === "read" ? "read-only" : "workspace-write")}`,
-        `developer_instructions = ${tomlMultiline(body)}`,
-        "",
+        `sandbox_mode = ${JSON.stringify(readOnlyRole(role) ? "read-only" : "workspace-write")}`,
       );
+      if (role === "research") lines.push('web_search = "live"');
+      lines.push(`developer_instructions = ${tomlMultiline(body)}`, "");
       return { path: join(codexDir(), "agents", `${name}.toml`), content: lines.join("\n") };
     }
     case "pi": {
-      const tools =
-        role === "read"
-          ? ["read", "grep", "find", "ls"]
-          : ["read", "grep", "find", "ls", "edit", "write", "bash"];
       const lines = ["---", `name: ${name}`, `description: ${yamlString(description)}`];
       if (model) lines.push(`model: ${model}`);
       lines.push(
         `thinking: ${PI_THINKING[effort]}`,
         "tools:",
-        ...tools.map((t) => `  - ${t}`),
+        ...PI_TOOLS[role].map((t) => `  - ${t}`),
         "---",
         "",
         body,
       );
       return { path: join(piDir(), "agents", `${name}.md`), content: lines.join("\n") };
+    }
+  }
+}
+
+/** The orchestrator runs on the deep rung with the runtime's full tool set, so it can delegate. */
+function orchestratorFile(runtime: Runtime, tiers: TierMap): { path: string; content: string } {
+  const { model, effort } = tiers.deep;
+  const description = orchestratorDescription(model);
+  const body = orchestratorBody(runtime, modelNames(runtime, tiers));
+  switch (runtime) {
+    case "claude": {
+      const lines = ["---", `name: ${ORCHESTRATOR}`, `description: ${yamlString(description)}`];
+      if (model) lines.push(`model: ${model}`);
+      lines.push("---", "", body);
+      return { path: join(claudeDir(), "agents", `${ORCHESTRATOR}.md`), content: lines.join("\n") };
+    }
+    case "opencode": {
+      const lines = ["---", `description: ${yamlString(description)}`, "mode: subagent"];
+      if (model) lines.push(`model: ${model}`);
+      lines.push("---", "", body);
+      return {
+        path: join(opencodeDir(), "agents", `${ORCHESTRATOR}.md`),
+        content: lines.join("\n"),
+      };
+    }
+    case "codex": {
+      const lines = [
+        `name = ${JSON.stringify(ORCHESTRATOR)}`,
+        `description = ${JSON.stringify(description)}`,
+      ];
+      if (model) lines.push(`model = ${JSON.stringify(model)}`);
+      lines.push(
+        `model_reasoning_effort = ${JSON.stringify(effort)}`,
+        `sandbox_mode = "workspace-write"`,
+        `developer_instructions = ${tomlMultiline(body)}`,
+        "",
+      );
+      return {
+        path: join(codexDir(), "agents", `${ORCHESTRATOR}.toml`),
+        content: lines.join("\n"),
+      };
+    }
+    case "pi": {
+      const lines = ["---", `name: ${ORCHESTRATOR}`, `description: ${yamlString(description)}`];
+      if (model) lines.push(`model: ${model}`);
+      lines.push(`thinking: ${PI_THINKING[effort]}`, "---", "", body);
+      return { path: join(piDir(), "agents", `${ORCHESTRATOR}.md`), content: lines.join("\n") };
     }
   }
 }
@@ -278,6 +367,15 @@ export function runtimeOps(runtime: Runtime, config: Config): Op[] {
         });
       }
     }
+    const { path, content } = orchestratorFile(runtime, tiers);
+    ops.push({
+      runtime,
+      component: "agents",
+      kind: "file",
+      path,
+      content,
+      label: `${ORCHESTRATOR} (${tiers.deep.model || `session model, ${tiers.deep.effort}`})`,
+    });
   }
   if (wanted.includes("skill")) {
     ops.push({

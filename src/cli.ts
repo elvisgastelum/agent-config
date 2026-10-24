@@ -38,7 +38,16 @@ import {
   type ManifestRecord,
   type PlannedOp,
 } from "./ops.ts";
-import { EFFORTS, isReviewLens, isRuntime, isTier, type Effort, type Runtime } from "./tiers.ts";
+import {
+  EFFORTS,
+  ROLES,
+  isReviewLens,
+  isRole,
+  isRuntime,
+  isTier,
+  type Effort,
+  type Runtime,
+} from "./tiers.ts";
 import { formatPlan, runTui } from "./tui.ts";
 import { DELEGATED_ENV, LEGACY_DELEGATED_ENV, delegate } from "./delegate.ts";
 import {
@@ -74,8 +83,9 @@ Usage:
   agent-config config              print the saved configuration and its path
   agent-config self-update         update agent-config itself (--dry-run only checks);
                                    \`agent-config update\` and \`agi u\` are the same command
-  agent-config delegate <read|edit> [--tier t] [--runtime r] "<task>"
-                                   run a ladder read or edit headlessly and print only its reply;
+  agent-config delegate <role> [--tier t] [--runtime r] "<task>"
+                                   run a ladder agent headlessly and print only its reply; role is
+                                   read | explore | research | edit | review;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
 
@@ -569,7 +579,8 @@ async function main(argv: string[]): Promise<number> {
         return 4;
       }
       const role = positionals[1];
-      if (role !== "read" && role !== "edit") throw new UsageError("delegate expects read or edit");
+      if (!role || !isRole(role))
+        throw new UsageError(`delegate expects one of ${ROLES.join(", ")}`);
       const tier = (values.tier as string | undefined) ?? "fast";
       if (!isTier(tier)) throw new UsageError(`unknown tier "${tier}"`);
       const verify = (values.verify as string | undefined)?.trim();

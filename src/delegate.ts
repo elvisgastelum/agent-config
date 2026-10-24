@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentBody } from "./content.ts";
 import { claudeDir, opencodeDir } from "./paths.ts";
+import { CLAUDE_TOOLS, PI_TOOLS, REVIEW_GIT_COMMANDS, readOnlyRole } from "./runtimes.ts";
 import { TIERS, agentName, type Role, type Runtime, type Tier, type TierMap } from "./tiers.ts";
 
 /** Set in every process `delegate` starts; its presence means "already delegated". */
@@ -81,11 +82,17 @@ export function invocation(
   const task = safePrompt(withVerify(prompt, role === "edit" ? verify : undefined));
   switch (runtime) {
     case "claude": {
-      // Edit agents may write files and run only the verify command, never an arbitrary shell.
-      const tools =
-        role === "read"
-          ? ["Read", "Grep", "Glob"]
-          : ["Read", "Edit", "Write", "Grep", "Glob", ...(verify ? [`Bash(${verify})`] : [])];
+      // Edit agents may run only the verify command and reviewers only read-only git, never an
+      // arbitrary shell.
+      const shell =
+        role === "edit"
+          ? verify
+            ? [`Bash(${verify})`]
+            : []
+          : role === "review"
+            ? REVIEW_GIT_COMMANDS.map((c) => `Bash(${c}:*)`)
+            : [];
+      const tools = [...CLAUDE_TOOLS[role].filter((t) => t !== "Bash"), ...shell];
       const args = ["-p", "--agent", name, "--output-format", "json", "--allowedTools", ...tools];
       if (role === "edit") args.push("--permission-mode", "acceptEdits");
       if (model) args.push("--model", model);
@@ -100,13 +107,15 @@ export function invocation(
     case "codex": {
       const outFile = join(scratch, "last-message.txt");
       const args = [
+        // Live web search is a global flag, so it goes before the subcommand.
+        ...(role === "research" ? ["--search"] : []),
         "exec",
         "--skip-git-repo-check",
         "--ephemeral",
         "-C",
         cwd,
         "-s",
-        role === "read" ? "read-only" : "workspace-write",
+        readOnlyRole(role) ? "read-only" : "workspace-write",
         "-c",
         `model_reasoning_effort="${effort}"`,
         "-o",
@@ -123,10 +132,9 @@ export function invocation(
     }
     case "pi": {
       // Pi cannot limit bash to one command, so edits get bash only when a verify command is set.
-      const tools =
-        role === "read"
-          ? ["read", "grep", "find", "ls"]
-          : ["read", "grep", "find", "ls", "edit", "write", ...(verify ? ["bash"] : [])];
+      const tools = PI_TOOLS[role].filter(
+        (t) => t !== "bash" || role !== "edit" || Boolean(verify),
+      );
       const args = ["-p", "--no-session", "--tools", tools.join(","), "--thinking", effort];
       if (model) args.push("--model", model);
       args.push("--append-system-prompt", agentBody(role, tier));
@@ -150,9 +158,13 @@ export function agentFileProblem(runtime: Runtime, role: Role, tier: Tier): stri
   if (!file) return undefined;
   const fix = `run \`agent-config install model-ladder --runtime ${runtime}\``;
   if (!existsSync(file)) return `${name} is not installed for ${runtime}; ${fix}`;
-  if (runtime === "opencode" && role === "read") {
+  if (runtime === "opencode" && readOnlyRole(role)) {
     const text = readFileSync(file, "utf8");
-    if (!/^\s+edit:\s*deny\s*$/m.test(text) || !/^\s+bash:\s*deny\s*$/m.test(text)) {
+    const denies = (line: RegExp): boolean => line.test(text);
+    const edit = denies(/^\s+edit:\s*deny\s*$/m);
+    const bash =
+      role === "review" ? denies(/^\s+"\*":\s*deny\s*$/m) : denies(/^\s+bash:\s*deny\s*$/m);
+    if (!edit || !bash) {
       return `${name} no longer denies edit and bash (changed since install); ${fix}`;
     }
   }
