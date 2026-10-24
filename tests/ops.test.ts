@@ -80,7 +80,11 @@ describe("install", () => {
     expect(orchestrator).toContain("ladder-reviewer-deep");
 
     const review = read(join(h, ".config/opencode/agents/ladder-reviewer-balanced.md"));
-    expect(review).toContain('  bash:\n    "*": deny\n    "git diff*": allow');
+    expect(review).toContain(
+      '  bash:\n    "*": deny\n    "git diff": allow\n    "git diff *": allow',
+    );
+    // A bare prefix would also match `git difftool`, which runs any command.
+    expect(review).not.toContain('"git diff*"');
     expect(review).toContain("  edit: deny");
     expect(read(join(h, ".config/opencode/agents/ladder-researcher-fast.md"))).toContain(
       "  bash: deny",

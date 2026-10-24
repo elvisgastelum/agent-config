@@ -5373,7 +5373,7 @@ function opencodePermissions(role) {
 			"  edit: deny",
 			"  bash:",
 			"    \"*\": deny",
-			...REVIEW_GIT_COMMANDS.map((c) => `    "${c}*": allow`),
+			...REVIEW_GIT_COMMANDS.flatMap((c) => [`    "${c}": allow`, `    "${c} *": allow`]),
 			"  task: deny"
 		];
 		case "edit": return ["  task: deny"];

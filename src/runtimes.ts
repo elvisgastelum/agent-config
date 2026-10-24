@@ -117,7 +117,9 @@ function opencodePermissions(role: Role): string[] {
         "  edit: deny",
         "  bash:",
         '    "*": deny',
-        ...REVIEW_GIT_COMMANDS.map((c) => `    "${c}*": allow`),
+        // OpenCode turns `*` into `.*`, so `"git diff*"` would also allow `git difftool -x <cmd>`;
+        // the bare command plus `"<command> *"` keeps the match on the word.
+        ...REVIEW_GIT_COMMANDS.flatMap((c) => [`    "${c}": allow`, `    "${c} *": allow`]),
         "  task: deny",
       ];
     case "edit":
