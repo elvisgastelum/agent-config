@@ -46,10 +46,15 @@ export const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
 
 /**
  * Ladder and planner agents carry their rung in their name: ladder-read-deep, ladder-edit-fast,
- * planner-balanced.
+ * ladder-reviewer-balanced, planner-balanced.
  */
-const LADDER_AGENT = /^(?:ladder-(?:read|edit)|planner)-(fast|balanced|deep)$/;
+const LADDER_AGENT =
+  /^(?:ladder-(?:read|explorer|researcher|edit|reviewer)|planner)-(fast|balanced|deep)$/;
+/** The orchestrator has no rung in its name: it always runs on the deep rung. */
+const ORCHESTRATOR = "ladder-orchestrator";
+const DEEP_RUNG = "deep";
 const READ_AGENT_PREFIX = "ladder-read-";
+const REVIEW_AGENT_PREFIX = "ladder-reviewer-";
 
 /** Model families and their rung; an alias (haiku) or a full ID (claude-haiku-5-5) names one. */
 const MODEL_FAMILY_RUNGS = [
@@ -167,7 +172,9 @@ function nonEmptyLines(text) {
 function rungOf(type, model) {
   const name = typeof model === "string" ? model.toLowerCase() : "";
   const family = MODEL_FAMILY_RUNGS.find(([f]) => name.includes(f));
-  return family?.[1] ?? LADDER_AGENT.exec(type ?? "")?.[1];
+  if (family) return family[1];
+  if (type === ORCHESTRATOR) return DEEP_RUNG;
+  return LADDER_AGENT.exec(type ?? "")?.[1];
 }
 
 function handoff({ prompt, subagent_type: type, model }) {
@@ -182,7 +189,8 @@ function handoff({ prompt, subagent_type: type, model }) {
   const ran = rung
     ? `the ${rung} rung`
     : `\`${type ?? "the default agent"}\`${model ? ` with model "${model}"` : ""}`;
-  const agents = allowed.map((r) => `${READ_AGENT_PREFIX}${r}`).join(" or ");
+  const prefix = review ? REVIEW_AGENT_PREFIX : READ_AGENT_PREFIX;
+  const agents = allowed.map((r) => `${prefix}${r}`).join(" or ");
   const fast = review
     ? ` A fast review needs the line "${FAST_REVIEW_APPROVAL}" right under the phase line, and only when the user asked for it.`
     : "";

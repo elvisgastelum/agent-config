@@ -5,7 +5,7 @@
 import { COMMIT_SKILL, COMMIT_WRITER } from "./commit.ts";
 import { EPIC_TITLE_PREFIX, KANEO_SKILL, SCRIBE, TOUCHES_LINE, WAVE_RULE } from "./kaneo.ts";
 import { ROUTED_REVIEW, modelRouting, phase, ticketPhases, type LoopModels } from "./loop.ts";
-import { agentName, type Runtime } from "./tiers.ts";
+import { ORCHESTRATOR, agentName, type Runtime } from "./tiers.ts";
 
 export const CONTINUE = "continue";
 
@@ -105,9 +105,10 @@ A brief (such as the one the brief action copies) scopes the run: take tickets o
 This session keeps the decisions (which ticket, the design, conflict resolution, whether checks really pass). Everything bulky goes to an agent on a cheaper model, so its output never fills this session:
 
 - **Kaneo**: read the board and every ticket write (status moves, comments) through ${scribe} (${models.fast}). Ask it for a short summary, never raw Kaneo JSON.
-- **Reads and edits**: follow the \`model-ladder\` skill. Large or many files, logs, CI and test output go to ${CALL[runtime]("ladder-read-fast")}; boilerplate, tests and mechanical edits to ${CALL[runtime]("ladder-edit-fast")} (${CALL[runtime]("ladder-edit-balanced")} for new logic). Climb a rung only when a reply is partial or fails verification.
+- **Reads and edits**: follow the \`model-ladder\` skill. Map unfamiliar code with ${CALL[runtime](agentName("explore", "fast"))} and look up outside facts with ${CALL[runtime](agentName("research", "fast"))}. Large or many files, logs, CI and test output go to ${CALL[runtime]("ladder-read-fast")}; boilerplate, tests and mechanical edits to ${CALL[runtime]("ladder-edit-fast")} (${CALL[runtime]("ladder-edit-balanced")} for new logic). Climb a rung only when a reply is partial or fails verification.
+- **Reviews**: every change gets a ladder reviewer on the rung its risk calls for (${ROUTED_REVIEW}) before it ships, and you still run the checks yourself.
 - **Commit titles**: the \`${COMMIT_SKILL}\` skill hands the staged diff to ${CALL[runtime](COMMIT_WRITER)}, which replies with one title.
-- **Parallel workers** run on the balanced rung (${models.balanced}), not this session's model, whenever the sub-agent tool lets you choose a model.
+- **Parallel workers** are \`${ORCHESTRATOR}\` agents (${models.deep}), started with ${CALL[runtime](ORCHESTRATOR)}: one deep lead per worktree that plans, hands every read and write to the ladder agents above (through \`agent-config delegate\` when it cannot start agents), and reviews the result. When it is not installed, use a sub-agent on the balanced rung (${models.balanced}) and give it these delegation rules.
 
 When one of these agents is not installed, do the step yourself with bounded reads (line ranges, \`--stat\`, \`tail\`).
 
@@ -118,7 +119,7 @@ Continue the next Kaneo ticket's work, move it to in progress, then commit and c
 1. Load the \`${KANEO_SKILL}\` skill. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order with their blocking relations, and pick the first one that is not blocked by an unfinished ticket.
 2. Have the scribe move it to In Progress.
 3. \`git fetch origin\` and create the branch \`<IDENTIFIER>/<short-kebab-description>\` (e.g. \`FEX-2/some-feature-getting-done\`) from the up-to-date default branch.
-4. Implement the ticket with tests and docs alongside the change, delegating reads and edits as above.
+4. Implement the ticket with tests and docs alongside the change, delegating reads and edits as above, and have a ladder reviewer check the diff on the rung its risk calls for.
 5. Run the project's checks and leave them passing; read long output through the ladder read agent.
 6. Commit with the \`${COMMIT_SKILL}\` skill, push the branch and open the PR (body starts with the Kaneo ticket link, no AI attribution).
 7. Have the scribe comment the PR URL on the ticket.
@@ -149,11 +150,12 @@ For each picked ticket:
 
 ### 3. Build every ticket until it is ready to merge
 
-Launch one sub-agent per worktree, all at once so they run concurrently, each on the balanced rung (${models.balanced}). Each sub-agent:
+Launch one \`${ORCHESTRATOR}\` (${models.deep}) per worktree with ${CALL[runtime](ORCHESTRATOR)}, all at once so they run concurrently. Each orchestrator:
 
 - works only inside its own worktree path, and never touches another worktree or the main checkout;
-- implements its ticket, with tests and docs alongside the change;
-- keeps its own context small: bounded reads (line ranges, \`--stat\`, \`tail\`), and the ladder, scribe and commit-writer agents when it can delegate;
+- implements its ticket, with tests and docs alongside the change, without doing the I/O itself: explorers map the code, researchers answer outside questions, edit agents write on the cheapest rung that works, and a reviewer on the rung the risk calls for checks the diff;
+- reaches those agents through \`agent-config delegate <explore|research|read|edit|review> --runtime ${runtime} --cwd <worktree path> "<handoff>"\` when it cannot start agents, and the scribe and commit-writer through the same rules when it can;
+- reviews the final work itself (checks, \`git diff --stat\` against the criteria) before it reports;
 - runs the project's checks and leaves them passing;
 - commits with the \`${COMMIT_SKILL}\` skill, pushes its branch, and opens the PR (body starts with the Kaneo ticket link, no AI attribution);
 - comments the PR URL on its Kaneo ticket;

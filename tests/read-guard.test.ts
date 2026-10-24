@@ -28,6 +28,12 @@ describe("Read", () => {
     expect(decide({ tool_name: "Read", tool_input: { file_path: small } }, env)).toBeUndefined();
     expect(read({}, { agent_id: "a1", agent_type: "ladder-read-fast" })).toBeUndefined();
   });
+  test("guards the orchestrator subagent and points it at agent-config delegate", () => {
+    const reason = read({}, { agent_id: "a1", agent_type: "ladder-orchestrator" });
+    expect(reason).toContain('agent-config delegate read --runtime claude "<question>"');
+    expect(reason).not.toContain("subagent_type");
+    expect(read({ offset: 1, limit: 20 }, { agent_type: "ladder-orchestrator" })).toBeUndefined();
+  });
   test("honours the threshold and the off switch", () => {
     expect(
       decide(

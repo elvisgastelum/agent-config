@@ -112,6 +112,25 @@ describe("brief guard: phase rungs", () => {
     expect(agent("Phase: draft\nTask: draft the tickets", "planner-fast")).toBeUndefined();
   });
 
+  test("reviewer, explorer and researcher agents carry their rung; the orchestrator is deep", () => {
+    const review = "Phase: review\nDiff: origin/dev...HEAD";
+    expect(agent(review, "ladder-reviewer-balanced")).toBeUndefined();
+    expect(agent(review, "ladder-reviewer-deep")).toBeUndefined();
+    const fast = agent(review, "ladder-reviewer-fast");
+    expect(fast).toContain("Use ladder-reviewer-deep or ladder-reviewer-balanced");
+    expect(fast).toContain("Fast review: approved by the user");
+    expect(
+      agent("Phase: review\nFast review: approved by the user\nDiff: x", "ladder-reviewer-fast"),
+    ).toBeUndefined();
+    expect(agent("Phase: plan\nTicket: FEX-1", "ladder-explorer-fast")).toContain("fast rung");
+    expect(agent("Phase: risk\nTicket: FEX-1", "ladder-researcher-deep")).toBeUndefined();
+    expect(agent("Phase: plan\nTicket: FEX-1", "ladder-orchestrator")).toBeUndefined();
+    expect(agent("Phase: plan\nTicket: FEX-1", "ladder-orchestrator", "haiku")).toContain(
+      "fast rung",
+    );
+    expect(agent("Phase: explore\nTicket: FEX-1", "ladder-explorer-fast")).toBeUndefined();
+  });
+
   test("unchecked handoffs pass through", () => {
     expect(agent("Phase: edit\nTicket: FEX-1", "ladder-edit-fast")).toBeUndefined();
     expect(agent("Phase: fix\nTicket: FEX-1", "ladder-edit-fast")).toBeUndefined();
