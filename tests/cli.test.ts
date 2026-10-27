@@ -240,7 +240,7 @@ test("install continue adds a manual-only action per runtime that delegates to c
   );
   expect(claude).toContain("every line after it is this run's brief");
   expect(claude).toContain(
-    "If the first line holds anything other than `parallel` (optionally followed by a positive integer) or `parallel-wave`, stop",
+    "If the first line holds anything other than one ticket ID, `parallel` (optionally followed by a positive integer) or `parallel-wave`, stop",
   );
 
   const opencode = read(join(home, ".config/opencode/commands/continue.md"));

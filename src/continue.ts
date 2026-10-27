@@ -4,7 +4,16 @@
 
 import { COMMIT_SKILL, COMMIT_WRITER } from "./commit.ts";
 import { EPIC_TITLE_PREFIX, KANEO_SKILL, SCRIBE, TOUCHES_LINE, WAVE_RULE } from "./kaneo.ts";
-import { ROUTED_REVIEW, modelRouting, phase, ticketPhases, type LoopModels } from "./loop.ts";
+import {
+  ROUTED_REVIEW,
+  modelRouting,
+  phase,
+  prDelivery,
+  ticketPhases,
+  type LoopModels,
+} from "./loop.ts";
+import { STORE_WRITE_PREFIX } from "./planning.ts";
+import { STORE_HEADING, storeAccess } from "./store.ts";
 import { ORCHESTRATOR, agentName, type Runtime } from "./tiers.ts";
 
 export const CONTINUE = "continue";
@@ -40,6 +49,35 @@ export type ContinueModels = LoopModels;
 /** In parallel-wave mode the brief's phases name these instead of a brief's placeholders. */
 const WAVE_BRANCH = "<integration branch>";
 const WAVE_REVIEW = "the review routing above";
+
+/** Store queries the single-ticket store flow runs, with `<ID>` and `<session id>` filled in. */
+const TODO_QUERY =
+  "SELECT w.wave, t.id, t.title FROM waves w JOIN tickets t ON t.id = w.ticket_id WHERE t.status = 'todo' ORDER BY w.wave, t.id";
+const IN_PROGRESS_QUERY =
+  "SELECT t.id, t.title, s.session_id, s.last_seen_at FROM tickets t LEFT JOIN ticket_sessions s ON s.ticket_id = t.id AND s.ended_at IS NULL WHERE t.status = 'in_progress' ORDER BY t.id";
+const MERGED_QUERY =
+  "SELECT id, pr_url FROM tickets WHERE status = 'in_progress' AND pr_url IS NOT NULL";
+const GH_STATE = "gh pr view <pr_url> --json state";
+const MERGED_STATE = "MERGED";
+const setStatus = (status: string): string =>
+  `${STORE_WRITE_PREFIX} UPDATE tickets SET status = '${status}' WHERE id = '<ID>';`;
+const START_SESSION =
+  "INSERT INTO ticket_sessions (ticket_id, session_id, started_at, last_seen_at) VALUES ('<ID>', '<session id>', datetime('now'), datetime('now'));";
+
+/** The single-ticket flow on a plan store, after the shared store rules. */
+function storeFlow(cmd: string): string {
+  return `### Single-ticket flow on a store
+
+1. **Find the store.** With an ID, follow the lookup order above. With none, use the stores only when Kaneo is not installed or \`whoami\` gets no answer: take the written stores that still have open tickets, and ask which plan when several do.
+2. **Bring it up to date** with the migration above, before anything else writes it.
+3. **Close merged tickets.** Run \`${MERGED_QUERY}\`, then for each in_progress ticket with a \`pr_url\`: run \`${GH_STATE}\`; when its state is \`${MERGED_STATE}\`, run \`${setStatus("done")}\` and set \`ended_at\` on its sessions that have none. Without \`gh\`, print that UPDATE line for the user to run instead.
+4. **Offer the tickets.** With an ID, that ticket. Otherwise show the todo tickets, \`${TODO_QUERY}\` (wave 1 can start now), and every in_progress ticket with its non-ended sessions and their \`last_seen_at\`, \`${IN_PROGRESS_QUERY}\`. No timer decides it: the user decides whether to take one over, since a session may still be working it.
+5. **Take the ticket.** Run \`${setStatus("in_progress")}\` and then \`${START_SESSION}\` with this run's session id. Taking over an in_progress ticket appends a new row and leaves the earlier sessions' rows as they are.
+6. **Build it.** \`git fetch origin\`, branch \`<ID>/<short-kebab-description>\` from the up-to-date default branch, and build it as single-ticket flow steps 4 and 5 say.
+7. **Deliver.** Commit with the \`${COMMIT_SKILL}\` skill, push the branch and open the PR (no AI attribution).
+${prDelivery()}
+8. Report the ticket, branch, PR URL and the checks run. A single run leaves the ticket in_progress; a later \`${cmd}\` marks it done once its PR merged.`;
+}
 
 /** Frontmatter for the file each runtime reads; every one keeps the action manual-only. */
 export function actionFrontmatter(
@@ -92,11 +130,12 @@ ${args} Read them before doing anything else. Only their first line picks the mo
 | Invocation | Mode | Ticket limit |
 | --- | --- | --- |
 | \`${cmd}\` | Single | 1 (the single-ticket flow below) |
+| \`${cmd} <ID>\` | Single, that ticket | 1 |
 | \`${cmd} parallel\` | Parallel | 4 |
 | \`${cmd} parallel <n>\` | Parallel | \`<n>\` (a positive integer, e.g. \`${cmd} parallel 10\`) |
 | \`${cmd} ${PARALLEL_WAVE}\` | Parallel wave | The size of the epic's next wave |
 
-If the first line holds anything other than \`parallel\` (optionally followed by a positive integer) or \`${PARALLEL_WAVE}\`, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel sections.
+If the first line holds anything other than one ticket ID, \`parallel\` (optionally followed by a positive integer) or \`${PARALLEL_WAVE}\`, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel sections.
 
 A brief (such as the one the brief action copies) scopes the run: take tickets only from its queue, in its order, and follow its steps wherever they differ from the flows below. Keep working through its queue until it says to stop.
 
@@ -114,7 +153,7 @@ When one of these agents is not installed, do the step yourself with bounded rea
 
 ## Single-ticket flow
 
-Continue the next Kaneo ticket's work, move it to in progress, then commit and create the merge request:
+Continue the next Kaneo ticket's work, move it to in progress, then commit and create the merge request. When the ID, or the board without one, comes from a plan store (see "${STORE_HEADING}"), follow the store flow there instead:
 
 1. Load the \`${KANEO_SKILL}\` skill. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order with their blocking relations, and pick the first one that is not blocked by an unfinished ticket.
 2. Have the scribe move it to In Progress.
@@ -124,6 +163,12 @@ Continue the next Kaneo ticket's work, move it to in progress, then commit and c
 6. Commit with the \`${COMMIT_SKILL}\` skill, push the branch and open the PR (body starts with the Kaneo ticket link, no AI attribution).
 7. Have the scribe comment the PR URL on the ticket.
 8. Report the ticket, branch, PR URL and the checks run with their results.
+
+## ${STORE_HEADING}
+
+${storeAccess(scribe)}
+
+${storeFlow(cmd)}
 
 ## Parallel mode
 
