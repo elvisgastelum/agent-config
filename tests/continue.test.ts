@@ -21,7 +21,7 @@ describe("continueMarkdown", () => {
       `| \`/continue ${PARALLEL_WAVE}\` | Parallel wave | The size of the epic's next wave |`,
     );
     expect(text).toContain(`or \`${PARALLEL_WAVE}\`, stop and say the argument is invalid`);
-    expect(text).toContain(`argument-hint: "[parallel [n] | ${PARALLEL_WAVE}]"`);
+    expect(text).toContain(`argument-hint: "[<ID> | parallel [n] | ${PARALLEL_WAVE}]"`);
   });
 
   test("builds the wave with the brief phases, routing and brief", () => {

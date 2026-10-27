@@ -33,11 +33,14 @@ import {
   type ManifestRecord,
 } from "../src/ops.ts";
 import { configPath } from "../src/paths.ts";
+import { BRIEF_HINT, briefMarkdown } from "../src/brief.ts";
+import { ARGUMENT_HINT, continueMarkdown } from "../src/continue.ts";
 import type { Runtime } from "../src/tiers.ts";
 import { isNewer, VERSION } from "../src/version.ts";
 import { put, read, sandbox } from "./helpers.ts";
 
 const URL = "https://kaneo.example.com";
+const MODELS = { fast: "f", balanced: "b", deep: "d" };
 const MCP = "https://kaneo.example.com/api/mcp";
 
 let box: ReturnType<typeof sandbox>;
@@ -698,4 +701,33 @@ test("isNewer compares release numbers, not text", () => {
   expect(isNewer("0.9.0", "0.11.0")).toBe(false);
   expect(isNewer("1.0.0", "0.99.9")).toBe(true);
   expect(isNewer("0.15.0", "0.15.0")).toBe(false);
+});
+
+describe("store fallback in /brief and /continue", () => {
+  test("catalog titles and descriptions mention an ID from a .plans store", () => {
+    for (const id of ["brief", "continue"]) {
+      const item = catalogItem(id)!;
+      expect(item.title).toContain("plan store");
+      expect(item.description).toContain("or a ticket ID from a .plans store");
+    }
+  });
+
+  test("the argument hints accept a store ID", () => {
+    expect(BRIEF_HINT).toBe("<kaneo-epic-or-ticket-url | ticket-code | .plans store ID>");
+    expect(ARGUMENT_HINT).toBe("[<ID> | parallel [n] | parallel-wave]");
+    const brief = briefMarkdown("claude", MODELS, "~/x");
+    expect(brief).toContain("or an epic or ticket ID from a .plans store");
+    expect(continueMarkdown("claude", MODELS, "~/x")).toContain(
+      "or a ticket ID from a .plans store",
+    );
+  });
+
+  test("README documents the fallback, sessions, pr_url and the Plan: line", () => {
+    const readme = read(join(import.meta.dirname, "..", "README.md"));
+    expect(readme).toContain("### Plan store fallback");
+    expect(readme).toContain("`tickets.pr_url`");
+    expect(readme).toContain("`ticket_sessions`");
+    expect(readme).toContain("`Plan: <ID> — <title> (.plans/<MM-yyyy>/<slug>/plan.sqlite)`");
+    expect(readme).toContain(".plans/` is untracked");
+  });
 });

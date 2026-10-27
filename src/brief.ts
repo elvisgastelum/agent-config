@@ -23,9 +23,9 @@ export const BRIEF = "brief";
 export const BRIEF_GUARD_FILE = "brief-guard.mjs";
 
 const DESCRIPTION =
-  "Prepare a /continue brief for a Kaneo epic, ticket or bug: diagnose what it is missing, ask how to run it, and copy the brief to the clipboard, so a fresh session works the whole epic.";
+  "Prepare a /continue brief for a Kaneo epic, ticket or bug, or an epic or ticket ID from a .plans store: diagnose what it is missing, ask how to run it, and copy the brief to the clipboard, so a fresh session works the whole epic.";
 
-export const BRIEF_HINT = "<kaneo-epic-or-ticket-url | ticket-code>";
+export const BRIEF_HINT = "<kaneo-epic-or-ticket-url | ticket-code | .plans store ID>";
 
 const CALL: Record<Runtime, (agent: string) => string> = {
   claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,

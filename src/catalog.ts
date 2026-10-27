@@ -766,9 +766,9 @@ const bypassPermissions: CatalogItem = {
 
 const continueItem: CatalogItem = {
   id: CONTINUE,
-  title: "Continue Kaneo tickets",
+  title: "Continue Kaneo or plan store tickets",
   description:
-    "manual /continue action that works the next Kaneo ticket (or several in parallel worktrees) end to end, handing reads, edits, ticket writes and commit titles to cheap agents",
+    "manual /continue action that works the next Kaneo ticket, or a ticket ID from a .plans store, (or several in parallel worktrees) end to end, handing reads, edits, ticket writes and commit titles to cheap agents",
   settings: [],
   discover: () => ({}),
   ops: (entry, runtime, config) => continueOps(runtime, entry.project, config),
@@ -776,9 +776,9 @@ const continueItem: CatalogItem = {
 
 const briefItem: CatalogItem = {
   id: BRIEF,
-  title: "Brief a Kaneo epic for a fresh session",
+  title: "Brief a Kaneo epic or plan store ticket for a fresh session",
   description:
-    "manual /brief action that diagnoses what a Kaneo epic is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
+    "manual /brief action that diagnoses what a Kaneo epic, or a ticket ID from a .plans store, is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
   settings: [],
   discover: () => ({}),
   ops: (entry, runtime, config) => briefOps(runtime, entry.project, config),

@@ -39,9 +39,9 @@ export function continueCommand(runtime: Runtime): string {
 }
 
 const DESCRIPTION =
-  "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one. With `parallel-wave`, build the next wave of an epic the way a brief works it and explain the result.";
+  "Continue the next Kaneo ticket, or a ticket ID from a .plans store, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one. With `parallel-wave`, build the next wave of an epic the way a brief works it and explain the result.";
 
-export const ARGUMENT_HINT = `[parallel [n] | ${PARALLEL_WAVE}]`;
+export const ARGUMENT_HINT = `[<ID> | parallel [n] | ${PARALLEL_WAVE}]`;
 
 /** Models the action names: fast for cheap agents, balanced for workers, deep for wave plans. */
 export type ContinueModels = LoopModels;

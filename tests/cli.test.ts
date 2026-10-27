@@ -227,7 +227,7 @@ test("install continue adds a manual-only action per runtime that delegates to c
   const claude = read(skill);
   expect(claude).toContain("name: continue");
   expect(claude).toContain("disable-model-invocation: true");
-  expect(claude).toContain('argument-hint: "[parallel [n] | parallel-wave]"');
+  expect(claude).toContain('argument-hint: "[<ID> | parallel [n] | parallel-wave]"');
   expect(claude).toContain("`$ARGUMENTS`");
   expect(claude).toContain('`subagent_type: "kaneo-scribe"` (claude-haiku-5-5)');
   expect(claude).toContain('`subagent_type: "ladder-read-fast"`');
@@ -414,7 +414,9 @@ test("install brief adds a manual-only action per runtime and a Claude guard hoo
   const claude = read(join(home, ".claude/skills/brief/SKILL.md"));
   expect(claude).toContain("name: brief");
   expect(claude).toContain("disable-model-invocation: true");
-  expect(claude).toContain('argument-hint: "<kaneo-epic-or-ticket-url | ticket-code>"');
+  expect(claude).toContain(
+    'argument-hint: "<kaneo-epic-or-ticket-url | ticket-code | .plans store ID>"',
+  );
   expect(claude).toContain("`$ARGUMENTS`");
   expect(claude).toContain("Phase: diagnose");
   expect(claude).toContain("`ladder-read-deep` (claude-opus-5-5)");
@@ -818,4 +820,10 @@ test("install statusline refuses other runtimes and --project", () => {
   const project = run("install", "statusline", "--project", home, "--yes");
   expect(project.code).not.toBe(0);
   expect(project.stderr).toContain("user scope only");
+});
+
+test("help names the plan store fallback of /continue and /brief", () => {
+  const help = run("--help");
+  expect(help.code).toBe(0);
+  expect(help.stdout).toContain("Kaneo or .plans store tickets");
 });
