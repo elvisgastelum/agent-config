@@ -4,6 +4,7 @@
 
 import { COMMIT_WRITER } from "./commit.ts";
 import { SCRIBE } from "./kaneo.ts";
+import { PLAN_DB, PLANS_DIR, STORE_WRITE_PREFIX } from "./planning.ts";
 import { ORCHESTRATOR, agentName, type Runtime } from "./tiers.ts";
 
 /** Models the loop names, one per rung. */
@@ -29,6 +30,19 @@ const BALANCED_EDITOR = agentName("edit", "balanced");
 const DEEP_EDITOR = agentName("edit", "deep");
 const BALANCED_REVIEWER = agentName("review", "balanced");
 const DEEP_REVIEWER = agentName("review", "deep");
+
+/** The first line of a PR body for a Kaneo ticket, linking its Kaneo page. */
+export const KANEO_PR_LINE = "Kaneo: [<IDENTIFIER> — <ticket title>](<ticket URL>)";
+
+/** The first line of a PR body for a store ticket. Built on call: planning.ts imports this file. */
+export const storePrLine = (): string =>
+  `Plan: <ID> — <title> (${PLANS_DIR}/<MM-yyyy>/<slug>/${PLAN_DB})`;
+
+/** How a ticket's PR body starts, and what its owner records after opening it. */
+export function prDelivery(): string {
+  return `- For a Kaneo ticket, the PR body starts with \`${KANEO_PR_LINE}\`, and the scribe comments the PR URL on the ticket.
+- For a store ticket, the PR body starts with \`${storePrLine()}\` and has no Kaneo link line; \`${PLANS_DIR}\` is untracked, so the path points into the main checkout. After opening the PR, the session or orchestrator that opened it writes the PR URL to \`tickets.pr_url\` and sets \`ended_at\` on its \`ticket_sessions\` row.`;
+}
 
 /** The brief's recommended review routing: the reviewer's rung follows the diff's risk. */
 export const ROUTED_REVIEW = `none and low risk: ${agent(BALANCED_REVIEWER)}; medium and high: ${agent(DEEP_REVIEWER)}`;
@@ -57,6 +71,7 @@ export function modelRouting(runtime: Runtime, models: LoopModels, review: strin
   return `| Phase | Agent |
 | --- | --- |
 | Kaneo reads and writes | ${agent(SCRIBE)} (${models.fast}) |
+| Store reads and writes | the session or orchestrator working the ticket, at the absolute store path it was given; every write starts with \`${STORE_WRITE_PREFIX}\` |
 | parallel workers, one per ticket | ${agent(ORCHESTRATOR)} (${models.deep}) |
 | explore | ${agent(FAST_EXPLORER)} (${models.fast}), ${agent(BALANCED_EXPLORER)} (${models.balanced}) across several modules |
 | research | ${agent(FAST_RESEARCHER)} (${models.fast}), climbing when sources disagree |
