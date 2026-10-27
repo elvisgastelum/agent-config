@@ -114,6 +114,48 @@ describe("continueMarkdown store mode", () => {
   });
 });
 
+describe("continueMarkdown parallel modes on a store", () => {
+  const text = continueMarkdown("claude", MODELS, BRIEF_DIR);
+  const parallel = text.split("### Parallel modes on a store")[1]!.split("\n## ")[0]!;
+
+  test("the parent passes the main checkout's absolute store path to every orchestrator", () => {
+    expect(parallel).toContain(
+      "The parent resolves the main checkout's store to its absolute path and passes that path to every orchestrator",
+    );
+  });
+
+  test("each orchestrator writes the store itself and owns its session row", () => {
+    expect(parallel).toContain(
+      `writes that path directly, every write starting with \`${STORE_WRITE_PREFIX}\``,
+    );
+    expect(parallel).toContain("inserts its own `ticket_sessions` row when it starts");
+    expect(parallel).toContain("updates its `last_seen_at` on each of its writes");
+    expect(parallel).toContain(
+      "writes the PR URL to `tickets.pr_url` after opening the PR, and sets its `ended_at` when the PR is opened, it stops or it fails",
+    );
+    expect(parallel).toContain("The parent never writes `pr_url` or `ended_at`");
+  });
+
+  test("takes the next wave of todo tickets from the waves view and the epic by its id", () => {
+    expect(parallel).toContain("`SELECT * FROM waves ORDER BY wave`");
+    expect(parallel).toContain("keeping only tickets whose status is `todo`");
+    expect(parallel).toContain("picks a store epic by `epics.id`");
+    expect(parallel).toContain("Two tickets whose `touches` overlap never share a wave");
+  });
+
+  test("the parent sets the ticket done after merge in both parallel modes", () => {
+    expect(parallel).toContain(
+      `In both parallel modes, after a PR merges, the parent runs \`${STORE_WRITE_PREFIX} UPDATE tickets SET status = 'done' WHERE id = '<ID>';\``,
+    );
+    expect(parallel).not.toContain(".timeout");
+  });
+
+  test("keeps the Kaneo parallel flow", () => {
+    expect(text).toContain("Have the scribe move the Kaneo ticket to Done.");
+    expect(text).toContain("comments the PR URL on its Kaneo ticket;");
+  });
+});
+
 describe("ticketPhases", () => {
   test("explores before planning, routes reviews to reviewers and ends with the owner's check", () => {
     const steps = ticketPhases("dev", ROUTED_REVIEW);

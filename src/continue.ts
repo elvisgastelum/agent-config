@@ -12,6 +12,7 @@ import {
   ticketPhases,
   type LoopModels,
 } from "./loop.ts";
+import { PLANS_DIR, STORE_WRITE_PREFIX } from "./planning.ts";
 import { START_SESSION, STORE_HEADING, setStatus, storeAccess } from "./store.ts";
 import { ORCHESTRATOR, agentName, type Runtime } from "./tiers.ts";
 
@@ -71,7 +72,16 @@ function storeFlow(cmd: string): string {
 6. **Build it.** \`git fetch origin\`, branch \`<ID>/<short-kebab-description>\` from the up-to-date default branch, and build it as single-ticket flow steps 4 and 5 say.
 7. **Deliver.** Commit with the \`${COMMIT_SKILL}\` skill, push the branch and open the PR (no AI attribution).
 ${prDelivery()}
-8. Report the ticket, branch, PR URL and the checks run. A single run leaves the ticket in_progress; a later \`${cmd}\` marks it done once its PR merged.`;
+8. Report the ticket, branch, PR URL and the checks run. A single run leaves the ticket in_progress; a later \`${cmd}\` marks it done once its PR merged.
+
+### Parallel modes on a store
+
+\`parallel\` and \`${PARALLEL_WAVE}\` run as their sections below say, with these changes:
+
+- **The store path.** The parent resolves the main checkout's store to its absolute path and passes that path to every orchestrator, since a worktree has no \`${PLANS_DIR}\` of its own. Before picking, it migrates the store and closes merged tickets (store flow steps 2 and 3).
+- **Pick.** The open tickets come from \`SELECT * FROM waves ORDER BY wave\`, keeping only tickets whose status is \`todo\`; the next wave is the lowest wave left. \`${PARALLEL_WAVE}\` picks a store epic by \`epics.id\` (its stories are the tickets with that \`epic_id\`) instead of a Kaneo title. Two tickets whose \`touches\` overlap never share a wave: the later one waits for the next. The parent runs \`${setStatus("in_progress")}\` for each picked ticket.
+- **Orchestrators.** Each one writes that path directly, every write starting with \`${STORE_WRITE_PREFIX}\`: it inserts its own \`ticket_sessions\` row when it starts (\`${START_SESSION}\`), updates its \`last_seen_at\` on each of its writes, writes the PR URL to \`tickets.pr_url\` after opening the PR, and sets its \`ended_at\` when the PR is opened, it stops or it fails. Its PR follows the store PR rules above instead of the Kaneo link and comment. The parent never writes \`pr_url\` or \`ended_at\`.
+- **Done.** In both parallel modes, after a PR merges, the parent runs \`${setStatus("done")}\` instead of moving a Kaneo ticket.`;
 }
 
 /** Frontmatter for the file each runtime reads; every one keeps the action manual-only. */
