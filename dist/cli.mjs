@@ -6309,6 +6309,36 @@ const CATALOG = [
 				label: "statusLine command"
 			}];
 		}
+	},
+	{
+		id: "bypass-permissions",
+		title: "Bypass permissions by default",
+		description: "starts every Claude Code session on this computer with bypass permissions on, so tools run without permission prompts; uninstall restores the previous mode",
+		settings: [],
+		userOnly: true,
+		runtimes: ["claude"],
+		discover: () => ({}),
+		ops: () => {
+			const base = {
+				runtime: "claude",
+				component: "catalog",
+				kind: "json-set"
+			};
+			const settings = join(claudeDir(), "settings.json");
+			return [{
+				...base,
+				path: settings,
+				pointer: ["permissions", "defaultMode"],
+				value: "bypassPermissions",
+				label: "permissions.defaultMode = \"bypassPermissions\""
+			}, {
+				...base,
+				path: settings,
+				pointer: ["skipDangerousModePermissionPrompt"],
+				value: true,
+				label: "skipDangerousModePermissionPrompt = true"
+			}];
+		}
 	}
 ];
 function catalogItem(id) {
@@ -6985,7 +7015,7 @@ async function catalogFlow() {
 		options: [{
 			value: "install",
 			label: "Install or update",
-			hint: item.userOnly ? "agents, parts, models" : "user or project scope"
+			hint: item.id === "model-ladder" ? "agents, parts, models" : item.userOnly ? "user scope" : "user or project scope"
 		}, {
 			value: "uninstall",
 			label: "Uninstall",
@@ -7007,7 +7037,7 @@ async function catalogFlow() {
 		return;
 	}
 	if (item.id === "model-ladder") return ladderFlow(config);
-	const project = ask(await select({
+	const project = (item.userOnly ? "user" : ask(await select({
 		message: "Install where?",
 		options: [{
 			value: "user",
@@ -7018,7 +7048,7 @@ async function catalogFlow() {
 			label: "Project",
 			hint: "one repository, committed with it"
 		}]
-	})) === "project" ? resolve(ask(await text({
+	}))) === "project" ? resolve(ask(await text({
 		message: "Project directory",
 		initialValue: process.cwd(),
 		validate: (v) => {

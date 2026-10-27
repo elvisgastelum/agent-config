@@ -12,7 +12,7 @@ edits  ─┘                          └─ deep      Opus 5.5    last resort,
 
 It configures **Claude Code, OpenCode, Codex and Pi** from one TUI, sets the rungs for **Gentle AI review agents**, and undoes everything with one command.
 
-Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket, `agi install brief` adds a `/brief` action that prepares a `/continue` brief for a whole Kaneo epic, `agi install statusline` adds a compact Claude Code status line. See [Catalog](#catalog).
+Every ability is a catalog item, for your user config or (where it applies) one repository: `agi install model-ladder` adds the ladder, `agi install kaneo` adds Kaneo work tracking, `agi install commit` adds title-only commits drafted by a cheap model, `agi install continue` adds a `/continue` action that works the next Kaneo ticket, `agi install brief` adds a `/brief` action that prepares a `/continue` brief for a whole Kaneo epic, `agi install statusline` adds a compact Claude Code status line, `agi install bypass-permissions` starts Claude Code with bypass permissions on. See [Catalog](#catalog).
 
 ## Install
 
@@ -130,6 +130,7 @@ agi install continue                            # /continue: work the next Kaneo
 agi install brief                               # /brief: prepare a /continue brief for a Kaneo epic
 agi install planning                            # /planning: plan work with you, then tickets for /continue
 agi install statusline                          # compact Claude Code status line
+agi install bypass-permissions                  # Claude Code starts with bypass permissions on
 agi uninstall kaneo [--project .]               # remove that copy only
 ```
 
@@ -249,6 +250,13 @@ A compact Claude Code status line styled after zap-prompt, moved here from [clau
 - Directory name, git branch with a red `*` when the working tree is dirty, model, context window usage, and 5-hour and 7-day rate-limit usage when Claude Code reports them.
 - Writes `~/.claude/statusline.sh` and sets `statusLine` in `~/.claude/settings.json` to run it. Uninstall puts back the previous script and `statusLine`.
 - The old standalone installer wrote the same path, so its copy is taken over in place. Edits to `~/.claude/statusline.sh` show as drifted in `status` and are saved to a backup when you reinstall.
+
+### bypass-permissions
+
+Starts every Claude Code session on this computer with bypass permissions on, so tools run without permission prompts. Claude Code only, user scope only. Turn it on or off from the TUI (`agi`, then the catalog) or with `agi install bypass-permissions` and `agi uninstall bypass-permissions`.
+
+- Sets `permissions.defaultMode` to `"bypassPermissions"` and `skipDangerousModePermissionPrompt` to `true` in `~/.claude/settings.json`, so no confirmation is asked at startup. Uninstall puts back the previous values.
+- Bypass mode runs every tool call without asking, including file edits and shell commands. Install it only on a computer where that is acceptable; a sandbox or container is safest.
 
 ## How the routing works
 

@@ -267,7 +267,12 @@ async function catalogFlow(): Promise<void> {
               {
                 value: "install",
                 label: "Install or update",
-                hint: item.userOnly ? "agents, parts, models" : "user or project scope",
+                hint:
+                  item.id === LADDER_ITEM
+                    ? "agents, parts, models"
+                    : item.userOnly
+                      ? "user scope"
+                      : "user or project scope",
               },
               { value: "uninstall", label: "Uninstall", hint: "remove and restore" },
             ],
@@ -290,15 +295,17 @@ async function catalogFlow(): Promise<void> {
   }
   if (item.id === LADDER_ITEM) return ladderFlow(config);
 
-  const scope = ask(
-    await p.select({
-      message: "Install where?",
-      options: [
-        { value: "user", label: "User", hint: "every project, in your home config" },
-        { value: "project", label: "Project", hint: "one repository, committed with it" },
-      ],
-    }),
-  );
+  const scope = item.userOnly
+    ? "user"
+    : ask(
+        await p.select({
+          message: "Install where?",
+          options: [
+            { value: "user", label: "User", hint: "every project, in your home config" },
+            { value: "project", label: "Project", hint: "one repository, committed with it" },
+          ],
+        }),
+      );
   const project =
     scope === "project"
       ? resolve(

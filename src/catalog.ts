@@ -724,6 +724,44 @@ const statusline: CatalogItem = {
   },
 };
 
+// ---------------------------------------------------------------- bypass permissions
+
+const bypassPermissions: CatalogItem = {
+  id: "bypass-permissions",
+  title: "Bypass permissions by default",
+  description:
+    "starts every Claude Code session on this computer with bypass permissions on, so tools run without permission prompts; uninstall restores the previous mode",
+  settings: [],
+  userOnly: true,
+  runtimes: ["claude"],
+  discover: () => ({}),
+  ops: () => {
+    const base = {
+      runtime: "claude" as const,
+      component: "catalog" as const,
+      kind: "json-set" as const,
+    };
+    const settings = join(claudeDir(), "settings.json");
+    return [
+      {
+        ...base,
+        path: settings,
+        pointer: ["permissions", "defaultMode"],
+        value: "bypassPermissions",
+        label: 'permissions.defaultMode = "bypassPermissions"',
+      },
+      // Without it Claude Code asks to confirm bypass mode at the start of each session.
+      {
+        ...base,
+        path: settings,
+        pointer: ["skipDangerousModePermissionPrompt"],
+        value: true,
+        label: "skipDangerousModePermissionPrompt = true",
+      },
+    ];
+  },
+};
+
 const continueItem: CatalogItem = {
   id: CONTINUE,
   title: "Continue Kaneo tickets",
@@ -762,6 +800,7 @@ export const CATALOG: CatalogItem[] = [
   briefItem,
   planningItem,
   statusline,
+  bypassPermissions,
 ];
 
 export function catalogItem(id: string): CatalogItem | undefined {

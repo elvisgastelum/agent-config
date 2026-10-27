@@ -512,6 +512,7 @@ test("install model-ladder installs only the ladder; uninstall model-ladder keep
     "brief",
     "planning",
     "statusline",
+    "bypass-permissions",
   ]);
   expect(listed.items[0].entries).toMatchObject([{ scope: "user", runtimes: ["claude"] }]);
   expect(run("catalog").stdout).toContain("install: agent-config install model-ladder\n");
@@ -765,6 +766,49 @@ test("install statusline takes over the Claude status line; uninstall restores t
   expect(run("uninstall", "statusline", "--yes").code).toBe(0);
   expect(read(script)).toBe("#!/bin/bash\necho old\n");
   expect(JSON.parse(read(settingsPath))).toEqual({ model: "opus", statusLine: previous });
+});
+
+test("install bypass-permissions starts Claude Code in bypass mode; uninstall restores the previous mode", () => {
+  const settingsPath = join(home, ".claude/settings.json");
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(
+    settingsPath,
+    `${JSON.stringify({ model: "opus", permissions: { allow: ["Bash(ls)"], defaultMode: "plan" } })}\n`,
+  );
+
+  const installed = run("install", "bypass-permissions", "--yes", "--json");
+  expect(installed.code).toBe(0);
+  const plan = JSON.parse(installed.stdout).plan as { item: string; runtime: string }[];
+  expect(plan.every((x) => x.item === "bypass-permissions@user" && x.runtime === "claude")).toBe(
+    true,
+  );
+  expect(JSON.parse(read(settingsPath))).toEqual({
+    model: "opus",
+    permissions: { allow: ["Bash(ls)"], defaultMode: "bypassPermissions" },
+    skipDangerousModePermissionPrompt: true,
+  });
+
+  expect(JSON.parse(run("install", "bypass-permissions", "--yes", "--json").stdout).applied).toBe(
+    false,
+  );
+
+  expect(run("uninstall", "bypass-permissions", "--yes").code).toBe(0);
+  expect(JSON.parse(read(settingsPath))).toEqual({
+    model: "opus",
+    permissions: { allow: ["Bash(ls)"], defaultMode: "plan" },
+  });
+  const project = run("install", "bypass-permissions", "--project", home, "--yes");
+  expect(project.code).not.toBe(0);
+  expect(project.stderr).toContain("user scope only");
+});
+
+test("uninstall bypass-permissions removes the settings file it created", () => {
+  const settingsPath = join(home, ".claude/settings.json");
+  expect(existsSync(settingsPath)).toBe(false);
+  expect(run("install", "bypass-permissions", "--yes").code).toBe(0);
+  expect(JSON.parse(read(settingsPath)).permissions).toEqual({ defaultMode: "bypassPermissions" });
+  expect(run("uninstall", "bypass-permissions", "--yes").code).toBe(0);
+  expect(existsSync(settingsPath) ? JSON.parse(read(settingsPath)) : {}).toEqual({});
 });
 
 test("install statusline refuses other runtimes and --project", () => {
