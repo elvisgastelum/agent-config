@@ -3457,241 +3457,204 @@ ${teamSection()}
 `;
 }
 //#endregion
-//#region src/loop.ts
-/** The line that opens every delegated handoff, so the guard and the user can check its phase. */
-const PHASE_PREFIX = "Phase:";
-const phase = (name) => `${PHASE_PREFIX} ${name}`;
-const agent$1 = (name) => `\`${name}\``;
-const DEEP_READER$1 = agentName("read", "deep");
-const FAST_EXPLORER = agentName("explore", "fast");
-const BALANCED_EXPLORER = agentName("explore", "balanced");
-const FAST_RESEARCHER = agentName("research", "fast");
-const FAST_EDITOR = agentName("edit", "fast");
-const BALANCED_EDITOR = agentName("edit", "balanced");
-const DEEP_EDITOR = agentName("edit", "deep");
-const BALANCED_REVIEWER$1 = agentName("review", "balanced");
-const DEEP_REVIEWER$1 = agentName("review", "deep");
-/** The brief's recommended review routing: the reviewer's rung follows the diff's risk. */
-const ROUTED_REVIEW = `none and low risk: ${agent$1(BALANCED_REVIEWER$1)}; medium and high: ${agent$1(DEEP_REVIEWER$1)}`;
+//#region src/store.ts
+/** Every plan store, one folder per month and per plan. */
+const storeGlob = () => `${PLANS_DIR}/*/*/${PLAN_DB}`;
+/** Only plans the planning action finished writing are worked. */
+const WRITTEN_STATUS = "written";
+/** Month folders sorted newest first: by year, then by month. */
+const MONTH_ORDER_EXAMPLE = "01-2027, 10-2026, 02-2026";
+/** The ticket table's columns that track who works a ticket and its PR. */
+const SESSIONS_TABLE = "ticket_sessions";
+const PR_URL_COLUMN = "tickets.pr_url";
+/** The status write for the ticket `<ID>`; built on call, since planning.ts imports this file's users. */
+const setStatus = (status) => `${STORE_WRITE_PREFIX} UPDATE tickets SET status = '${status}' WHERE id = '<ID>';`;
+/** The session row a session or orchestrator adds when it takes the ticket `<ID>`. */
+const START_SESSION = "INSERT INTO ticket_sessions (ticket_id, session_id, started_at, last_seen_at) VALUES ('<ID>', '<session id>', datetime('now'), datetime('now'));";
+/** The heading shared by every action's store section. */
+const STORE_HEADING = "Plan store fallback";
+const code$1 = (text) => `\`${text}\``;
 /**
-* The phases one ticket goes through between its branch and its PR: explore, plan, edit, risk,
-* review, fix and the final check. The brief numbers them inside its loop; /continue parallel
-* modes hand them to every worker, a `ladder-orchestrator`.
+* The store rules every action renders under its own heading: lookup order, discovery, writes,
+* the migration and sessions. Built on call, since planning.ts imports the actions that import this.
 */
-function ticketPhases(branch, review) {
-	const deepRead = agent$1(DEEP_READER$1);
-	const lead = agent$1(ORCHESTRATOR);
-	return [
-		`**Explore** (\`${phase("explore")}\`, ${agent$1(FAST_EXPLORER)}; ${agent$1(BALANCED_EXPLORER)} when the map crosses several modules). Map what the ticket touches: entry points, the flow, where each change goes, the tests that cover it. When the ticket needs facts from outside the repository (library docs, API behavior, versions), ask ${agent$1(FAST_RESEARCHER)} one exact question. Plan from these answers instead of reading the files yourself.`,
-		`**Plan** (\`${phase("plan")}\`, deep: a ${lead} plans itself; anyone else hands the map to ${deepRead}). Diagnose every change the ticket needs. Return a task list; each task has a spec, its allowed paths, a reference file, a verify command and its edit rung: fast for pattern work (tests, boilerplate, config, mechanical edits), balanced for new logic. Prefer fast.`,
-		`**Edit** (\`${phase("edit")}\`). Run each task on its rung, ${agent$1(FAST_EDITOR)} or ${agent$1(BALANCED_EDITOR)}. Climb one rung on a partial or escalate reply or a failed verify; ${agent$1(DEEP_EDITOR)} only after balanced failed. Run every verify command yourself.`,
-		`**Risk** (\`${phase("risk")}\`, deep: a ${lead} classifies itself; anyone else asks ${deepRead}). Classify the diff (\`git diff origin/${branch}...HEAD\`) as none, low, medium or high per area, one reason each: none for docs and comments; low for tests and isolated internals; medium for behavior other code calls; high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions. The ticket takes the highest.`,
-		`**Review** (\`${phase("review")}\`): ${review}. Give the reviewer the diff range, the ticket's criteria and the risk notes; it returns findings (path:line, severity, fix, and the fix's edit rung) or none. A review never runs on a fast agent unless the review routing allows it.`,
-		`**Fix** (\`${phase("fix")}\`). Hand each finding to an edit agent on its rung and verify it. Go back to Risk when a fix changed what the diff touches, otherwise to Review. Repeat until the review has no findings.`,
-		`**Final check**. You are the top-level reviewer: run every verify command and the project's checks, compare \`git diff --stat\` with the ticket's criteria and allowed paths, and read the exact lines any finding or failure pointed at. The reviewer's approval informs this check; it does not replace it.`
-	];
-}
-/** Which agent runs each phase, and how workers reach a rung without an agent tool. */
-function modelRouting(runtime, models, review) {
-	return `| Phase | Agent |
-| --- | --- |
-| Kaneo reads and writes | ${agent$1(SCRIBE)} (${models.fast}) |
-| parallel workers, one per ticket | ${agent$1(ORCHESTRATOR)} (${models.deep}) |
-| explore | ${agent$1(FAST_EXPLORER)} (${models.fast}), ${agent$1(BALANCED_EXPLORER)} (${models.balanced}) across several modules |
-| research | ${agent$1(FAST_RESEARCHER)} (${models.fast}), climbing when sources disagree |
-| design rules from Figma | ${agent$1(agentName("design", "balanced"))} (${models.balanced}) |
-| user flows, edge cases and recovery | ${agent$1(agentName("ux", "balanced"))} (${models.balanced}), ${agent$1(agentName("ux", "deep"))} for money, data or auth |
-| plan, risk | a ${agent$1(ORCHESTRATOR)} itself, otherwise ${agent$1(DEEP_READER$1)} (${models.deep}) |
-| edit, fix | ${agent$1(FAST_EDITOR)} (${models.fast}) for pattern work, ${agent$1(BALANCED_EDITOR)} (${models.balanced}) for new logic, ${agent$1(DEEP_EDITOR)} only after balanced failed |
-| review | ${review} |
-| final check | the worker or session that owns the ticket |
-| commit titles | ${agent$1(COMMIT_WRITER)} |
+function storeAccess(scribe) {
+	return `An ID that is not a Kaneo ticket can be a ticket or epic in a plan store that the planning action wrote.
 
-A worker that cannot start agents runs each phase on its rung from its worktree with \`agent-config delegate explore|research|design|ux|read|edit|review --runtime ${runtime} --tier <rung> --cwd <worktree> "<handoff>"\`; it climbs by itself on a partial reply (\`--no-climb\` stays on the rung).`;
+**Lookup order.**
+
+1. Kaneo first, when the \`kaneo\` item is installed and ${scribe} gets an answer from the Kaneo MCP \`whoami\`. When the ID resolves in Kaneo, Kaneo wins, even when a store has the same ID.
+2. Fall back to the stores only when Kaneo is not installed, \`whoami\` gets no answer, or Kaneo answers explicitly that no such identifier exists after \`whoami\` succeeded. Any other Kaneo error (timeouts, permissions, server errors) stops the run: report it, never fall back.
+3. A store plan whose \`plan.tracker\` is \`kaneo\` already lives in Kaneo: work its tickets in Kaneo through their \`tracker_id\`.
+
+**Discovery.** Resolve the main checkout's root to an absolute path (the first \`worktree\` line of \`git worktree list --porcelain\`); a worktree has no \`${PLANS_DIR}\` of its own. Its stores are ${code$1(storeGlob())}. Use only stores whose plan row has \`status = '${WRITTEN_STATUS}'\`, and look the ID up in their \`tickets\` and \`epics\`. One match is taken silently. Several matches ask the user which plan, newest first: order the \`MM-yyyy\` folders by year, then by month, newest first, never as plain text (${MONTH_ORDER_EXAMPLE}). Hand every agent that works a store ticket this absolute store path.
+
+**Reads and writes.** Query with small selects (\`sqlite3 -box <store> "SELECT …"\`). Start every write with ${code$1(STORE_WRITE_PREFIX)}: a leading \`5000\` line from a write is the busy_timeout prefix echoing, not an error. ${PYTHON_FALLBACK}
+
+**Migration.** Before the first write to a store, including the status update right after reading the ticket at pick, bring it up to date: when ${code$1(STORE_MIGRATION.check)} returns no row, run ${code$1(STORE_MIGRATION.addPrUrl)}, which fails when run twice, so the check always comes first; then run \`CREATE TABLE IF NOT EXISTS ${SESSIONS_TABLE}\` from the planning schema (\`ticket_id\` referencing \`tickets(id)\` with \`ON DELETE CASCADE\`, \`session_id\`, \`started_at\`, \`last_seen_at\`, \`ended_at\`, primary key \`(ticket_id, session_id)\`), which is safe to repeat.
+
+**Sessions.** A session's id is the runtime's session id when the runtime exposes one, otherwise a UUID generated at the start of the run and kept for the whole run. The session or orchestrator working a ticket writes the store itself, at the absolute path it was given, and owns its \`${SESSIONS_TABLE}\` row: it inserts the row (\`started_at\`, \`last_seen_at\`) when it takes the ticket, updates \`last_seen_at\` on each of its store writes, writes the PR URL to ${code$1(PR_URL_COLUMN)} after opening the PR, and sets \`ended_at\` when the PR is opened, it stops or it fails. Ended sessions never count as active.`;
 }
 //#endregion
-//#region src/continue.ts
-const CONTINUE = "continue";
-/** The argument that builds the next wave of an epic instead of a fixed number of tickets. */
-const PARALLEL_WAVE = "parallel-wave";
-/** How each runtime's skill text tells the model to start a named sub-agent. */
+//#region src/brief.ts
+const BRIEF = "brief";
+const BRIEF_GUARD_FILE = "brief-guard.mjs";
+const DESCRIPTION$2 = "Prepare a /continue brief for a Kaneo epic, ticket or bug, or an epic or ticket ID from a .plans store: diagnose what it is missing, ask how to run it, and copy the brief to the clipboard, so a fresh session works the whole epic.";
+const BRIEF_HINT = "<kaneo-epic-or-ticket-url | ticket-code | .plans store ID>";
 const CALL$1 = {
 	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
 	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
 	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
 	pi: (agent) => `the subagent tool with the \`${agent}\` agent`
 };
-/** How the user runs a manual action: a slash command, or Codex's explicit `$skill` mention. */
-function actionCommand(runtime, name) {
-	return runtime === "codex" ? `$${name}` : `/${name}`;
-}
-function continueCommand(runtime) {
-	return actionCommand(runtime, CONTINUE);
-}
-const DESCRIPTION$2 = "Continue the next Kaneo ticket, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one. With `parallel-wave`, build the next wave of an epic the way a brief works it and explain the result.";
-const ARGUMENT_HINT = `[parallel [n] | ${PARALLEL_WAVE}]`;
-/** In parallel-wave mode the brief's phases name these instead of a brief's placeholders. */
-const WAVE_BRANCH = "<integration branch>";
-const WAVE_REVIEW = "the review routing above";
-/** Frontmatter for the file each runtime reads; every one keeps the action manual-only. */
-function actionFrontmatter(runtime, name, summary, argumentHint) {
-	const description = JSON.stringify(`${summary} Manual action only, run with ${actionCommand(runtime, name)}.`);
-	const hint = `argument-hint: ${JSON.stringify(argumentHint)}`;
-	switch (runtime) {
-		case "claude": return `---\nname: ${name}\ndescription: ${description}\n${hint}\ndisable-model-invocation: true\n---`;
-		case "codex": return `---\nname: ${name}\ndescription: ${description}\n---`;
-		case "opencode": return `---\ndescription: ${description}\n---`;
-		case "pi": return `---\ndescription: ${description}\n${hint}\n---`;
-	}
-}
-/** Codex: an explicit `$continue` still works; Codex never picks the skill on its own. */
-const CODEX_POLICY = `policy:\n  allow_implicit_invocation: false\n`;
-function continueMarkdown(runtime, models, briefDir) {
-	const cmd = continueCommand(runtime);
-	const args = runtime === "codex" ? `Arguments passed to this run: the user's message after \`${cmd}\` (none means no arguments).` : "Arguments passed to this run: `$ARGUMENTS` (empty means no arguments).";
-	const scribe = CALL$1[runtime](SCRIBE);
-	const deep = `\`${agentName("read", "deep")}\` (${models.deep})`;
-	const phases = ticketPhases(WAVE_BRANCH, WAVE_REVIEW).map((step, i) => `   ${i + 1}. ${step}`).join("\n");
-	return `${actionFrontmatter(runtime, CONTINUE, DESCRIPTION$2, ARGUMENT_HINT)}
+/** The line a user adds under the phase line to let a review run on the fast rung. */
+const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
+/** The Claude tools the brief guard hook checks: agent handoffs, clipboard copies, brief writes. */
+const BRIEF_GUARD_MATCHER = "Agent|Task|Bash|Write";
+/** Claude's tool for asking the user a question with options. */
+const CLAUDE_QUESTION_TOOL$1 = "AskUserQuestion";
+const DEEP_READER$1 = agentName("read", "deep");
+const FAST_READER$1 = agentName("read", "fast");
+const FAST_REVIEWER = agentName("review", "fast");
+const BALANCED_REVIEWER$1 = agentName("review", "balanced");
+const DEEP_REVIEWER$1 = agentName("review", "deep");
+const agent$1 = (name) => `\`${name}\``;
+/** Nests lines under a numbered step of the brief's loop. */
+const indent = (text) => text.replace(/^/gm, "   ");
+/** The brief's placeholders, filled in by the brief run that writes it. */
+const BRANCH_PLACEHOLDER = "<branch>";
+const REVIEW_PLACEHOLDER = "<review routing>";
+function briefMarkdown(runtime, models, briefDir) {
+	const cmd = actionCommand(runtime, BRIEF);
+	const cont = actionCommand(runtime, CONTINUE);
+	const args = runtime === "codex" ? `Argument: the user's message after \`${cmd}\`.` : "Argument: `$ARGUMENTS`.";
+	const ask = runtime === "claude" ? `with the ${CLAUDE_QUESTION_TOOL$1} tool` : "in one message with numbered options";
+	const guard = runtime === "claude" ? " The brief guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or not in a command of its own." : "";
+	const deepRead = agent$1(DEEP_READER$1);
+	const fastRead = agent$1(FAST_READER$1);
+	const deepReview = agent$1(DEEP_REVIEWER$1);
+	const routed = ROUTED_REVIEW;
+	const steps = ticketPhases(BRANCH_PLACEHOLDER, REVIEW_PLACEHOLDER);
+	const phases = steps.map((step, i) => `${i + 2}. ${step}`).join("\n");
+	const deliver = steps.length + 2;
+	return `${actionFrontmatter(runtime, BRIEF, DESCRIPTION$2, BRIEF_HINT)}
 
 ## Arguments
 
-${args} Read them before doing anything else. Only their first line picks the mode; every line after it is this run's brief:
+${args} It names one Kaneo epic or ticket: a URL (\`…/task/<id>\`) or an identifier such as \`FEX-12\`, or an ID from a plan store (see "${STORE_HEADING}"). When it is empty, ask for it and wait.
 
-| Invocation | Mode | Ticket limit |
-| --- | --- | --- |
-| \`${cmd}\` | Single | 1 (the single-ticket flow below) |
-| \`${cmd} parallel\` | Parallel | 4 |
-| \`${cmd} parallel <n>\` | Parallel | \`<n>\` (a positive integer, e.g. \`${cmd} parallel 10\`) |
-| \`${cmd} ${PARALLEL_WAVE}\` | Parallel wave | The size of the epic's next wave |
+## Save context
 
-If the first line holds anything other than \`parallel\` (optionally followed by a positive integer) or \`${PARALLEL_WAVE}\`, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel sections.
+This session decides; everything bulky runs on an agent and comes back as a short summary. Agents run through ${CALL$1[runtime]("<name>")}.
 
-A brief (such as the one the brief action copies) scopes the run: take tickets only from its queue, in its order, and follow its steps wherever they differ from the flows below. Keep working through its queue until it says to stop.
+- **Kaneo**: every read and write goes through ${agent$1(SCRIBE)} (${models.fast}). Ask for summaries, never raw Kaneo JSON.
+- **Reasoning**: the diagnosis runs on ${deepRead} (${models.deep}). Every handoff starts with its phase line, \`${phase("<phase>")}\`.${guard}
+- **The brief's loop** runs the same way: explorers map, researchers look things up, edit agents write, reviewers on the rung the risk calls for check, and each parallel ticket is led by ${agent$1(ORCHESTRATOR)} (${models.deep}).
+- Anything else you read follows the \`model-ladder\` skill.
 
-## Save context: cheap agents do the reading and the clerical work
+When one of these agents is not installed, do the step yourself with bounded reads.
 
-This session keeps the decisions (which ticket, the design, conflict resolution, whether checks really pass). Everything bulky goes to an agent on a cheaper model, so its output never fills this session:
+## 1. What is missing to complete the epic
 
-- **Kaneo**: read the board and every ticket write (status moves, comments) through ${scribe} (${models.fast}). Ask it for a short summary, never raw Kaneo JSON.
-- **Reads and edits**: follow the \`model-ladder\` skill. Map unfamiliar code with ${CALL$1[runtime](agentName("explore", "fast"))} and look up outside facts with ${CALL$1[runtime](agentName("research", "fast"))}. Large or many files, logs, CI and test output go to ${CALL$1[runtime]("ladder-read-fast")}; boilerplate, tests and mechanical edits to ${CALL$1[runtime]("ladder-edit-fast")} (${CALL$1[runtime]("ladder-edit-balanced")} for new logic). Climb a rung only when a reply is partial or fails verification.
-- **Reviews**: every change gets a ladder reviewer on the rung its risk calls for (${ROUTED_REVIEW}) before it ships, and you still run the checks yourself.
-- **Commit titles**: the \`${COMMIT_SKILL}\` skill hands the staged diff to ${CALL$1[runtime](COMMIT_WRITER)}, which replies with one title.
-- **Parallel workers** are \`${ORCHESTRATOR}\` agents (${models.deep}), started with ${CALL$1[runtime](ORCHESTRATOR)}: one deep lead per worktree that plans, hands every read and write to the ladder agents above (through \`agent-config delegate\` when it cannot start agents), and reviews the result. When it is not installed, use a sub-agent on the balanced rung (${models.balanced}) and give it these delegation rules.
+1. Load the \`${KANEO_SKILL}\` skill. Have the scribe resolve the argument to its epic: the ticket itself when it is the epic, otherwise the epic it belongs to (its parent, epic or \`related\` relation; with none, the ticket is the root). In the same request, ask for one summary of the epic (identifier, title, URL, description, acceptance criteria) and of every ticket related to it (subtasks, related, blocking, blocked by), each with identifier, title, status, priority, size label, relations, its criteria in one line and any PR link in its comments.
+2. Hand that summary to ${deepRead}:
 
-When one of these agents is not installed, do the step yourself with bounded reads (line ranges, \`--stat\`, \`tail\`).
+   \`\`\`
+   ${phase("diagnose")}
+   Epic: <identifier> <title>, <url>
+   Tickets: <the scribe's summary>
+   Scope: this repository
+   Question: what is missing to complete this epic?
+   Answer shape: done tickets; open tickets in dependency order with what blocks each; work the epic's criteria need that no ticket covers (proposed tickets: title, one-line scope, size, dependencies); gaps (vague or missing criteria, tickets without criteria, dependency cycles, stale blockers, code that contradicts a done ticket); waves of open tickets that can run in parallel (no dependency between them, different areas of the code), each ticket with the context a fresh session needs and the paths it touches.
+   Budget: <= 700 words
+   \`\`\`
 
-## Single-ticket flow
+3. Show the user the overview: progress (done / open / missing), blockers, missing tickets, gaps, and the proposed order and waves.
 
-Continue the next Kaneo ticket's work, move it to in progress, then commit and create the merge request:
+## ${STORE_HEADING}
 
-1. Load the \`${KANEO_SKILL}\` skill. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order with their blocking relations, and pick the first one that is not blocked by an unfinished ticket.
-2. Have the scribe move it to In Progress.
-3. \`git fetch origin\` and create the branch \`<IDENTIFIER>/<short-kebab-description>\` (e.g. \`FEX-2/some-feature-getting-done\`) from the up-to-date default branch.
-4. Implement the ticket with tests and docs alongside the change, delegating reads and edits as above, and have a ladder reviewer check the diff on the rung its risk calls for.
-5. Run the project's checks and leave them passing; read long output through the ladder read agent.
-6. Commit with the \`${COMMIT_SKILL}\` skill, push the branch and open the PR (body starts with the Kaneo ticket link, no AI attribution).
-7. Have the scribe comment the PR URL on the ticket.
-8. Report the ticket, branch, PR URL and the checks run with their results.
+${storeAccess(CALL$1[runtime](SCRIBE))}
 
-## Parallel mode
+When the argument resolves to a store, steps 1 and 2 read and write the store instead of Kaneo:
 
-Goal: take up to N Kaneo tickets that can be worked at the same time, build each in its own worktree until it is ready to merge, then merge them one by one, bringing each next branch up to date with the latest default branch before it merges.
+- **Resolve.** A store ticket's epic is the \`epics\` row its \`epic_id\` names. A ticket whose \`epic_id\` is NULL is its own root: the brief's \`## Epic\` section describes the ticket itself. Summarize the epic and its tickets for the diagnosis with small selects (\`id, title, status, size, touches, done_when\` and their \`blocks\`), never a dump.
+- **Missing tickets.** When the user chose to create them, insert them into the same store's \`tickets\` and \`blocks\`, every write starting with \`${STORE_WRITE_PREFIX}\`. IDs continue the plan's prefix (after \`BCS-9\` comes \`BCS-10\`); each has a non-empty \`touches\`, its outcome, \`done_when\` from the diagnosis findings, and a size. \`SELECT * FROM waves ORDER BY wave\` must then list every open ticket: one missing sits in a dependency cycle, so fix its blocks.
+- **The brief** names the absolute store path in its \`## Epic\` section, so the new session works the same store.
 
-### 1. Pick tickets that can run in parallel
+## 2. Ask how to run it
 
-1. Load the \`${KANEO_SKILL}\` skill.
-2. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order, each with its relations.
-3. Drop any ticket that is blocked by an unfinished ticket, or that depends on another candidate.
-4. Drop tickets that would clearly change the same files or the same feature area as a ticket already picked; conflicts are allowed but should be rare.
-5. Pick up to N tickets. If fewer qualify, take what qualifies and say why the rest were skipped. If only one qualifies, run the single-ticket flow.
-6. Show the picked tickets (identifier, title) and the planned merge order before creating anything.
+Ask these four ${ask}, recommending the first option of each, and wait for the answers:
 
-### 2. Create one worktree per ticket
+1. **Missing tickets**: create them in Kaneo now / list them in the brief for the new session to create first / leave them out.
+2. **Parallelism**: parallel waves of up to N tickets (\`${cont} parallel N\`, N = the widest wave) / one ticket at a time (\`${cont}\`). Recommend one at a time when no wave has two tickets.
+3. **Integration branch**: \`dev\` / the repository's default branch / another branch. Every ticket branch starts from it and every PR merges into it.
+4. **Reviews**: routed by risk (${routed}) / always ${deepReview} / fast allowed for none risk.
 
-For each picked ticket:
+When the user chose to create the missing tickets, have the scribe create them, sized, labelled and related as the \`${KANEO_SKILL}\` skill says, and put their identifiers in the queue.
 
-1. \`git fetch origin\` and use the up-to-date default branch as the base.
-2. Branch name: \`<IDENTIFIER>/<short-kebab-description>\` (e.g. \`FEX-2/some-feature-getting-done\`).
-3. Worktree path: \`<repo-parent>/<repo-name>-worktrees/<IDENTIFIER>-<short-kebab-description>\`. Never under \`/tmp\`.
-4. \`git worktree add -b <branch> <path> origin/<default-branch>\`
-5. Have the scribe move the ticket to In Progress.
+The brief's review routing, from answer 4:
 
-### 3. Build every ticket until it is ready to merge
+- Routed by risk: "${routed}."
+- Always deep: "${deepReview} for every risk."
+- Fast allowed for none risk: "none: ${agent$1(FAST_REVIEWER)}, with the line \`${FAST_REVIEW_APPROVAL}\` under the phase line; low: ${agent$1(BALANCED_REVIEWER$1)}; medium and high: ${deepReview}."
 
-Launch one \`${ORCHESTRATOR}\` (${models.deep}) per worktree with ${CALL$1[runtime](ORCHESTRATOR)}, all at once so they run concurrently. Each orchestrator:
+## 3. Write the brief and copy it
 
-- works only inside its own worktree path, and never touches another worktree or the main checkout;
-- implements its ticket, with tests and docs alongside the change, without doing the I/O itself: explorers map the code, researchers answer outside questions, designers extract exact design rules, user-experience agents analyze flows and their edge cases, edit agents write on the cheapest rung that works, and a reviewer on the rung the risk calls for checks the diff;
-- reaches those agents through \`agent-config delegate <explore|research|design|ux|read|edit|review> --runtime ${runtime} --cwd <worktree path> "<handoff>"\` when it cannot start agents, and the scribe and commit-writer through the same rules when it can;
-- reviews the final work itself (checks, \`git diff --stat\` against the criteria) before it reports;
-- runs the project's checks and leaves them passing;
-- commits with the \`${COMMIT_SKILL}\` skill, pushes its branch, and opens the PR (body starts with the Kaneo ticket link, no AI attribution);
-- comments the PR URL on its Kaneo ticket;
-- reports back in at most ten lines: ticket, branch, worktree path, PR URL, checks run and their results, or why it is blocked.
+1. Write the brief to \`${briefDir}/<EPIC-ID>.md\` (create the folder) from the template below. Replace every \`<…>\` and keep the rest as written: the loop, routing and stop sections are what the new session runs on.
+2. Then copy it to the clipboard with a command of its own (nothing else in it), using the first tool that exists: \`pbcopy < <file>\` (macOS), \`wl-copy < <file>\`, \`xclip -selection clipboard < <file>\`, \`xsel --clipboard --input < <file>\` or \`clip.exe < <file>\`. When none exists, say so and give the path.
+3. Report the path, whether the brief is on the clipboard, one line per wave, and: open a fresh session in this repository and paste it.
 
-Wait for all of them. A ticket that comes back blocked or with failing checks is left out of the merge loop and listed in the final report.
+## Brief template
 
-### 4. Merge loop, one PR at a time
+The first line is the command alone: \`${cont}\` for one ticket at a time, \`${cont} parallel <N>\` for waves.
 
-Merge the ready PRs in the planned order. For each PR:
+\`\`\`\`markdown
+${cont} parallel <N>
 
-1. \`git fetch origin\`.
-2. In that ticket's worktree, merge the latest default branch into its branch: \`git merge origin/<default-branch>\`.
-3. If there are conflicts, resolve them locally (load the \`resolving-merge-conflicts\` skill when it is available), keeping the intent of both sides.
-4. Re-run the project's checks. Do not continue if they fail; fix them first.
-5. Commit the merge if needed and push the branch.
-6. Wait for the PR's CI checks to pass; read failing logs through the ladder read agent.
-7. Merge the PR.
-8. Have the scribe move the Kaneo ticket to Done.
-9. Go to the next PR. Its step 2 now picks up the PR that was just merged.
+# Brief: <EPIC-ID> <epic title>
 
-Stop the loop and report when a conflict cannot be resolved with confidence, checks keep failing after a fix attempt, or a PR cannot be merged (review required, branch protection). Leave the remaining PRs open and untouched.
+## Epic
 
-### 5. Clean up and report
+- Ticket: [<EPIC-ID> <title>](<url>) (a store ticket: \`<EPIC-ID> <title>\` in \`<absolute store path>\`)
+- Goal: <one sentence>
+- Done when: <each acceptance criterion of the epic, one per line>
+- State: <done>/<total> tickets done, <open> open, <created> created by the brief run.
+- Integration branch: \`<branch>\`. Every ticket branch starts from \`origin/<branch>\` and every PR merges into it.
 
-1. After a PR is merged, remove its worktree: \`git worktree remove <path>\`. Keep the worktree of any ticket that was not merged.
-2. Update the main checkout: \`git checkout <default-branch> && git pull\`.
-3. Report a table: ticket, PR URL, status (merged / open / blocked), and what is left for anything not merged.
+## Queue
 
-## Parallel-wave mode
+Work only these tickets, in this order. Tickets in one wave do not depend on each other and may run in parallel; a wave starts once the previous one merged.
 
-Goal: build the next wave of one epic, every story that can start now, all at once and the way the brief action works an epic; merge them one by one; then explain what changed at the user's level. One wave per run.
+### Wave 1
 
-### 1. Pick the epic
+- \`<ID>\` <title>: <why now and the context the ticket needs, one or two lines>. Depends on: <IDs or none>. Done when: <criteria>. Touches: <areas or paths>.
 
-1. Load the \`${KANEO_SKILL}\` skill: its "Plan an epic" section says how epics and their stories are marked. Ask ${scribe} for the project's open epics (tasks titled \`${EPIC_TITLE_PREFIX}…\`), each with its "Done when" list and its open stories, and every story with its \`blocks\` relations, including those to stories of other epics.
-2. Hand that summary to ${deep} (\`${phase("plan")}\`): order the epics (an epic waits while one of its stories is blocked by an open story of another epic) and recommend the one to work first, with a one-line reason: what it unblocks, its risk, its priority.
-3. One epic can start: take it. Several can start in any order: ask the user which one, the recommendation first. When the user skips the question, says to choose, or the run cannot ask, take the recommendation and say so. None can start: report what blocks each and stop.
+## Gaps
 
-### 2. Find the waves
+- <gap>: <what to do: create the ticket first, ask the user, or note it in the PR>.
 
-1. Ask the scribe for every open story of the epic with its status, priority, \`blocks\` relations and \`${TOUCHES_LINE}\` line.
-2. Hand that to ${deep} (\`${phase("plan")}\`): ${WAVE_RULE} Return the waves in order; for each story, the context a fresh worker needs and the paths it touches; list dependency cycles and stale blockers as gaps.
-3. The first wave is this run's work, and its size is the parallel limit. A wave of one story runs the single-ticket flow, built through the phases in step 3. With no story ready, report the blockers and stop.
-4. Show the waves, the integration branch and the merge order before creating anything.
+## Loop per ticket
 
-### 3. Build the wave the way a brief works it
+Agents run through ${CALL$1[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`${phase("plan")}\`, so the run can be checked. In parallel waves each ticket goes to one ${agent$1(ORCHESTRATOR)} worker in its own worktree, which runs steps 2 to ${deliver} there and hands every read and write to the ladder.
 
-When the epic has a brief, \`${briefDir}/<EPIC-ID>.md\`, its integration branch, review routing and gaps apply. Without one, the integration branch is \`dev\` when \`origin/dev\` exists and the default branch otherwise, and reviews are routed by risk (${ROUTED_REVIEW}).
-
-Run parallel mode steps 2 to 5 with the wave as the picked tickets, and these changes:
-
-- Worktrees branch from \`origin/${WAVE_BRANCH}\`, and every PR merges into it.
-- Each worker builds its ticket through these phases, every handoff starting with its phase line, then runs the checks, commits, pushes and opens the PR as parallel mode step 3 says:
+1. **Pick.** Have ${agent$1(SCRIBE)} re-read the ticket and its blockers. Still blocked: skip it, say why and take the next. Otherwise move it to In Progress and branch \`<ID>/<short-kebab-description>\` from \`origin/<branch>\`.
+   A store ticket: re-read it and its blockers from the store at the absolute path in \`## Epic\`, then run \`${setStatus("in_progress")}\` and \`${START_SESSION}\` with this session's id.
 ${phases}
-- A worker reports itself blocked when the review still has findings after 3 rounds or CI fails twice after fixes.
+${deliver}. **Deliver.** Run the project's checks and leave them passing. Commit with the \`${COMMIT_SKILL}\` skill (titles from ${agent$1(COMMIT_WRITER)}), push, and open the PR into \`<branch>\`: its body starts with the Kaneo ticket link and has no AI attribution. Have the scribe comment the PR URL on the ticket. Wait for CI; read failures through ${fastRead} and fix them through Plan, Edit and Review. Merge, have the scribe move the ticket to Done, then delete the branch and its worktree.
+   A store ticket follows these PR rules instead of the Kaneo link and the scribe's comment. A store ticket stays in_progress after the merge; a later \`${cont}\` marks it done:
+${indent(prDelivery())}
+${deliver + 1}. **Next.** Back to Pick. After each wave, have the scribe re-read the epic: tickets added since go to the end of the queue in dependency order.
 
-${modelRouting(runtime, models, WAVE_REVIEW)}
+## Model routing
 
-### 4. Explain the wave
+${modelRouting(runtime, models, REVIEW_PLACEHOLDER)}
 
-After the cleanup, explain the wave at the user's level: plain words with each technical term explained in a few words, unless the user speaks technically.
+## Stop and report
 
-- **What changed**: per ticket, what someone can now do or what works differently, and why it matters for the epic.
-- **How it was checked**: risk level, review rounds, checks and CI.
-- **What to watch**: open findings, risks, and anything not merged with the reason.
-- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met.
+Stop and ask the user when a ticket stays blocked, the review still has findings after 3 rounds, CI fails twice after fixes, a merge conflict cannot be resolved with confidence, a PR cannot merge (required review, branch protection), or the epic's criteria are ambiguous.
+
+When the queue is empty, have ${deepReview} check the epic's "Done when" list against the merged code (\`${phase("review")}\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
+\`\`\`\`
 `;
 }
 //#endregion
@@ -4800,156 +4763,9 @@ function uninstall(filter, force = false) {
 	return results;
 }
 //#endregion
-//#region src/brief.ts
-const BRIEF = "brief";
-const BRIEF_GUARD_FILE = "brief-guard.mjs";
-const DESCRIPTION$1 = "Prepare a /continue brief for a Kaneo epic, ticket or bug: diagnose what it is missing, ask how to run it, and copy the brief to the clipboard, so a fresh session works the whole epic.";
-const BRIEF_HINT = "<kaneo-epic-or-ticket-url | ticket-code>";
-const CALL = {
-	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
-	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
-	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
-	pi: (agent) => `the subagent tool with the \`${agent}\` agent`
-};
-/** The line a user adds under the phase line to let a review run on the fast rung. */
-const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
-/** The Claude tools the brief guard hook checks: agent handoffs, clipboard copies, brief writes. */
-const BRIEF_GUARD_MATCHER = "Agent|Task|Bash|Write";
-/** Claude's tool for asking the user a question with options. */
-const CLAUDE_QUESTION_TOOL$1 = "AskUserQuestion";
-const DEEP_READER = agentName("read", "deep");
-const FAST_READER$1 = agentName("read", "fast");
-const FAST_REVIEWER = agentName("review", "fast");
-const BALANCED_REVIEWER = agentName("review", "balanced");
-const DEEP_REVIEWER = agentName("review", "deep");
-const agent = (name) => `\`${name}\``;
-/** The brief's placeholders, filled in by the brief run that writes it. */
-const BRANCH_PLACEHOLDER = "<branch>";
-const REVIEW_PLACEHOLDER = "<review routing>";
-function briefMarkdown(runtime, models, briefDir) {
-	const cmd = actionCommand(runtime, BRIEF);
-	const cont = actionCommand(runtime, CONTINUE);
-	const args = runtime === "codex" ? `Argument: the user's message after \`${cmd}\`.` : "Argument: `$ARGUMENTS`.";
-	const ask = runtime === "claude" ? `with the ${CLAUDE_QUESTION_TOOL$1} tool` : "in one message with numbered options";
-	const guard = runtime === "claude" ? " The brief guard hook denies a `diagnose`, `plan` or `risk` handoff off the deep rung, a review on fast without the user's approval, an incomplete brief, and a clipboard copy of a brief that is missing, incomplete or not in a command of its own." : "";
-	const deepRead = agent(DEEP_READER);
-	const fastRead = agent(FAST_READER$1);
-	const deepReview = agent(DEEP_REVIEWER);
-	const routed = ROUTED_REVIEW;
-	const steps = ticketPhases(BRANCH_PLACEHOLDER, REVIEW_PLACEHOLDER);
-	const phases = steps.map((step, i) => `${i + 2}. ${step}`).join("\n");
-	const deliver = steps.length + 2;
-	return `${actionFrontmatter(runtime, BRIEF, DESCRIPTION$1, BRIEF_HINT)}
-
-## Arguments
-
-${args} It names one Kaneo epic or ticket: a URL (\`…/task/<id>\`) or an identifier such as \`FEX-12\`. When it is empty, ask for it and wait.
-
-## Save context
-
-This session decides; everything bulky runs on an agent and comes back as a short summary. Agents run through ${CALL[runtime]("<name>")}.
-
-- **Kaneo**: every read and write goes through ${agent(SCRIBE)} (${models.fast}). Ask for summaries, never raw Kaneo JSON.
-- **Reasoning**: the diagnosis runs on ${deepRead} (${models.deep}). Every handoff starts with its phase line, \`${phase("<phase>")}\`.${guard}
-- **The brief's loop** runs the same way: explorers map, researchers look things up, edit agents write, reviewers on the rung the risk calls for check, and each parallel ticket is led by ${agent(ORCHESTRATOR)} (${models.deep}).
-- Anything else you read follows the \`model-ladder\` skill.
-
-When one of these agents is not installed, do the step yourself with bounded reads.
-
-## 1. What is missing to complete the epic
-
-1. Load the \`${KANEO_SKILL}\` skill. Have the scribe resolve the argument to its epic: the ticket itself when it is the epic, otherwise the epic it belongs to (its parent, epic or \`related\` relation; with none, the ticket is the root). In the same request, ask for one summary of the epic (identifier, title, URL, description, acceptance criteria) and of every ticket related to it (subtasks, related, blocking, blocked by), each with identifier, title, status, priority, size label, relations, its criteria in one line and any PR link in its comments.
-2. Hand that summary to ${deepRead}:
-
-   \`\`\`
-   ${phase("diagnose")}
-   Epic: <identifier> <title>, <url>
-   Tickets: <the scribe's summary>
-   Scope: this repository
-   Question: what is missing to complete this epic?
-   Answer shape: done tickets; open tickets in dependency order with what blocks each; work the epic's criteria need that no ticket covers (proposed tickets: title, one-line scope, size, dependencies); gaps (vague or missing criteria, tickets without criteria, dependency cycles, stale blockers, code that contradicts a done ticket); waves of open tickets that can run in parallel (no dependency between them, different areas of the code), each ticket with the context a fresh session needs and the paths it touches.
-   Budget: <= 700 words
-   \`\`\`
-
-3. Show the user the overview: progress (done / open / missing), blockers, missing tickets, gaps, and the proposed order and waves.
-
-## 2. Ask how to run it
-
-Ask these four ${ask}, recommending the first option of each, and wait for the answers:
-
-1. **Missing tickets**: create them in Kaneo now / list them in the brief for the new session to create first / leave them out.
-2. **Parallelism**: parallel waves of up to N tickets (\`${cont} parallel N\`, N = the widest wave) / one ticket at a time (\`${cont}\`). Recommend one at a time when no wave has two tickets.
-3. **Integration branch**: \`dev\` / the repository's default branch / another branch. Every ticket branch starts from it and every PR merges into it.
-4. **Reviews**: routed by risk (${routed}) / always ${deepReview} / fast allowed for none risk.
-
-When the user chose to create the missing tickets, have the scribe create them, sized, labelled and related as the \`${KANEO_SKILL}\` skill says, and put their identifiers in the queue.
-
-The brief's review routing, from answer 4:
-
-- Routed by risk: "${routed}."
-- Always deep: "${deepReview} for every risk."
-- Fast allowed for none risk: "none: ${agent(FAST_REVIEWER)}, with the line \`${FAST_REVIEW_APPROVAL}\` under the phase line; low: ${agent(BALANCED_REVIEWER)}; medium and high: ${deepReview}."
-
-## 3. Write the brief and copy it
-
-1. Write the brief to \`${briefDir}/<EPIC-ID>.md\` (create the folder) from the template below. Replace every \`<…>\` and keep the rest as written: the loop, routing and stop sections are what the new session runs on.
-2. Then copy it to the clipboard with a command of its own (nothing else in it), using the first tool that exists: \`pbcopy < <file>\` (macOS), \`wl-copy < <file>\`, \`xclip -selection clipboard < <file>\`, \`xsel --clipboard --input < <file>\` or \`clip.exe < <file>\`. When none exists, say so and give the path.
-3. Report the path, whether the brief is on the clipboard, one line per wave, and: open a fresh session in this repository and paste it.
-
-## Brief template
-
-The first line is the command alone: \`${cont}\` for one ticket at a time, \`${cont} parallel <N>\` for waves.
-
-\`\`\`\`markdown
-${cont} parallel <N>
-
-# Brief: <EPIC-ID> <epic title>
-
-## Epic
-
-- Ticket: [<EPIC-ID> <title>](<url>)
-- Goal: <one sentence>
-- Done when: <each acceptance criterion of the epic, one per line>
-- State: <done>/<total> tickets done, <open> open, <created> created by the brief run.
-- Integration branch: \`<branch>\`. Every ticket branch starts from \`origin/<branch>\` and every PR merges into it.
-
-## Queue
-
-Work only these tickets, in this order. Tickets in one wave do not depend on each other and may run in parallel; a wave starts once the previous one merged.
-
-### Wave 1
-
-- \`<ID>\` <title>: <why now and the context the ticket needs, one or two lines>. Depends on: <IDs or none>. Done when: <criteria>. Touches: <areas or paths>.
-
-## Gaps
-
-- <gap>: <what to do: create the ticket first, ask the user, or note it in the PR>.
-
-## Loop per ticket
-
-Agents run through ${CALL[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`${phase("plan")}\`, so the run can be checked. In parallel waves each ticket goes to one ${agent(ORCHESTRATOR)} worker in its own worktree, which runs steps 2 to ${deliver} there and hands every read and write to the ladder.
-
-1. **Pick.** Have ${agent(SCRIBE)} re-read the ticket and its blockers. Still blocked: skip it, say why and take the next. Otherwise move it to In Progress and branch \`<ID>/<short-kebab-description>\` from \`origin/<branch>\`.
-${phases}
-${deliver}. **Deliver.** Run the project's checks and leave them passing. Commit with the \`${COMMIT_SKILL}\` skill (titles from ${agent(COMMIT_WRITER)}), push, and open the PR into \`<branch>\`: its body starts with the Kaneo ticket link and has no AI attribution. Have the scribe comment the PR URL on the ticket. Wait for CI; read failures through ${fastRead} and fix them through Plan, Edit and Review. Merge, have the scribe move the ticket to Done, then delete the branch and its worktree.
-${deliver + 1}. **Next.** Back to Pick. After each wave, have the scribe re-read the epic: tickets added since go to the end of the queue in dependency order.
-
-## Model routing
-
-${modelRouting(runtime, models, REVIEW_PLACEHOLDER)}
-
-## Stop and report
-
-Stop and ask the user when a ticket stays blocked, the review still has findings after 3 rounds, CI fails twice after fixes, a merge conflict cannot be resolved with confidence, a PR cannot merge (required review, branch protection), or the epic's criteria are ambiguous.
-
-When the queue is empty, have ${deepReview} check the epic's "Done when" list against the merged code (\`${phase("review")}\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
-\`\`\`\`
-`;
-}
-//#endregion
 //#region src/planning.ts
 const PLANNING = "planning";
-const DESCRIPTION = "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed).";
+const DESCRIPTION$1 = "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed).";
 /** The plan kinds: how many sub-agents may run at once, and the planner rung a draft starts on. */
 const PLAN_KINDS = {
 	fix: {
@@ -4975,7 +4791,10 @@ const PLAN_KINDS = {
 };
 const KIND_NAMES = Object.keys(PLAN_KINDS);
 const PLANNING_HINT = `[${KIND_NAMES.join(" | ")}] <what to plan>`;
-const PLAN_STORE_PATH = `.plans/<MM-yyyy>/<plan-title>/plan.sqlite`;
+/** The plan store: one folder per month and per plan, in the repository root. */
+const PLANS_DIR = ".plans";
+const PLAN_DB = "plan.sqlite";
+const PLAN_STORE_PATH = `${PLANS_DIR}/<MM-yyyy>/<plan-title>/${PLAN_DB}`;
 /** A gap still open when the user asks to write the tickets becomes a ticket with this title. */
 const GAP_TITLE_PREFIX = "Gap: ";
 const GAP_LABEL_COLOR = "#EC4899";
@@ -4989,12 +4808,39 @@ const STORY_SIZES = [
 	MAX_STORY_SIZE
 ];
 /**
-* The plan store's schema. Every statement is idempotent, so running it on an existing store is
-* safe. The `waves` view layers open tickets by their unfinished blockers and leaves out every
-* ticket in a dependency cycle or behind one (`stuck`), since none of them can start.
+* Every write starts with this. SQLite checks `REFERENCES` only on a connection that asks, and
+* without a busy timeout a write fails at once while another session is writing the store. Both
+* are PRAGMAs, unlike the CLI-only `.timeout`; `python3 -m sqlite3` needs each on a line of its
+* own (`PYTHON_FALLBACK`).
 */
-/** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
-const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
+const STORE_WRITE_PREFIX = "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;";
+/** `python3 -m sqlite3` runs one statement per `execute()`, so two on one line fail. */
+const PYTHON_FALLBACK = "When `sqlite3` is missing, pipe the same statements to `python3 -m sqlite3 <store>` on stdin, never two statements on one line: it runs one statement at a time, so each PRAGMA of the prefix goes on a line of its own.";
+/** The sessions that worked each ticket; a deleted ticket takes its sessions with it. */
+const SESSIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ticket_sessions (
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  ended_at TEXT,
+  PRIMARY KEY (ticket_id, session_id)
+);`;
+/**
+* Brings a store written before `tickets.pr_url` and `ticket_sessions` up to date. SQLite cannot
+* add a column only when it is missing, so the agent runs `check` first and `addPrUrl` when it
+* returns no row; `sessions` is idempotent.
+*/
+const STORE_MIGRATION = {
+	check: "SELECT 1 FROM pragma_table_info('tickets') WHERE name = 'pr_url';",
+	addPrUrl: "ALTER TABLE tickets ADD COLUMN pr_url TEXT;",
+	sessions: SESSIONS_SCHEMA
+};
+/**
+* The plan store's schema. Every statement is idempotent, so running it on an existing store is
+* safe, though it adds no column to an existing table: that is `STORE_MIGRATION`'s job. The
+* `waves` view layers open tickets by their unfinished blockers and leaves out every ticket in a
+* dependency cycle or behind one (`stuck`), since none of them can start.
+*/
 const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
 CREATE TABLE IF NOT EXISTS plan (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -5038,8 +4884,10 @@ CREATE TABLE IF NOT EXISTS tickets (
   size TEXT NOT NULL CHECK (size IN (${STORY_SIZES.map((s) => `'${s}'`).join(", ")})),
   touches TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
-  tracker_id TEXT
+  tracker_id TEXT,
+  pr_url TEXT
 );
+${SESSIONS_SCHEMA}
 CREATE TABLE IF NOT EXISTS blocks (
   blocker TEXT NOT NULL REFERENCES tickets(id),
   blocked TEXT NOT NULL REFERENCES tickets(id),
@@ -5135,7 +4983,7 @@ Every handoff opens with a phase line and names the plan store, a SQLite file. R
 ## Phases
 
 - \`${phase("plan")}\`: answer what the handoff asks (such as classifying a request) in its answer shape. Change nothing.
-- \`${phase(DRAFT_PHASE)}\`: write the draft into the store yourself, following the draft rules. Start every write with \`${STORE_WRITE_PREFIX}\`, and first delete any earlier draft (its blocks, tickets and epics). When the handoff lists issues from earlier drafts, fix every one.
+- \`${phase(DRAFT_PHASE)}\`: write the draft into the store yourself, following the draft rules. Start every write with \`${STORE_WRITE_PREFIX}\`, and first delete any earlier draft (its ticket_sessions, blocks, tickets and epics). When the handoff lists issues from earlier drafts, fix every one.
 - \`${phase("review")}\`: check what the handoff names against its lenses, the decisions in the store and the draft rules. Change nothing.
 
 ## Draft rules
@@ -5172,7 +5020,7 @@ function planningMarkdown(runtime, models) {
 	const caps = KIND_NAMES.map((k) => `${k} ${PLAN_KINDS[k].fanOut}`).join(", ");
 	const starts = KIND_NAMES.map((k) => `${k} ${code(plannerName(PLAN_KINDS[k].start))}`).join(", ");
 	const lenses = LENSES.map(([name, focus]) => `   - **${name}**: ${focus}.`).join("\n");
-	return `${actionFrontmatter(runtime, PLANNING, DESCRIPTION, PLANNING_HINT)}
+	return `${actionFrontmatter(runtime, PLANNING, DESCRIPTION$1, PLANNING_HINT)}
 
 ## Arguments
 
@@ -5187,7 +5035,7 @@ ${args} Its first word may name the kind of plan: ${KIND_NAMES.map(code).join(",
 
 ## Save context
 
-This session runs the interview and keeps the decisions. Reasoning over the whole plan and bulky reads run on agents through ${CALL$1[runtime]("<name>")} and come back as short answers.
+This session runs the interview and keeps the decisions. Reasoning over the whole plan and bulky reads run on agents through ${CALL[runtime]("<name>")} and come back as short answers.
 
 - **Planners**: this action installs one planning specialist per rung: ${planners}. Classification, gap reviews and every review run on ${deep}; drafting climbs the planner ladder (step 5). Each handoff starts with its phase line: ${code(phase("plan"))} to classify, ${code(phase(DRAFT_PHASE))} to draft, ${code(phase("review"))} to review.
 - **Code facts**: ${fast} (${models.fast}) answers with \`path:line\` bullets.
@@ -5301,13 +5149,15 @@ With none installed, say how to work the tickets by hand from the store.
 
 ## Plan store
 
-Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is the current month (\`10-2026\`). Create it with \`sqlite3\` (or \`python3 -m sqlite3\` when \`sqlite3\` is missing) from this schema:
+Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is the current month (\`10-2026\`). Create it with \`sqlite3\` from this schema:
 
 \`\`\`sql
 ${PLAN_SCHEMA}
 \`\`\`
 
-Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist; \`busy_timeout\` makes a write wait up to 5 seconds while another session is writing the store, instead of failing at once. ${PYTHON_FALLBACK} Query the store with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+
+A store created before \`tickets.pr_url\` and \`ticket_sessions\` existed needs them before its first write: when ${code(STORE_MIGRATION.check)} returns no row, run ${code(STORE_MIGRATION.addPrUrl)}, which fails when run twice, so the check always comes first; then run the \`ticket_sessions\` statement from the schema above, which is safe to repeat.
 
 ## Design system standard
 
@@ -5317,6 +5167,290 @@ Applies to every plan with a UI and a design system; each rule becomes "done whe
 - **Accessibility**: WCAG 2.2 AA. Text contrast 4.5:1 (3:1 for large text and UI parts), a visible focus ring, everything reachable by keyboard, semantic roles and labels, targets of at least 24 px (44 px recommended for touch), color never the only signal, and automated accessibility checks in CI.
 - **Motion**: scroll-driven animations ship as first-party design-system components (reveal on scroll, scroll progress, sticky and parallax sections, staggered lists) with motion tokens for durations and easing. A proven library is welcome when it meets this bar: only \`transform\` and \`opacity\` animate, no layout shift, a steady 60 fps on a mid-range phone, no scroll hijacking, cleanup on unmount, safe under server rendering, and \`prefers-reduced-motion\` honored with a still or fade fallback. Every motion component ships tests for its reduced-motion path and its cleanup.
 - Ask the stack-specific choices (component library, styling, motion library) with a recommendation for the chosen stack.
+`;
+}
+//#endregion
+//#region src/loop.ts
+/** The line that opens every delegated handoff, so the guard and the user can check its phase. */
+const PHASE_PREFIX = "Phase:";
+const phase = (name) => `${PHASE_PREFIX} ${name}`;
+const agent = (name) => `\`${name}\``;
+const DEEP_READER = agentName("read", "deep");
+const FAST_EXPLORER = agentName("explore", "fast");
+const BALANCED_EXPLORER = agentName("explore", "balanced");
+const FAST_RESEARCHER = agentName("research", "fast");
+const FAST_EDITOR = agentName("edit", "fast");
+const BALANCED_EDITOR = agentName("edit", "balanced");
+const DEEP_EDITOR = agentName("edit", "deep");
+const BALANCED_REVIEWER = agentName("review", "balanced");
+const DEEP_REVIEWER = agentName("review", "deep");
+/** The first line of a PR body for a Kaneo ticket, linking its Kaneo page. */
+const KANEO_PR_LINE = "Kaneo: [<IDENTIFIER> — <ticket title>](<ticket URL>)";
+/** The first line of a PR body for a store ticket. Built on call: planning.ts imports this file. */
+const storePrLine = () => `Plan: <ID> — <title> (${PLANS_DIR}/<MM-yyyy>/<slug>/${PLAN_DB})`;
+/** How a ticket's PR body starts, and what its owner records after opening it. */
+function prDelivery() {
+	return `- For a Kaneo ticket, the PR body starts with \`${KANEO_PR_LINE}\`, and the scribe comments the PR URL on the ticket.
+- For a store ticket, the PR body starts with \`${storePrLine()}\` and has no Kaneo link line; \`${PLANS_DIR}\` is untracked, so the path points into the main checkout. After opening the PR, the session or orchestrator that opened it writes the PR URL to \`tickets.pr_url\` and sets \`ended_at\` on its \`ticket_sessions\` row.`;
+}
+/** The brief's recommended review routing: the reviewer's rung follows the diff's risk. */
+const ROUTED_REVIEW = `none and low risk: ${agent(BALANCED_REVIEWER)}; medium and high: ${agent(DEEP_REVIEWER)}`;
+/**
+* The phases one ticket goes through between its branch and its PR: explore, plan, edit, risk,
+* review, fix and the final check. The brief numbers them inside its loop; /continue parallel
+* modes hand them to every worker, a `ladder-orchestrator`.
+*/
+function ticketPhases(branch, review) {
+	const deepRead = agent(DEEP_READER);
+	const lead = agent(ORCHESTRATOR);
+	return [
+		`**Explore** (\`${phase("explore")}\`, ${agent(FAST_EXPLORER)}; ${agent(BALANCED_EXPLORER)} when the map crosses several modules). Map what the ticket touches: entry points, the flow, where each change goes, the tests that cover it. When the ticket needs facts from outside the repository (library docs, API behavior, versions), ask ${agent(FAST_RESEARCHER)} one exact question. Plan from these answers instead of reading the files yourself.`,
+		`**Plan** (\`${phase("plan")}\`, deep: a ${lead} plans itself; anyone else hands the map to ${deepRead}). Diagnose every change the ticket needs. Return a task list; each task has a spec, its allowed paths, a reference file, a verify command and its edit rung: fast for pattern work (tests, boilerplate, config, mechanical edits), balanced for new logic. Prefer fast.`,
+		`**Edit** (\`${phase("edit")}\`). Run each task on its rung, ${agent(FAST_EDITOR)} or ${agent(BALANCED_EDITOR)}. Climb one rung on a partial or escalate reply or a failed verify; ${agent(DEEP_EDITOR)} only after balanced failed. Run every verify command yourself.`,
+		`**Risk** (\`${phase("risk")}\`, deep: a ${lead} classifies itself; anyone else asks ${deepRead}). Classify the diff (\`git diff origin/${branch}...HEAD\`) as none, low, medium or high per area, one reason each: none for docs and comments; low for tests and isolated internals; medium for behavior other code calls; high for auth, permissions, data, money, migrations, concurrency, public contracts and deletions. The ticket takes the highest.`,
+		`**Review** (\`${phase("review")}\`): ${review}. Give the reviewer the diff range, the ticket's criteria and the risk notes; it returns findings (path:line, severity, fix, and the fix's edit rung) or none. A review never runs on a fast agent unless the review routing allows it.`,
+		`**Fix** (\`${phase("fix")}\`). Hand each finding to an edit agent on its rung and verify it. Go back to Risk when a fix changed what the diff touches, otherwise to Review. Repeat until the review has no findings.`,
+		`**Final check**. You are the top-level reviewer: run every verify command and the project's checks, compare \`git diff --stat\` with the ticket's criteria and allowed paths, and read the exact lines any finding or failure pointed at. The reviewer's approval informs this check; it does not replace it.`
+	];
+}
+/** Which agent runs each phase, and how workers reach a rung without an agent tool. */
+function modelRouting(runtime, models, review) {
+	return `| Phase | Agent |
+| --- | --- |
+| Kaneo reads and writes | ${agent(SCRIBE)} (${models.fast}) |
+| Store reads and writes | the session or orchestrator working the ticket, at the absolute store path it was given; every write starts with \`${STORE_WRITE_PREFIX}\` |
+| parallel workers, one per ticket | ${agent(ORCHESTRATOR)} (${models.deep}) |
+| explore | ${agent(FAST_EXPLORER)} (${models.fast}), ${agent(BALANCED_EXPLORER)} (${models.balanced}) across several modules |
+| research | ${agent(FAST_RESEARCHER)} (${models.fast}), climbing when sources disagree |
+| design rules from Figma | ${agent(agentName("design", "balanced"))} (${models.balanced}) |
+| user flows, edge cases and recovery | ${agent(agentName("ux", "balanced"))} (${models.balanced}), ${agent(agentName("ux", "deep"))} for money, data or auth |
+| plan, risk | a ${agent(ORCHESTRATOR)} itself, otherwise ${agent(DEEP_READER)} (${models.deep}) |
+| edit, fix | ${agent(FAST_EDITOR)} (${models.fast}) for pattern work, ${agent(BALANCED_EDITOR)} (${models.balanced}) for new logic, ${agent(DEEP_EDITOR)} only after balanced failed |
+| review | ${review} |
+| final check | the worker or session that owns the ticket |
+| commit titles | ${agent(COMMIT_WRITER)} |
+
+A worker that cannot start agents runs each phase on its rung from its worktree with \`agent-config delegate explore|research|design|ux|read|edit|review --runtime ${runtime} --tier <rung> --cwd <worktree> "<handoff>"\`; it climbs by itself on a partial reply (\`--no-climb\` stays on the rung).`;
+}
+//#endregion
+//#region src/continue.ts
+const CONTINUE = "continue";
+/** The argument that builds the next wave of an epic instead of a fixed number of tickets. */
+const PARALLEL_WAVE = "parallel-wave";
+/** How each runtime's skill text tells the model to start a named sub-agent. */
+const CALL = {
+	claude: (agent) => `the Agent tool with \`subagent_type: "${agent}"\``,
+	opencode: (agent) => `the task tool with the \`${agent}\` agent`,
+	codex: (agent) => `a spawned sub-agent with \`${agent}\` as its role`,
+	pi: (agent) => `the subagent tool with the \`${agent}\` agent`
+};
+/** How the user runs a manual action: a slash command, or Codex's explicit `$skill` mention. */
+function actionCommand(runtime, name) {
+	return runtime === "codex" ? `$${name}` : `/${name}`;
+}
+function continueCommand(runtime) {
+	return actionCommand(runtime, CONTINUE);
+}
+const DESCRIPTION = "Continue the next Kaneo ticket, or a ticket ID from a .plans store, move it to in progress, then commit and open the merge request. With `parallel [n]`, work up to n independent tickets in separate worktrees and merge them one by one. With `parallel-wave`, build the next wave of an epic the way a brief works it and explain the result.";
+const ARGUMENT_HINT = `[<ID> | parallel [n] | ${PARALLEL_WAVE}]`;
+/** In parallel-wave mode the brief's phases name these instead of a brief's placeholders. */
+const WAVE_BRANCH = "<integration branch>";
+const WAVE_REVIEW = "the review routing above";
+/** Store queries the single-ticket store flow runs, with `<ID>` and `<session id>` filled in. */
+const TODO_QUERY = "SELECT w.wave, t.id, t.title FROM waves w JOIN tickets t ON t.id = w.ticket_id WHERE t.status = 'todo' ORDER BY w.wave, t.id";
+const IN_PROGRESS_QUERY = "SELECT t.id, t.title, s.session_id, s.last_seen_at FROM tickets t LEFT JOIN ticket_sessions s ON s.ticket_id = t.id AND s.ended_at IS NULL WHERE t.status = 'in_progress' ORDER BY t.id";
+const MERGED_QUERY = "SELECT id, pr_url FROM tickets WHERE status = 'in_progress' AND pr_url IS NOT NULL";
+const GH_STATE = "gh pr view <pr_url> --json state";
+const MERGED_STATE = "MERGED";
+/** The single-ticket flow on a plan store, after the shared store rules. */
+function storeFlow(cmd) {
+	return `### Single-ticket flow on a store
+
+1. **Find the store.** With an ID, follow the lookup order above. With none, use the stores only when Kaneo is not installed or \`whoami\` gets no answer: take the written stores that still have open tickets, and ask which plan when several do.
+2. **Bring it up to date** with the migration above, before anything else writes it.
+3. **Close merged tickets.** Run \`${MERGED_QUERY}\`, then for each in_progress ticket with a \`pr_url\`: run \`${GH_STATE}\`; when its state is \`${MERGED_STATE}\`, run \`${setStatus("done")}\` and set \`ended_at\` on its sessions that have none. Without \`gh\`, print that UPDATE line for the user to run instead.
+4. **Offer the tickets.** With an ID, that ticket. Otherwise show the todo tickets, \`${TODO_QUERY}\` (wave 1 can start now), and every in_progress ticket with its non-ended sessions and their \`last_seen_at\`, \`${IN_PROGRESS_QUERY}\`. No timer decides it: the user decides whether to take one over, since a session may still be working it.
+5. **Take the ticket.** Run \`${setStatus("in_progress")}\` and then \`${START_SESSION}\` with this run's session id. Taking over an in_progress ticket appends a new row and leaves the earlier sessions' rows as they are.
+6. **Build it.** \`git fetch origin\`, branch \`<ID>/<short-kebab-description>\` from the up-to-date default branch, and build it as single-ticket flow steps 4 and 5 say.
+7. **Deliver.** Commit with the \`${COMMIT_SKILL}\` skill, push the branch and open the PR (no AI attribution).
+${prDelivery()}
+8. Report the ticket, branch, PR URL and the checks run. A single run leaves the ticket in_progress; a later \`${cmd}\` marks it done once its PR merged.
+
+### Parallel modes on a store
+
+\`parallel\` and \`${PARALLEL_WAVE}\` run as their sections below say, with these changes:
+
+- **The store path.** The parent resolves the main checkout's store to its absolute path and passes that path to every orchestrator, since a worktree has no \`${PLANS_DIR}\` of its own. Before picking, it migrates the store and closes merged tickets (store flow steps 2 and 3).
+- **Pick.** The open tickets come from \`SELECT * FROM waves ORDER BY wave\`, keeping only tickets whose status is \`todo\`; the next wave is the lowest wave left. \`${PARALLEL_WAVE}\` picks a store epic by \`epics.id\` (its stories are the tickets with that \`epic_id\`) instead of a Kaneo title. Two tickets whose \`touches\` overlap never share a wave: the later one waits for the next. The parent runs \`${setStatus("in_progress")}\` for each picked ticket.
+- **Orchestrators.** Each one writes that path directly, every write starting with \`${STORE_WRITE_PREFIX}\`: it inserts its own \`ticket_sessions\` row when it starts (\`${START_SESSION}\`), updates its \`last_seen_at\` on each of its writes, writes the PR URL to \`tickets.pr_url\` after opening the PR, and sets its \`ended_at\` when the PR is opened, it stops or it fails. Its PR follows the store PR rules above instead of the Kaneo link and comment. The parent never writes \`pr_url\` or \`ended_at\`.
+- **Done.** In both parallel modes, after a PR merges, the parent runs \`${setStatus("done")}\` instead of moving a Kaneo ticket.`;
+}
+/** Frontmatter for the file each runtime reads; every one keeps the action manual-only. */
+function actionFrontmatter(runtime, name, summary, argumentHint) {
+	const description = JSON.stringify(`${summary} Manual action only, run with ${actionCommand(runtime, name)}.`);
+	const hint = `argument-hint: ${JSON.stringify(argumentHint)}`;
+	switch (runtime) {
+		case "claude": return `---\nname: ${name}\ndescription: ${description}\n${hint}\ndisable-model-invocation: true\n---`;
+		case "codex": return `---\nname: ${name}\ndescription: ${description}\n---`;
+		case "opencode": return `---\ndescription: ${description}\n---`;
+		case "pi": return `---\ndescription: ${description}\n${hint}\n---`;
+	}
+}
+/** Codex: an explicit `$continue` still works; Codex never picks the skill on its own. */
+const CODEX_POLICY = `policy:\n  allow_implicit_invocation: false\n`;
+function continueMarkdown(runtime, models, briefDir) {
+	const cmd = continueCommand(runtime);
+	const args = runtime === "codex" ? `Arguments passed to this run: the user's message after \`${cmd}\` (none means no arguments).` : "Arguments passed to this run: `$ARGUMENTS` (empty means no arguments).";
+	const scribe = CALL[runtime](SCRIBE);
+	const deep = `\`${agentName("read", "deep")}\` (${models.deep})`;
+	const phases = ticketPhases(WAVE_BRANCH, WAVE_REVIEW).map((step, i) => `   ${i + 1}. ${step}`).join("\n");
+	return `${actionFrontmatter(runtime, CONTINUE, DESCRIPTION, ARGUMENT_HINT)}
+
+## Arguments
+
+${args} Read them before doing anything else. Only their first line picks the mode; every line after it is this run's brief:
+
+| Invocation | Mode | Ticket limit |
+| --- | --- | --- |
+| \`${cmd}\` | Single | 1 (the single-ticket flow below) |
+| \`${cmd} <ID>\` | Single, that ticket | 1 |
+| \`${cmd} parallel\` | Parallel | 4 |
+| \`${cmd} parallel <n>\` | Parallel | \`<n>\` (a positive integer, e.g. \`${cmd} parallel 10\`) |
+| \`${cmd} ${PARALLEL_WAVE}\` | Parallel wave | The size of the epic's next wave |
+
+If the first line holds anything other than one ticket ID, \`parallel\` (optionally followed by a positive integer) or \`${PARALLEL_WAVE}\`, stop and say the argument is invalid. With an empty first line, run only the single-ticket flow and ignore the parallel sections.
+
+A brief (such as the one the brief action copies) scopes the run: take tickets only from its queue, in its order, and follow its steps wherever they differ from the flows below. Keep working through its queue until it says to stop.
+
+## Save context: cheap agents do the reading and the clerical work
+
+This session keeps the decisions (which ticket, the design, conflict resolution, whether checks really pass). Everything bulky goes to an agent on a cheaper model, so its output never fills this session:
+
+- **Kaneo**: read the board and every ticket write (status moves, comments) through ${scribe} (${models.fast}). Ask it for a short summary, never raw Kaneo JSON.
+- **Reads and edits**: follow the \`model-ladder\` skill. Map unfamiliar code with ${CALL[runtime](agentName("explore", "fast"))} and look up outside facts with ${CALL[runtime](agentName("research", "fast"))}. Large or many files, logs, CI and test output go to ${CALL[runtime]("ladder-read-fast")}; boilerplate, tests and mechanical edits to ${CALL[runtime]("ladder-edit-fast")} (${CALL[runtime]("ladder-edit-balanced")} for new logic). Climb a rung only when a reply is partial or fails verification.
+- **Reviews**: every change gets a ladder reviewer on the rung its risk calls for (${ROUTED_REVIEW}) before it ships, and you still run the checks yourself.
+- **Commit titles**: the \`${COMMIT_SKILL}\` skill hands the staged diff to ${CALL[runtime](COMMIT_WRITER)}, which replies with one title.
+- **Parallel workers** are \`${ORCHESTRATOR}\` agents (${models.deep}), started with ${CALL[runtime](ORCHESTRATOR)}: one deep lead per worktree that plans, hands every read and write to the ladder agents above (through \`agent-config delegate\` when it cannot start agents), and reviews the result. When it is not installed, use a sub-agent on the balanced rung (${models.balanced}) and give it these delegation rules.
+
+When one of these agents is not installed, do the step yourself with bounded reads (line ranges, \`--stat\`, \`tail\`).
+
+## Single-ticket flow
+
+Continue the next Kaneo ticket's work, move it to in progress, then commit and create the merge request. When the ID, or the board without one, comes from a plan store (see "${STORE_HEADING}"), follow the store flow there instead:
+
+1. Load the \`${KANEO_SKILL}\` skill. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order with their blocking relations, and pick the first one that is not blocked by an unfinished ticket.
+2. Have the scribe move it to In Progress.
+3. \`git fetch origin\` and create the branch \`<IDENTIFIER>/<short-kebab-description>\` (e.g. \`FEX-2/some-feature-getting-done\`) from the up-to-date default branch.
+4. Implement the ticket with tests and docs alongside the change, delegating reads and edits as above, and have a ladder reviewer check the diff on the rung its risk calls for.
+5. Run the project's checks and leave them passing; read long output through the ladder read agent.
+6. Commit with the \`${COMMIT_SKILL}\` skill, push the branch and open the PR (body starts with the Kaneo ticket link, no AI attribution).
+7. Have the scribe comment the PR URL on the ticket.
+8. Report the ticket, branch, PR URL and the checks run with their results.
+
+## ${STORE_HEADING}
+
+${storeAccess(scribe)}
+
+${storeFlow(cmd)}
+
+## Parallel mode
+
+Goal: take up to N Kaneo tickets that can be worked at the same time, build each in its own worktree until it is ready to merge, then merge them one by one, bringing each next branch up to date with the latest default branch before it merges.
+
+### 1. Pick tickets that can run in parallel
+
+1. Load the \`${KANEO_SKILL}\` skill.
+2. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order, each with its relations.
+3. Drop any ticket that is blocked by an unfinished ticket, or that depends on another candidate.
+4. Drop tickets that would clearly change the same files or the same feature area as a ticket already picked; conflicts are allowed but should be rare.
+5. Pick up to N tickets. If fewer qualify, take what qualifies and say why the rest were skipped. If only one qualifies, run the single-ticket flow.
+6. Show the picked tickets (identifier, title) and the planned merge order before creating anything.
+
+### 2. Create one worktree per ticket
+
+For each picked ticket:
+
+1. \`git fetch origin\` and use the up-to-date default branch as the base.
+2. Branch name: \`<IDENTIFIER>/<short-kebab-description>\` (e.g. \`FEX-2/some-feature-getting-done\`).
+3. Worktree path: \`<repo-parent>/<repo-name>-worktrees/<IDENTIFIER>-<short-kebab-description>\`. Never under \`/tmp\`.
+4. \`git worktree add -b <branch> <path> origin/<default-branch>\`
+5. Have the scribe move the ticket to In Progress.
+
+### 3. Build every ticket until it is ready to merge
+
+Launch one \`${ORCHESTRATOR}\` (${models.deep}) per worktree with ${CALL[runtime](ORCHESTRATOR)}, all at once so they run concurrently. Each orchestrator:
+
+- works only inside its own worktree path, and never touches another worktree or the main checkout;
+- implements its ticket, with tests and docs alongside the change, without doing the I/O itself: explorers map the code, researchers answer outside questions, designers extract exact design rules, user-experience agents analyze flows and their edge cases, edit agents write on the cheapest rung that works, and a reviewer on the rung the risk calls for checks the diff;
+- reaches those agents through \`agent-config delegate <explore|research|design|ux|read|edit|review> --runtime ${runtime} --cwd <worktree path> "<handoff>"\` when it cannot start agents, and the scribe and commit-writer through the same rules when it can;
+- reviews the final work itself (checks, \`git diff --stat\` against the criteria) before it reports;
+- runs the project's checks and leaves them passing;
+- commits with the \`${COMMIT_SKILL}\` skill, pushes its branch, and opens the PR (body starts with the Kaneo ticket link, no AI attribution);
+- comments the PR URL on its Kaneo ticket;
+- reports back in at most ten lines: ticket, branch, worktree path, PR URL, checks run and their results, or why it is blocked.
+
+Wait for all of them. A ticket that comes back blocked or with failing checks is left out of the merge loop and listed in the final report.
+
+### 4. Merge loop, one PR at a time
+
+Merge the ready PRs in the planned order. For each PR:
+
+1. \`git fetch origin\`.
+2. In that ticket's worktree, merge the latest default branch into its branch: \`git merge origin/<default-branch>\`.
+3. If there are conflicts, resolve them locally (load the \`resolving-merge-conflicts\` skill when it is available), keeping the intent of both sides.
+4. Re-run the project's checks. Do not continue if they fail; fix them first.
+5. Commit the merge if needed and push the branch.
+6. Wait for the PR's CI checks to pass; read failing logs through the ladder read agent.
+7. Merge the PR.
+8. Have the scribe move the Kaneo ticket to Done.
+9. Go to the next PR. Its step 2 now picks up the PR that was just merged.
+
+Stop the loop and report when a conflict cannot be resolved with confidence, checks keep failing after a fix attempt, or a PR cannot be merged (review required, branch protection). Leave the remaining PRs open and untouched.
+
+### 5. Clean up and report
+
+1. After a PR is merged, remove its worktree: \`git worktree remove <path>\`. Keep the worktree of any ticket that was not merged.
+2. Update the main checkout: \`git checkout <default-branch> && git pull\`.
+3. Report a table: ticket, PR URL, status (merged / open / blocked), and what is left for anything not merged.
+
+## Parallel-wave mode
+
+Goal: build the next wave of one epic, every story that can start now, all at once and the way the brief action works an epic; merge them one by one; then explain what changed at the user's level. One wave per run.
+
+### 1. Pick the epic
+
+1. Load the \`${KANEO_SKILL}\` skill: its "Plan an epic" section says how epics and their stories are marked. Ask ${scribe} for the project's open epics (tasks titled \`${EPIC_TITLE_PREFIX}…\`), each with its "Done when" list and its open stories, and every story with its \`blocks\` relations, including those to stories of other epics.
+2. Hand that summary to ${deep} (\`${phase("plan")}\`): order the epics (an epic waits while one of its stories is blocked by an open story of another epic) and recommend the one to work first, with a one-line reason: what it unblocks, its risk, its priority.
+3. One epic can start: take it. Several can start in any order: ask the user which one, the recommendation first. When the user skips the question, says to choose, or the run cannot ask, take the recommendation and say so. None can start: report what blocks each and stop.
+
+### 2. Find the waves
+
+1. Ask the scribe for every open story of the epic with its status, priority, \`blocks\` relations and \`${TOUCHES_LINE}\` line.
+2. Hand that to ${deep} (\`${phase("plan")}\`): ${WAVE_RULE} Return the waves in order; for each story, the context a fresh worker needs and the paths it touches; list dependency cycles and stale blockers as gaps.
+3. The first wave is this run's work, and its size is the parallel limit. A wave of one story runs the single-ticket flow, built through the phases in step 3. With no story ready, report the blockers and stop.
+4. Show the waves, the integration branch and the merge order before creating anything.
+
+### 3. Build the wave the way a brief works it
+
+When the epic has a brief, \`${briefDir}/<EPIC-ID>.md\`, its integration branch, review routing and gaps apply. Without one, the integration branch is \`dev\` when \`origin/dev\` exists and the default branch otherwise, and reviews are routed by risk (${ROUTED_REVIEW}).
+
+Run parallel mode steps 2 to 5 with the wave as the picked tickets, and these changes:
+
+- Worktrees branch from \`origin/${WAVE_BRANCH}\`, and every PR merges into it.
+- Each worker builds its ticket through these phases, every handoff starting with its phase line, then runs the checks, commits, pushes and opens the PR as parallel mode step 3 says:
+${phases}
+- A worker reports itself blocked when the review still has findings after 3 rounds or CI fails twice after fixes.
+
+${modelRouting(runtime, models, WAVE_REVIEW)}
+
+### 4. Explain the wave
+
+After the cleanup, explain the wave at the user's level: plain words with each technical term explained in a few words, unless the user speaks technically.
+
+- **What changed**: per ticket, what someone can now do or what works differently, and why it matters for the epic.
+- **How it was checked**: risk level, review rounds, checks and CI.
+- **What to watch**: open findings, risks, and anything not merged with the reason.
+- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met.
 `;
 }
 //#endregion
@@ -6408,16 +6542,16 @@ const CATALOG = [
 	commit,
 	{
 		id: CONTINUE,
-		title: "Continue Kaneo tickets",
-		description: "manual /continue action that works the next Kaneo ticket (or several in parallel worktrees) end to end, handing reads, edits, ticket writes and commit titles to cheap agents",
+		title: "Continue Kaneo or plan store tickets",
+		description: "manual /continue action that works the next Kaneo ticket, or a ticket ID from a .plans store, (or several in parallel worktrees) end to end, handing reads, edits, ticket writes and commit titles to cheap agents",
 		settings: [],
 		discover: () => ({}),
 		ops: (entry, runtime, config) => continueOps(runtime, entry.project, config)
 	},
 	{
 		id: BRIEF,
-		title: "Brief a Kaneo epic for a fresh session",
-		description: "manual /brief action that diagnoses what a Kaneo epic is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
+		title: "Brief a Kaneo epic or plan store ticket for a fresh session",
+		description: "manual /brief action that diagnoses what a Kaneo epic, or a ticket ID from a .plans store, is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
 		settings: [],
 		discover: () => ({}),
 		ops: (entry, runtime, config) => briefOps(runtime, entry.project, config)
@@ -7669,8 +7803,8 @@ const SHORT_COMMANDS = {
 const HELP = `agent-config ${VERSION}
 Configure Claude Code, OpenCode, Codex and Pi from a catalog of abilities, such as
 the model ladder (route reads and edits to the cheapest capable model: fast → balanced
-→ deep), Kaneo work tracking, title-only commits, the /continue ticket action and a
-Claude Code status line.
+→ deep), Kaneo work tracking, title-only commits, the /continue and /brief actions for
+Kaneo or .plans store tickets, and a Claude Code status line.
 Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.3.0).
 
 Usage:
