@@ -60,11 +60,13 @@ export function modelRouting(runtime: Runtime, models: LoopModels, review: strin
 | parallel workers, one per ticket | ${agent(ORCHESTRATOR)} (${models.deep}) |
 | explore | ${agent(FAST_EXPLORER)} (${models.fast}), ${agent(BALANCED_EXPLORER)} (${models.balanced}) across several modules |
 | research | ${agent(FAST_RESEARCHER)} (${models.fast}), climbing when sources disagree |
+| design rules from Figma | ${agent(agentName("design", "balanced"))} (${models.balanced}) |
+| user flows, edge cases and recovery | ${agent(agentName("ux", "balanced"))} (${models.balanced}), ${agent(agentName("ux", "deep"))} for money, data or auth |
 | plan, risk | a ${agent(ORCHESTRATOR)} itself, otherwise ${agent(DEEP_READER)} (${models.deep}) |
 | edit, fix | ${agent(FAST_EDITOR)} (${models.fast}) for pattern work, ${agent(BALANCED_EDITOR)} (${models.balanced}) for new logic, ${agent(DEEP_EDITOR)} only after balanced failed |
 | review | ${review} |
 | final check | the worker or session that owns the ticket |
 | commit titles | ${agent(COMMIT_WRITER)} |
 
-A worker that cannot start agents runs each phase on its rung from its worktree with \`agent-config delegate explore|research|read|edit|review --runtime ${runtime} --tier <rung> --cwd <worktree> "<handoff>"\`; it climbs by itself on a partial reply (\`--no-climb\` stays on the rung).`;
+A worker that cannot start agents runs each phase on its rung from its worktree with \`agent-config delegate explore|research|design|ux|read|edit|review --runtime ${runtime} --tier <rung> --cwd <worktree> "<handoff>"\`; it climbs by itself on a partial reply (\`--no-climb\` stays on the rung).`;
 }

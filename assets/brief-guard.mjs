@@ -49,7 +49,7 @@ export const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
  * ladder-reviewer-balanced, planner-balanced.
  */
 const LADDER_AGENT =
-  /^(?:ladder-(?:read|explorer|researcher|edit|reviewer)|planner)-(fast|balanced|deep)$/;
+  /^(?:ladder-(?:read|explorer|researcher|designer|user-experience|edit|reviewer)|planner)-(fast|balanced|deep)$/;
 /** The orchestrator has no rung in its name: it always runs on the deep rung. */
 const ORCHESTRATOR = "ladder-orchestrator";
 const DEEP_RUNG = "deep";

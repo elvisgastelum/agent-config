@@ -7,8 +7,11 @@ export type Runtime = (typeof RUNTIMES)[number];
 export const TIERS = ["fast", "balanced", "deep"] as const;
 export type Tier = (typeof TIERS)[number];
 
-/** What a ladder agent does: answer a question, map code, research the web, write, or review. */
-export const ROLES = ["read", "explore", "research", "edit", "review"] as const;
+/**
+ * What a ladder agent does: answer a question, map code, research the web, extract design rules,
+ * analyze user flows, write, or review.
+ */
+export const ROLES = ["read", "explore", "research", "design", "ux", "edit", "review"] as const;
 export type Role = (typeof ROLES)[number];
 
 /** The word each role puts in its agents' names: ladder-explorer-fast, ladder-reviewer-deep. */
@@ -16,6 +19,8 @@ const ROLE_STEMS: Record<Role, string> = {
   read: "read",
   explore: "explorer",
   research: "researcher",
+  design: "designer",
+  ux: "user-experience",
   edit: "edit",
   review: "reviewer",
 };

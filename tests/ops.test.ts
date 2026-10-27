@@ -110,6 +110,25 @@ describe("install", () => {
     expect(piLead).not.toContain("tools:");
   });
 
+  test("writes designer and user-experience rungs that keep MCP tools but never edit", () => {
+    install(config(["claude", "opencode", "codex", "pi"]));
+    const h = box.home;
+    for (const name of ["ladder-designer-balanced", "ladder-user-experience-deep"]) {
+      const claude = read(join(h, ".claude/agents", `${name}.md`));
+      // No tools list, so the Figma and browser MCP tools stay available; writes are removed.
+      expect(claude).not.toContain("\ntools:");
+      expect(claude).toContain("disallowedTools: Bash, Edit, Write, NotebookEdit\n");
+      const opencode = read(join(h, ".config/opencode/agents", `${name}.md`));
+      expect(opencode).toContain("  edit: deny\n  bash: deny\n  task: deny");
+      expect(read(join(h, ".codex/agents", `${name}.toml`))).toContain(
+        'sandbox_mode = "read-only"',
+      );
+      expect(read(join(h, ".pi/agent/agents", `${name}.md`))).not.toContain("  - bash");
+    }
+    expect(read(join(h, ".claude/agents/ladder-designer-fast.md"))).toContain("DESIGN RULES:");
+    expect(read(join(h, ".claude/agents/ladder-user-experience-fast.md"))).toContain("EDGE CASES:");
+  });
+
   test("is idempotent: a second plan has nothing to change", () => {
     const c = config(["claude", "opencode", "codex", "pi"]);
     install(c);
@@ -126,6 +145,8 @@ describe("install", () => {
       "ladder-read-fast (claude-sonnet-5-5)",
       "ladder-explorer-fast (claude-sonnet-5-5)",
       "ladder-researcher-fast (claude-sonnet-5-5)",
+      "ladder-designer-fast (claude-sonnet-5-5)",
+      "ladder-user-experience-fast (claude-sonnet-5-5)",
       "ladder-edit-fast (claude-sonnet-5-5)",
       "ladder-reviewer-fast (claude-sonnet-5-5)",
       // The orchestrator's prompt names every rung's model.

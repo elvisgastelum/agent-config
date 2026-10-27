@@ -87,15 +87,32 @@ export const CLAUDE_TOOLS: Record<Role, string[]> = {
   read: ["Read", "Grep", "Glob"],
   explore: ["Read", "Grep", "Glob"],
   research: ["WebSearch", "WebFetch", "Read", "Grep", "Glob"],
+  design: ["Read", "Grep", "Glob", "WebFetch"],
+  ux: ["Read", "Grep", "Glob", "WebFetch"],
   edit: ["Read", "Edit", "Write", "Grep", "Glob", "Bash"],
   review: ["Read", "Grep", "Glob", "Bash"],
 };
+
+/**
+ * Roles whose Claude agent keeps every tool the session has except these, instead of a tools list:
+ * designers and user-experience agents need the Figma and browser MCP tools, whose names depend
+ * on how each server is installed.
+ */
+export const CLAUDE_MCP_ROLES: Partial<Record<Role, string[]>> = {
+  design: ["Bash", "Edit", "Write", "NotebookEdit"],
+  ux: ["Bash", "Edit", "Write", "NotebookEdit"],
+};
+
+/** Figma MCP servers as Claude names them (plugin and standalone), allowed for headless MCP roles. */
+export const CLAUDE_FIGMA_SERVERS = ["mcp__plugin_figma_figma", "mcp__figma"];
 
 /** Each role's tools in Pi's names. Pi has no web tool and cannot limit bash: researchers and reviewers get it. */
 export const PI_TOOLS: Record<Role, string[]> = {
   read: ["read", "grep", "find", "ls"],
   explore: ["read", "grep", "find", "ls"],
   research: ["read", "grep", "find", "ls", "bash"],
+  design: ["read", "grep", "find", "ls"],
+  ux: ["read", "grep", "find", "ls"],
   edit: ["read", "grep", "find", "ls", "edit", "write", "bash"],
   review: ["read", "grep", "find", "ls", "bash"],
 };
@@ -111,6 +128,8 @@ function opencodePermissions(role: Role): string[] {
     case "read":
     case "explore":
     case "research":
+    case "design":
+    case "ux":
       return ["  edit: deny", "  bash: deny", "  task: deny"];
     case "review":
       return [
@@ -141,7 +160,15 @@ function agentFile(
     case "claude": {
       const lines = ["---", `name: ${name}`, `description: ${yamlString(description)}`];
       if (model) lines.push(`model: ${model}`);
-      lines.push(`tools: ${CLAUDE_TOOLS[role].join(", ")}`, "---", "", body);
+      const denied = CLAUDE_MCP_ROLES[role];
+      lines.push(
+        denied
+          ? `disallowedTools: ${denied.join(", ")}`
+          : `tools: ${CLAUDE_TOOLS[role].join(", ")}`,
+        "---",
+        "",
+        body,
+      );
       return { path: join(claudeDir(), "agents", `${name}.md`), content: lines.join("\n") };
     }
     case "opencode": {

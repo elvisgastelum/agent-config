@@ -236,7 +236,7 @@ test("install continue adds a manual-only action per runtime that delegates to c
     'Launch one `ladder-orchestrator` (claude-opus-5-5) per worktree with the Agent tool with `subagent_type: "ladder-orchestrator"`',
   );
   expect(claude).toContain(
-    "agent-config delegate <explore|research|read|edit|review> --runtime claude",
+    "agent-config delegate <explore|research|design|ux|read|edit|review> --runtime claude",
   );
   expect(claude).toContain("every line after it is this run's brief");
   expect(claude).toContain(

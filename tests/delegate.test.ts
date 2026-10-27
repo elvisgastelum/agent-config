@@ -257,6 +257,25 @@ test("explore, research and review run their agents with read-only tools per run
   expect(piReview?.args).toEqual(expect.arrayContaining(["--tools", "read,grep,find,ls,bash"]));
 });
 
+test("design and ux run their agents read-only, without a shell", () => {
+  expect(
+    run(["delegate", "design", "--runtime", "claude", "--tier", "balanced", "rules"]).code,
+  ).toBe(0);
+  run(["delegate", "ux", "--runtime", "codex", "flow"]);
+  run(["delegate", "ux", "--runtime", "pi", "flow"]);
+  const [design, codexUx, piUx] = calls();
+  expect(design?.args).toEqual(expect.arrayContaining(["--agent", "ladder-designer-balanced"]));
+  expect(design?.args.some((a) => a.startsWith("Bash") || a === "Edit" || a === "Write")).toBe(
+    false,
+  );
+  expect(design?.args).not.toContain("--permission-mode");
+  // Headless runs deny tools that are not allowed up front, so the Figma servers are listed.
+  expect(design?.args).toEqual(expect.arrayContaining(["mcp__plugin_figma_figma", "mcp__figma"]));
+  expect(codexUx?.args).toEqual(expect.arrayContaining(["-s", "read-only"]));
+  expect(codexUx?.stdin).toContain("You are a user-experience analyst on the model ladder");
+  expect(piUx?.args).toEqual(expect.arrayContaining(["--tools", "read,grep,find,ls"]));
+});
+
 test("opencode refuses a reviewer whose shell is no longer limited", () => {
   const agent = join(dir, ".config/opencode/agents/ladder-reviewer-fast.md");
   writeFileSync(agent, readFileSync(agent, "utf8").replace('    "*": deny\n', ""));
@@ -327,7 +346,7 @@ test("usage errors exit 2 without starting an agent", () => {
   expect(run(["delegate", "read", "--runtime", "claude", "--verify", "x", "q"]).code).toBe(2);
   expect(run(["delegate", "review", "--runtime", "claude", "--verify", "x", "q"]).code).toBe(2);
   expect(run(["delegate", "write", "--runtime", "claude", "q"]).stderr).toContain(
-    "read, explore, research, edit, review",
+    "read, explore, research, design, ux, edit, review",
   );
   expect(
     run(["delegate", "read", "--runtime", "claude", "--cwd", join(dir, "nope"), "q"]).stderr,

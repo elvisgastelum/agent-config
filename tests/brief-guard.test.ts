@@ -124,6 +124,11 @@ describe("brief guard: phase rungs", () => {
     ).toBeUndefined();
     expect(agent("Phase: plan\nTicket: FEX-1", "ladder-explorer-fast")).toContain("fast rung");
     expect(agent("Phase: risk\nTicket: FEX-1", "ladder-researcher-deep")).toBeUndefined();
+    expect(agent("Phase: plan\nTicket: FEX-1", "ladder-designer-fast")).toContain("fast rung");
+    expect(agent("Phase: diagnose\nTicket: FEX-1", "ladder-user-experience-balanced")).toContain(
+      "balanced rung",
+    );
+    expect(agent("Phase: plan\nTicket: FEX-1", "ladder-user-experience-deep")).toBeUndefined();
     expect(agent("Phase: plan\nTicket: FEX-1", "ladder-orchestrator")).toBeUndefined();
     expect(agent("Phase: plan\nTicket: FEX-1", "ladder-orchestrator", "haiku")).toContain(
       "fast rung",

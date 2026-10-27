@@ -15,6 +15,7 @@ import {
   commitSkillMarkdown,
 } from "./commit.ts";
 import type { Config } from "./config.ts";
+import { teamSection } from "./content.ts";
 import { CODEX_POLICY, CONTINUE, continueMarkdown } from "./continue.ts";
 import {
   KANEO_ITEM,
@@ -211,7 +212,8 @@ function catalogAgent(
 ): { path: string; content: string } {
   const { model } = tiers[agent.tier ?? "fast"];
   const effort = agent.effort ?? tiers[agent.tier ?? "fast"].effort;
-  const { name, body } = agent;
+  const { name } = agent;
+  const body = `${agent.body.trimEnd()}\n\n${teamSection()}\n`;
   const description = JSON.stringify(agent.description);
   switch (runtime) {
     case "claude": {

@@ -85,7 +85,7 @@ Usage:
                                    \`agent-config update\` and \`agi u\` are the same command
   agent-config delegate <role> [--tier t] [--runtime r] "<task>"
                                    run a ladder agent headlessly and print only its reply; role is
-                                   read | explore | research | edit | review;
+                                   read | explore | research | design | ux | edit | review;
                                    for agents that cannot spawn subagents ("-" reads the task from
                                    stdin; put a task that starts with - after --)
 

@@ -82,6 +82,9 @@ describe("kaneo catalog item", () => {
     expect(skill).toContain("kaneo-scribe");
     expect(skill).toContain("ladder-read-fast");
     const scribe = read(join(h, ".claude/agents/kaneo-scribe.md"));
+    // Catalog agents know the ladder too, so they can name the agent for work outside their role.
+    expect(scribe).toContain("## Team");
+    expect(scribe).toContain("`ladder-designer-<rung>`");
     expect(scribe).toContain("model: claude-haiku-5-5");
     expect(scribe).toContain("mcp__kaneo__create_task");
     expect(read(join(h, ".claude/CLAUDE.md"))).toContain("<!-- BEGIN agent-config:kaneo");

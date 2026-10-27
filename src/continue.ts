@@ -153,8 +153,8 @@ For each picked ticket:
 Launch one \`${ORCHESTRATOR}\` (${models.deep}) per worktree with ${CALL[runtime](ORCHESTRATOR)}, all at once so they run concurrently. Each orchestrator:
 
 - works only inside its own worktree path, and never touches another worktree or the main checkout;
-- implements its ticket, with tests and docs alongside the change, without doing the I/O itself: explorers map the code, researchers answer outside questions, edit agents write on the cheapest rung that works, and a reviewer on the rung the risk calls for checks the diff;
-- reaches those agents through \`agent-config delegate <explore|research|read|edit|review> --runtime ${runtime} --cwd <worktree path> "<handoff>"\` when it cannot start agents, and the scribe and commit-writer through the same rules when it can;
+- implements its ticket, with tests and docs alongside the change, without doing the I/O itself: explorers map the code, researchers answer outside questions, designers extract exact design rules, user-experience agents analyze flows and their edge cases, edit agents write on the cheapest rung that works, and a reviewer on the rung the risk calls for checks the diff;
+- reaches those agents through \`agent-config delegate <explore|research|design|ux|read|edit|review> --runtime ${runtime} --cwd <worktree path> "<handoff>"\` when it cannot start agents, and the scribe and commit-writer through the same rules when it can;
 - reviews the final work itself (checks, \`git diff --stat\` against the criteria) before it reports;
 - runs the project's checks and leaves them passing;
 - commits with the \`${COMMIT_SKILL}\` skill, pushes its branch, and opens the PR (body starts with the Kaneo ticket link, no AI attribution);

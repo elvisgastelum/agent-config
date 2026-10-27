@@ -13,7 +13,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentBody } from "./content.ts";
 import { claudeDir, opencodeDir } from "./paths.ts";
-import { CLAUDE_TOOLS, PI_TOOLS, REVIEW_GIT_COMMANDS, readOnlyRole } from "./runtimes.ts";
+import {
+  CLAUDE_FIGMA_SERVERS,
+  CLAUDE_MCP_ROLES,
+  CLAUDE_TOOLS,
+  PI_TOOLS,
+  REVIEW_GIT_COMMANDS,
+  readOnlyRole,
+} from "./runtimes.ts";
 import { TIERS, agentName, type Role, type Runtime, type Tier, type TierMap } from "./tiers.ts";
 
 /** Set in every process `delegate` starts; its presence means "already delegated". */
@@ -92,7 +99,8 @@ export function invocation(
           : role === "review"
             ? REVIEW_GIT_COMMANDS.map((c) => `Bash(${c}:*)`)
             : [];
-      const tools = [...CLAUDE_TOOLS[role].filter((t) => t !== "Bash"), ...shell];
+      const mcp = CLAUDE_MCP_ROLES[role] ? CLAUDE_FIGMA_SERVERS : [];
+      const tools = [...CLAUDE_TOOLS[role].filter((t) => t !== "Bash"), ...shell, ...mcp];
       const args = ["-p", "--agent", name, "--output-format", "json", "--allowedTools", ...tools];
       if (role === "edit") args.push("--permission-mode", "acceptEdits");
       if (model) args.push("--model", model);
