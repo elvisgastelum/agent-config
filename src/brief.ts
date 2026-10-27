@@ -11,9 +11,12 @@ import {
   ROUTED_REVIEW,
   modelRouting,
   phase,
+  prDelivery,
   ticketPhases,
   type LoopModels,
 } from "./loop.ts";
+import { STORE_WRITE_PREFIX } from "./planning.ts";
+import { START_SESSION, STORE_HEADING, setStatus, storeAccess } from "./store.ts";
 import { ORCHESTRATOR, agentName, type Runtime } from "./tiers.ts";
 
 export const BRIEF = "brief";
@@ -53,6 +56,9 @@ const DEEP_REVIEWER = agentName("review", "deep");
 
 const agent = (name: string): string => `\`${name}\``;
 
+/** Nests lines under a numbered step of the brief's loop. */
+const indent = (text: string): string => text.replace(/^/gm, "   ");
+
 /** The brief's placeholders, filled in by the brief run that writes it. */
 const BRANCH_PLACEHOLDER = "<branch>";
 const REVIEW_PLACEHOLDER = "<review routing>";
@@ -84,7 +90,7 @@ export function briefMarkdown(runtime: Runtime, models: BriefModels, briefDir: s
 
 ## Arguments
 
-${args} It names one Kaneo epic or ticket: a URL (\`…/task/<id>\`) or an identifier such as \`FEX-12\`. When it is empty, ask for it and wait.
+${args} It names one Kaneo epic or ticket: a URL (\`…/task/<id>\`) or an identifier such as \`FEX-12\`, or an ID from a plan store (see "${STORE_HEADING}"). When it is empty, ask for it and wait.
 
 ## Save context
 
@@ -113,6 +119,16 @@ When one of these agents is not installed, do the step yourself with bounded rea
    \`\`\`
 
 3. Show the user the overview: progress (done / open / missing), blockers, missing tickets, gaps, and the proposed order and waves.
+
+## ${STORE_HEADING}
+
+${storeAccess(CALL[runtime](SCRIBE))}
+
+When the argument resolves to a store, steps 1 and 2 read and write the store instead of Kaneo:
+
+- **Resolve.** A store ticket's epic is the \`epics\` row its \`epic_id\` names. A ticket whose \`epic_id\` is NULL is its own root: the brief's \`## Epic\` section describes the ticket itself. Summarize the epic and its tickets for the diagnosis with small selects (\`id, title, status, size, touches, done_when\` and their \`blocks\`), never a dump.
+- **Missing tickets.** When the user chose to create them, insert them into the same store's \`tickets\` and \`blocks\`, every write starting with ${"`"}${STORE_WRITE_PREFIX}${"`"}. IDs continue the plan's prefix (after \`BCS-9\` comes \`BCS-10\`); each has a non-empty \`touches\`, its outcome, \`done_when\` from the diagnosis findings, and a size. \`SELECT * FROM waves ORDER BY wave\` must then list every open ticket: one missing sits in a dependency cycle, so fix its blocks.
+- **The brief** names the absolute store path in its \`## Epic\` section, so the new session works the same store.
 
 ## 2. Ask how to run it
 
@@ -148,7 +164,7 @@ ${cont} parallel <N>
 
 ## Epic
 
-- Ticket: [<EPIC-ID> <title>](<url>)
+- Ticket: [<EPIC-ID> <title>](<url>) (a store ticket: \`<EPIC-ID> <title>\` in \`<absolute store path>\`)
 - Goal: <one sentence>
 - Done when: <each acceptance criterion of the epic, one per line>
 - State: <done>/<total> tickets done, <open> open, <created> created by the brief run.
@@ -171,8 +187,11 @@ Work only these tickets, in this order. Tickets in one wave do not depend on eac
 Agents run through ${CALL[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`${phase("plan")}\`, so the run can be checked. In parallel waves each ticket goes to one ${agent(ORCHESTRATOR)} worker in its own worktree, which runs steps 2 to ${deliver} there and hands every read and write to the ladder.
 
 1. **Pick.** Have ${agent(SCRIBE)} re-read the ticket and its blockers. Still blocked: skip it, say why and take the next. Otherwise move it to In Progress and branch \`<ID>/<short-kebab-description>\` from \`origin/<branch>\`.
+   A store ticket: re-read it and its blockers from the store at the absolute path in \`## Epic\`, then run \`${setStatus("in_progress")}\` and \`${START_SESSION}\` with this session's id.
 ${phases}
 ${deliver}. **Deliver.** Run the project's checks and leave them passing. Commit with the \`${COMMIT_SKILL}\` skill (titles from ${agent(COMMIT_WRITER)}), push, and open the PR into \`<branch>\`: its body starts with the Kaneo ticket link and has no AI attribution. Have the scribe comment the PR URL on the ticket. Wait for CI; read failures through ${fastRead} and fix them through Plan, Edit and Review. Merge, have the scribe move the ticket to Done, then delete the branch and its worktree.
+   A store ticket follows these PR rules instead of the Kaneo link and the scribe's comment. A store ticket stays in_progress after the merge; a later \`${cont}\` marks it done:
+${indent(prDelivery())}
 ${deliver + 1}. **Next.** Back to Pick. After each wave, have the scribe re-read the epic: tickets added since go to the end of the queue in dependency order.
 
 ## Model routing

@@ -1,13 +1,13 @@
 import { describe, expect, test } from "vite-plus/test";
 import { PYTHON_FALLBACK, STORE_MIGRATION, STORE_WRITE_PREFIX } from "../src/planning.ts";
-import { MONTH_ORDER_EXAMPLE, STORE_GLOB, storeAccess } from "../src/store.ts";
+import { MONTH_ORDER_EXAMPLE, storeAccess, storeGlob } from "../src/store.ts";
 
 const text = storeAccess("the scribe");
 
 describe("storeAccess", () => {
   test("discovers written stores at the main checkout's absolute path", () => {
-    expect(STORE_GLOB).toBe(".plans/*/*/plan.sqlite");
-    expect(text).toContain(`\`${STORE_GLOB}\``);
+    expect(storeGlob()).toBe(".plans/*/*/plan.sqlite");
+    expect(text).toContain(`\`${storeGlob()}\``);
     expect(text).toContain("Resolve the main checkout's root to an absolute path");
     expect(text).toContain("`status = 'written'`");
   });

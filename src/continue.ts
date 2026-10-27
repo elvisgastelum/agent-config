@@ -12,8 +12,7 @@ import {
   ticketPhases,
   type LoopModels,
 } from "./loop.ts";
-import { STORE_WRITE_PREFIX } from "./planning.ts";
-import { STORE_HEADING, storeAccess } from "./store.ts";
+import { START_SESSION, STORE_HEADING, setStatus, storeAccess } from "./store.ts";
 import { ORCHESTRATOR, agentName, type Runtime } from "./tiers.ts";
 
 export const CONTINUE = "continue";
@@ -59,10 +58,6 @@ const MERGED_QUERY =
   "SELECT id, pr_url FROM tickets WHERE status = 'in_progress' AND pr_url IS NOT NULL";
 const GH_STATE = "gh pr view <pr_url> --json state";
 const MERGED_STATE = "MERGED";
-const setStatus = (status: string): string =>
-  `${STORE_WRITE_PREFIX} UPDATE tickets SET status = '${status}' WHERE id = '<ID>';`;
-const START_SESSION =
-  "INSERT INTO ticket_sessions (ticket_id, session_id, started_at, last_seen_at) VALUES ('<ID>', '<session id>', datetime('now'), datetime('now'));";
 
 /** The single-ticket flow on a plan store, after the shared store rules. */
 function storeFlow(cmd: string): string {

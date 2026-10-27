@@ -11,7 +11,7 @@ import {
 } from "./planning.ts";
 
 /** Every plan store, one folder per month and per plan. */
-export const STORE_GLOB = `${PLANS_DIR}/*/*/${PLAN_DB}`;
+export const storeGlob = (): string => `${PLANS_DIR}/*/*/${PLAN_DB}`;
 
 /** Only plans the planning action finished writing are worked. */
 export const WRITTEN_STATUS = "written";
@@ -22,6 +22,14 @@ export const MONTH_ORDER_EXAMPLE = "01-2027, 10-2026, 02-2026";
 /** The ticket table's columns that track who works a ticket and its PR. */
 export const SESSIONS_TABLE = "ticket_sessions";
 export const PR_URL_COLUMN = "tickets.pr_url";
+
+/** The status write for the ticket `<ID>`; built on call, since planning.ts imports this file's users. */
+export const setStatus = (status: string): string =>
+  `${STORE_WRITE_PREFIX} UPDATE tickets SET status = '${status}' WHERE id = '<ID>';`;
+
+/** The session row a session or orchestrator adds when it takes the ticket `<ID>`. */
+export const START_SESSION =
+  "INSERT INTO ticket_sessions (ticket_id, session_id, started_at, last_seen_at) VALUES ('<ID>', '<session id>', datetime('now'), datetime('now'));";
 
 /** The heading shared by every action's store section. */
 export const STORE_HEADING = "Plan store fallback";
@@ -41,7 +49,7 @@ export function storeAccess(scribe: string): string {
 2. Fall back to the stores only when Kaneo is not installed, \`whoami\` gets no answer, or Kaneo answers explicitly that no such identifier exists after \`whoami\` succeeded. Any other Kaneo error (timeouts, permissions, server errors) stops the run: report it, never fall back.
 3. A store plan whose \`plan.tracker\` is \`kaneo\` already lives in Kaneo: work its tickets in Kaneo through their \`tracker_id\`.
 
-**Discovery.** Resolve the main checkout's root to an absolute path (the first \`worktree\` line of \`git worktree list --porcelain\`); a worktree has no \`${PLANS_DIR}\` of its own. Its stores are ${code(STORE_GLOB)}. Use only stores whose plan row has \`status = '${WRITTEN_STATUS}'\`, and look the ID up in their \`tickets\` and \`epics\`. One match is taken silently. Several matches ask the user which plan, newest first: order the \`MM-yyyy\` folders by year, then by month, newest first, never as plain text (${MONTH_ORDER_EXAMPLE}). Hand every agent that works a store ticket this absolute store path.
+**Discovery.** Resolve the main checkout's root to an absolute path (the first \`worktree\` line of \`git worktree list --porcelain\`); a worktree has no \`${PLANS_DIR}\` of its own. Its stores are ${code(storeGlob())}. Use only stores whose plan row has \`status = '${WRITTEN_STATUS}'\`, and look the ID up in their \`tickets\` and \`epics\`. One match is taken silently. Several matches ask the user which plan, newest first: order the \`MM-yyyy\` folders by year, then by month, newest first, never as plain text (${MONTH_ORDER_EXAMPLE}). Hand every agent that works a store ticket this absolute store path.
 
 **Reads and writes.** Query with small selects (\`sqlite3 -box <store> "SELECT …"\`). Start every write with ${code(STORE_WRITE_PREFIX)}: a leading \`5000\` line from a write is the busy_timeout prefix echoing, not an error. ${PYTHON_FALLBACK}
 

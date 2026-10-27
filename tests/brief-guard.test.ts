@@ -436,6 +436,22 @@ describe("brief guard: runs as a hook", () => {
   });
 });
 
+describe("brief action: a store ticket with no epic", () => {
+  test("a brief for a store ticket that is its own root passes the guard", () => {
+    const text = briefMarkdown("claude", { fast: "f", balanced: "b", deep: "d" }, "~/x/briefs");
+    const template = text.split("````markdown\n")[1]!.split("\n````")[0]!;
+    const filled = template
+      .replace("<EPIC-ID> <epic title>", "BCS-12 Store-only fix")
+      .replace(/^- Ticket: .*$/m, "- Ticket: BCS-12 Store-only fix (no epic: its own root)");
+    expect(filled).toContain("## Epic\n");
+    expect(briefProblems(filled)).toEqual([]);
+    const path = join(tmpdir(), "state", "agent-config", "briefs", "BCS-12.md");
+    expect(
+      decide({ tool_name: "Write", tool_input: { file_path: path, content: filled } }),
+    ).toBeUndefined();
+  });
+});
+
 describe("brief action: the brief template", () => {
   test.each(["claude", "opencode", "pi"] as const)(
     "the %s template is a valid brief",
