@@ -8,7 +8,9 @@ import {
   PLAN_KINDS,
   PLAN_SCHEMA,
   PLAN_STORE_PATH,
+  PYTHON_FALLBACK,
   REVIEW_VERDICT,
+  STORE_MIGRATION,
   STORE_WRITE_PREFIX,
   plannerBody,
   plannerDescription,
@@ -103,6 +105,95 @@ describe("PLAN_SCHEMA", () => {
   });
 });
 
+/** The schema before tickets.pr_url and ticket_sessions, as stores written by 0.18.0 have it. */
+const OLD_SCHEMA = `
+CREATE TABLE plan (id INTEGER PRIMARY KEY CHECK (id = 1), title TEXT NOT NULL, kind TEXT NOT NULL, request TEXT NOT NULL, outcome TEXT, status TEXT NOT NULL DEFAULT 'interview', tracker TEXT NOT NULL DEFAULT 'store', created_at TEXT NOT NULL DEFAULT (datetime('now')));
+CREATE TABLE epics (id TEXT PRIMARY KEY, title TEXT NOT NULL, goal TEXT NOT NULL, done_when TEXT NOT NULL, position INTEGER NOT NULL, tracker_id TEXT);
+CREATE TABLE tickets (id TEXT PRIMARY KEY, epic_id TEXT REFERENCES epics(id), kind TEXT NOT NULL DEFAULT 'story', title TEXT NOT NULL, outcome TEXT NOT NULL, done_when TEXT NOT NULL, size TEXT NOT NULL, touches TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'todo', tracker_id TEXT);
+CREATE TABLE blocks (blocker TEXT NOT NULL REFERENCES tickets(id), blocked TEXT NOT NULL REFERENCES tickets(id), PRIMARY KEY (blocker, blocked));
+`;
+
+/** Runs the migration the way an agent does with sqlite3: check, then add what is missing. */
+function migrate(db: DatabaseSync): void {
+  const hasPrUrl = db.prepare(STORE_MIGRATION.check).get();
+  if (!hasPrUrl) db.exec(`${STORE_WRITE_PREFIX} ${STORE_MIGRATION.addPrUrl}`);
+  db.exec(`${STORE_WRITE_PREFIX} ${STORE_MIGRATION.sessions}`);
+}
+
+describe("store migration", () => {
+  test("old-schema store migrates then accepts write", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(OLD_SCHEMA);
+    db.exec(
+      "INSERT INTO epics VALUES ('E1', 'Epic', 'goal', 'done', 1, NULL); INSERT INTO tickets (id, epic_id, title, outcome, done_when, size, touches, status) VALUES ('T-1', 'E1', 'One', 'o', 'd', 'P2', 'src', 'in_progress'), ('T-2', 'E1', 'Two', 'o', 'd', 'P1', 'src', 'todo'); INSERT INTO blocks VALUES ('T-1', 'T-2');",
+    );
+    const before = db.prepare("SELECT * FROM tickets ORDER BY id").all();
+    migrate(db);
+    const after = db.prepare("SELECT * FROM tickets ORDER BY id").all();
+    expect(after).toEqual(before.map((row) => ({ ...row, pr_url: null })));
+    expect(db.prepare("SELECT count(*) AS n FROM blocks").get()).toEqual({ n: 1 });
+    db.exec(
+      `${STORE_WRITE_PREFIX} UPDATE tickets SET pr_url = 'https://example.test/pr/1' WHERE id = 'T-1'; INSERT INTO ticket_sessions (ticket_id, session_id, started_at, last_seen_at) VALUES ('T-1', 's1', datetime('now'), datetime('now'));`,
+    );
+    expect(db.prepare("SELECT pr_url FROM tickets WHERE id = 'T-1'").get()).toEqual({
+      pr_url: "https://example.test/pr/1",
+    });
+    expect(db.prepare("SELECT ticket_id, session_id, ended_at FROM ticket_sessions").all()).toEqual(
+      [{ ticket_id: "T-1", session_id: "s1", ended_at: null }],
+    );
+  });
+
+  test("migration is idempotent", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(OLD_SCHEMA);
+    migrate(db);
+    expect(() => migrate(db)).not.toThrow();
+    expect(() => migrate(store())).not.toThrow();
+  });
+
+  test("new store has pr_url and ticket_sessions", () => {
+    const db = store();
+    addTicket(db, "A");
+    db.exec(`${STORE_WRITE_PREFIX} UPDATE tickets SET pr_url = 'u' WHERE id = 'A';`);
+    expect(db.prepare(STORE_MIGRATION.check).get()).toBeTruthy();
+    expect(() =>
+      db.exec(
+        `${STORE_WRITE_PREFIX} INSERT INTO ticket_sessions (ticket_id, session_id, started_at, last_seen_at) VALUES ('GHOST', 's', 'now', 'now');`,
+      ),
+    ).toThrow();
+  });
+
+  test("deleting a ticket deletes its sessions", () => {
+    const db = store();
+    addTicket(db, "A");
+    addTicket(db, "B");
+    db.exec(
+      `${STORE_WRITE_PREFIX} INSERT INTO ticket_sessions (ticket_id, session_id, started_at, last_seen_at) VALUES ('A', 's1', 'now', 'now'), ('B', 's2', 'now', 'now');`,
+    );
+    db.exec(`${STORE_WRITE_PREFIX} DELETE FROM tickets WHERE id = 'A';`);
+    expect(db.prepare("SELECT ticket_id FROM ticket_sessions").all()).toEqual([{ ticket_id: "B" }]);
+  });
+
+  test("the write prefix is two PRAGMAs and never the CLI-only .timeout", () => {
+    expect(STORE_WRITE_PREFIX).toBe("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
+    expect(STORE_WRITE_PREFIX).not.toContain(".timeout");
+  });
+
+  test("the waves view still layers a migrated store", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(OLD_SCHEMA);
+    migrate(db);
+    db.exec(PLAN_SCHEMA);
+    addTicket(db, "A");
+    addTicket(db, "B");
+    block(db, "A", "B");
+    expect(waves(db)).toEqual([
+      { ticket_id: "A", wave: 1 },
+      { ticket_id: "B", wave: 2 },
+    ]);
+  });
+});
+
 describe("planningMarkdown", () => {
   test("names every planner with its model, reviews on planner-deep and caps the fan-out", () => {
     const text = planningMarkdown("claude", MODELS);
@@ -115,6 +206,17 @@ describe("planningMarkdown", () => {
       expect(text).toContain(`${kind} ${fanOut}`);
     expect(text).toContain(PLAN_STORE_PATH);
     expect(text).toContain(`\`${STORE_WRITE_PREFIX}\``);
+  });
+
+  test("explains the busy timeout as waiting for a store another session is writing", () => {
+    const text = planningMarkdown("claude", MODELS);
+    expect(text).toContain(
+      "`busy_timeout` makes a write wait up to 5 seconds while another session is writing the store",
+    );
+    expect(text).toContain(STORE_MIGRATION.addPrUrl);
+    expect(text).toContain(PYTHON_FALLBACK);
+    expect(PYTHON_FALLBACK).toContain("never two statements on one line");
+    expect(text).not.toContain(".timeout");
   });
 
   test("starts each kind's draft on its planner and climbs one rung on a failed review", () => {
@@ -147,6 +249,9 @@ describe("planner agents", () => {
       expect(body).toContain(`\`${STORE_WRITE_PREFIX}\``);
       expect(body).toContain(`\`${PHASE_PREFIX} ${DRAFT_PHASE}\``);
       expect(body).toContain(REVIEW_VERDICT.revise);
+      expect(body).toContain(
+        "first delete any earlier draft (its ticket_sessions, blocks, tickets and epics)",
+      );
     }
     expect(fast).toContain(`reply \`${DRAFT_STATUS.escalate}\` early`);
     expect(deep).toContain("the last rung");

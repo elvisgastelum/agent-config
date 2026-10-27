@@ -52,13 +52,44 @@ const MAX_STORY_SIZE = "P5";
 const STORY_SIZES = [GAP_SIZE, "P2", "P3", MAX_STORY_SIZE] as const;
 
 /**
- * The plan store's schema. Every statement is idempotent, so running it on an existing store is
- * safe. The `waves` view layers open tickets by their unfinished blockers and leaves out every
- * ticket in a dependency cycle or behind one (`stuck`), since none of them can start.
+ * Every write starts with this. SQLite checks `REFERENCES` only on a connection that asks, and
+ * without a busy timeout a write fails at once while another session is writing the store. Both
+ * are PRAGMAs, unlike the CLI-only `.timeout`; `python3 -m sqlite3` needs each on a line of its
+ * own (`PYTHON_FALLBACK`).
  */
-/** SQLite checks `REFERENCES` only on a connection that asks, so every write starts with this. */
-export const STORE_WRITE_PREFIX = "PRAGMA foreign_keys = ON;";
+export const STORE_WRITE_PREFIX = "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;";
 
+/** `python3 -m sqlite3` runs one statement per `execute()`, so two on one line fail. */
+export const PYTHON_FALLBACK =
+  "When `sqlite3` is missing, pipe the same statements to `python3 -m sqlite3 <store>` on stdin, never two statements on one line: it runs one statement at a time, so each PRAGMA of the prefix goes on a line of its own.";
+
+/** The sessions that worked each ticket; a deleted ticket takes its sessions with it. */
+const SESSIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ticket_sessions (
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  ended_at TEXT,
+  PRIMARY KEY (ticket_id, session_id)
+);`;
+
+/**
+ * Brings a store written before `tickets.pr_url` and `ticket_sessions` up to date. SQLite cannot
+ * add a column only when it is missing, so the agent runs `check` first and `addPrUrl` when it
+ * returns no row; `sessions` is idempotent.
+ */
+export const STORE_MIGRATION = {
+  check: "SELECT 1 FROM pragma_table_info('tickets') WHERE name = 'pr_url';",
+  addPrUrl: "ALTER TABLE tickets ADD COLUMN pr_url TEXT;",
+  sessions: SESSIONS_SCHEMA,
+} as const;
+
+/**
+ * The plan store's schema. Every statement is idempotent, so running it on an existing store is
+ * safe, though it adds no column to an existing table: that is `STORE_MIGRATION`'s job. The
+ * `waves` view layers open tickets by their unfinished blockers and leaves out every ticket in a
+ * dependency cycle or behind one (`stuck`), since none of them can start.
+ */
 export const PLAN_SCHEMA = `${STORE_WRITE_PREFIX}
 CREATE TABLE IF NOT EXISTS plan (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -102,8 +133,10 @@ CREATE TABLE IF NOT EXISTS tickets (
   size TEXT NOT NULL CHECK (size IN (${STORY_SIZES.map((s) => `'${s}'`).join(", ")})),
   touches TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
-  tracker_id TEXT
+  tracker_id TEXT,
+  pr_url TEXT
 );
+${SESSIONS_SCHEMA}
 CREATE TABLE IF NOT EXISTS blocks (
   blocker TEXT NOT NULL REFERENCES tickets(id),
   blocked TEXT NOT NULL REFERENCES tickets(id),
@@ -222,7 +255,7 @@ Every handoff opens with a phase line and names the plan store, a SQLite file. R
 ## Phases
 
 - \`${phase("plan")}\`: answer what the handoff asks (such as classifying a request) in its answer shape. Change nothing.
-- \`${phase(DRAFT_PHASE)}\`: write the draft into the store yourself, following the draft rules. Start every write with \`${STORE_WRITE_PREFIX}\`, and first delete any earlier draft (its blocks, tickets and epics). When the handoff lists issues from earlier drafts, fix every one.
+- \`${phase(DRAFT_PHASE)}\`: write the draft into the store yourself, following the draft rules. Start every write with \`${STORE_WRITE_PREFIX}\`, and first delete any earlier draft (its ticket_sessions, blocks, tickets and epics). When the handoff lists issues from earlier drafts, fix every one.
 - \`${phase("review")}\`: check what the handoff names against its lenses, the decisions in the store and the draft rules. Change nothing.
 
 ## Draft rules
@@ -394,13 +427,15 @@ With none installed, say how to work the tickets by hand from the store.
 
 ## Plan store
 
-Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is the current month (\`10-2026\`). Create it with \`sqlite3\` (or \`python3 -m sqlite3\` when \`sqlite3\` is missing) from this schema:
+Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is the current month (\`10-2026\`). Create it with \`sqlite3\` from this schema:
 
 \`\`\`sql
 ${PLAN_SCHEMA}
 \`\`\`
 
-Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist. Query it with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist; \`busy_timeout\` makes a write wait up to 5 seconds while another session is writing the store, instead of failing at once. ${PYTHON_FALLBACK} Query the store with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+
+A store created before \`tickets.pr_url\` and \`ticket_sessions\` existed needs them before its first write: when ${code(STORE_MIGRATION.check)} returns no row, run ${code(STORE_MIGRATION.addPrUrl)}, which fails when run twice, so the check always comes first; then run the \`ticket_sessions\` statement from the schema above, which is safe to repeat.
 
 ## Design system standard
 
