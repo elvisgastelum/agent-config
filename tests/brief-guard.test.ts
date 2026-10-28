@@ -1,10 +1,11 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, test } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 // @ts-expect-error plain .mjs asset without type declarations
 import * as guard from "../assets/brief-guard.mjs";
+import { inlineShellSplit } from "../src/catalog.ts";
 import { FAST_REVIEW_APPROVAL, PHASE_PREFIX, briefMarkdown } from "../src/brief.ts";
 
 const { BRIEF_PHASES, BRIEF_SECTIONS, briefProblems, decide } = guard;
@@ -462,4 +463,166 @@ describe("brief action: the brief template", () => {
       expect(briefProblems(template)).toEqual([]);
     },
   );
+});
+
+describe("brief guard: installed hook", () => {
+  const root = join(import.meta.dirname, "..");
+  const cli = join(root, "src", "cli.ts");
+  const IMPORT_STATEMENT = /^import\s*\{([^}]*)\}\s*from\s*["']([^"']+)["'];?/gm;
+  let home: string;
+  let hooks: string;
+  let installed: string;
+  const importsOf = (text: string) =>
+    [...text.matchAll(IMPORT_STATEMENT)].map((m) => ({
+      names: m[1].split(",").map((n) => n.trim()),
+      specifier: m[2],
+    }));
+
+  beforeAll(() => {
+    home = mkdtempSync(join(tmpdir(), "agent-config-hook-"));
+    for (const item of ["brief", "commit"]) {
+      const res = spawnSync("node", [cli, "install", item, "--runtime", "claude", "--yes"], {
+        env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" },
+        encoding: "utf8",
+      });
+      if (res.status !== 0) throw new Error(`install ${item} failed: ${res.stderr}`);
+    }
+    hooks = join(home, ".claude", "hooks", "agent-config");
+    installed = readFileSync(join(hooks, "brief-guard.mjs"), "utf8");
+  });
+  afterAll(() => rmSync(home, { recursive: true, force: true }));
+
+  test("installed brief-guard.mjs has no relative import", () => {
+    expect(installed).not.toMatch(/\bfrom\s*["']\.\.?\//);
+  });
+
+  test("installed brief-guard.mjs passes node --check", () => {
+    const res = spawnSync("node", ["--check", join(hooks, "brief-guard.mjs")], {
+      encoding: "utf8",
+    });
+    expect(res.stderr).toBe("");
+    expect(res.status).toBe(0);
+  });
+
+  test("installed brief-guard.mjs has one import per node: module", () => {
+    const imports = importsOf(installed);
+    const specifiers = imports.map((i) => i.specifier);
+    expect(new Set(specifiers).size).toBe(specifiers.length);
+    expect(imports.every((i) => !i.specifier.startsWith("."))).toBe(true);
+    const path = imports.filter((i) => i.specifier === "node:path");
+    expect(path).toHaveLength(1);
+    expect(path[0].names).toEqual(["basename", "isAbsolute", "join"]);
+  });
+
+  test("rendering merges a shell-split node: import into the hook's import for the same module", () => {
+    const hook = [
+      'import { join } from "node:path";',
+      'import { x } from "./shell-split.mjs";',
+      "",
+      "console.log(x, join);",
+      "",
+    ].join("\n");
+    const module = [
+      "// splitter",
+      'import { basename, join } from "node:path";',
+      'import { readFileSync } from "node:fs";',
+      "export const x = basename(readFileSync.name) + join();",
+      "",
+    ].join("\n");
+    const out = inlineShellSplit(hook, module);
+    expect(out.match(/from "node:path"/g)).toHaveLength(1);
+    expect(out).toContain('import { basename, join } from "node:path";');
+    expect(out.indexOf('import { readFileSync } from "node:fs";')).toBeGreaterThan(
+      out.indexOf('import { basename, join } from "node:path";'),
+    );
+    expect(out).not.toContain("export ");
+    expect(out).not.toContain("shell-split.mjs");
+    expect(out).toContain("const x = ");
+  });
+
+  test("rendering leaves a hook without that import unchanged and rejects a relative import", () => {
+    const hook = 'import { join } from "node:path";\nconsole.log(join);\n';
+    expect(inlineShellSplit(hook, 'import { a } from "./other.mjs";')).toBe(hook);
+    expect(() =>
+      inlineShellSplit(
+        'import { x } from "./shell-split.mjs";\n',
+        'import { a } from "./other.mjs";\nexport const x = a;\n',
+      ),
+    ).toThrow("./other.mjs");
+  });
+
+  test("rendering inserts a new node: import after a leading shebang", () => {
+    const hook = '#!/usr/bin/env node\nimport { x } from "./shell-split.mjs";\nconsole.log(x);\n';
+    const module = 'import { readFileSync } from "node:fs";\nexport const x = readFileSync;\n';
+    const lines = inlineShellSplit(hook, module).split("\n");
+    expect(lines[0]).toBe("#!/usr/bin/env node");
+    expect(lines[1]).toBe('import { readFileSync } from "node:fs";');
+  });
+
+  test("rendering rejects leftover exports, name collisions and unmergeable node: imports", () => {
+    const hook = 'import { x } from "./shell-split.mjs";\n';
+    expect(() => inlineShellSplit(hook, "export async function x() {}\n")).not.toThrow();
+    expect(() => inlineShellSplit(hook, "export { x };\n")).toThrow("export");
+    expect(() => inlineShellSplit(hook, "export default 1;\n")).toThrow("export");
+    expect(() => inlineShellSplit(`${hook}const x = 1;\n`, "export function x() {}\n")).toThrow(
+      "already declares",
+    );
+    expect(() =>
+      inlineShellSplit(
+        `import * as fs from "node:fs";\n${hook}`,
+        'import { readFileSync } from "node:fs";\nexport const x = readFileSync;\n',
+      ),
+    ).toThrow("cannot be merged");
+    expect(() =>
+      inlineShellSplit(
+        `import { join } from "node:path"; // c\n${hook}`,
+        'import { basename } from "node:path";\nexport const x = basename;\n',
+      ),
+    ).toThrow("cannot be merged");
+  });
+
+  test("no shell-split.mjs is installed beside the hooks", () => {
+    expect(existsSync(join(hooks, "shell-split.mjs"))).toBe(false);
+  });
+
+  test("installed brief-guard.mjs run from its install folder passes the hook decision cases", () => {
+    const run = (payload: object) =>
+      execFileSync("node", [join(hooks, "brief-guard.mjs")], {
+        input: JSON.stringify(payload),
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" },
+      });
+    const cases = [
+      {
+        tool_name: "Agent",
+        tool_input: { prompt: "Phase: plan", subagent_type: "ladder-edit-fast" },
+      },
+      {
+        tool_name: "Agent",
+        tool_input: { prompt: "Phase: plan", subagent_type: "ladder-read-deep" },
+      },
+      {
+        tool_name: "Bash",
+        cwd: tmpdir(),
+        tool_input: { command: "cat agent-config/briefs/FEX-404.md | pbcopy" },
+      },
+      { tool_name: "Bash", cwd: tmpdir(), tool_input: { command: "ls -la" } },
+    ];
+    for (const payload of cases) {
+      const expected = decide(payload);
+      const out = run(payload);
+      if (expected === undefined) expect(out).toBe("");
+      else {
+        const output = JSON.parse(out).hookSpecificOutput;
+        expect(output.permissionDecision).toBe("deny");
+        expect(output.permissionDecisionReason).toBe(expected);
+      }
+    }
+  });
+
+  test("installed commit-guard.mjs is byte-identical to assets/commit-guard.mjs", () => {
+    expect(readFileSync(join(hooks, "commit-guard.mjs"), "utf8")).toBe(
+      readFileSync(join(root, "assets", "commit-guard.mjs"), "utf8"),
+    );
+  });
 });

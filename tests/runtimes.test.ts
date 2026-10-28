@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
+import { inlineShellSplit } from "../src/catalog.ts";
 import { PYTHON_FALLBACK } from "../src/planning.ts";
 import { tomlMultiline } from "../src/runtimes.ts";
 import { RUNTIMES, type Runtime } from "../src/tiers.ts";
@@ -55,7 +56,13 @@ describe("store fallback on every runtime", () => {
 
   test("the Claude brief guard hook is still installed, unchanged", () => {
     const installed = read(join(home, ".claude/hooks/agent-config/brief-guard.mjs"));
-    expect(installed).toBe(read(join(import.meta.dirname, "..", "assets", "brief-guard.mjs")));
+    const assets = join(import.meta.dirname, "..", "assets");
+    expect(installed).toBe(
+      inlineShellSplit(
+        read(join(assets, "brief-guard.mjs")),
+        read(join(assets, "shell-split.mjs")),
+      ),
+    );
     const hooks = JSON.parse(read(join(home, ".claude/settings.json"))).hooks.PreToolUse as {
       matcher: string;
       hooks: { command: string }[];

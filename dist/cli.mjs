@@ -6312,9 +6312,76 @@ const WRITER_AGENT = {
 		"bash"
 	]
 };
+const SHELL_SPLIT_FILE = "shell-split.mjs";
+const SHELL_SPLIT_IMPORT = new RegExp(`^import\\s*\\{[^}]*\\}\\s*from\\s*["']\\./${SHELL_SPLIT_FILE.replace(".", "\\.")}["'];?[ \\t]*\\r?\\n?`, "m");
+/** `import { a, b } from "node:x";`, possibly across lines inside the braces. */
+const NAMED_IMPORT = /^import\s*\{([^}]*)\}\s*from\s*(["'])([^"']+)\2;?[ \t]*$/gm;
+/** Any import statement, to find the ones the module may not have. */
+const ANY_IMPORT = /^import\b[^;]*?(?:;|$)/gm;
+const EXPORT_KEYWORD = /^export (?=(?:const|async function|function|let|class)\b)/gm;
+/** Any `export` left at a line start after the supported forms are stripped. */
+const LEFTOVER_EXPORT = /^export\b.*/m;
+/** A top-level declaration at a line start; capture 1 is the declared name. */
+const TOP_LEVEL_DECLARATION = /^(?:async\s+function|const|let|class|function)\s+([A-Za-z_$][\w$]*)/gm;
+const SHEBANG_LINE = /^#![^\n]*\n/;
+const REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g;
+const REGEX_ESCAPE_REPLACEMENT = "\\$&";
+const IMPORT_NAME_SEPARATOR = ",";
+const IMPORT_NAME_LIST = /\s*,\s*/;
+const NODE_SPECIFIER_PREFIX = "node:";
 /**
-* Claude only: copies a hook script asset into the hooks folder and registers it as a PreToolUse
-* hook for the matcher. A project's settings are committed, so its hook finds the script from the
+* Inlines the shell splitter module into a hook that imports it from `./shell-split.mjs`, so an
+* installed hook stays one self-contained file. The module may only import named values from node
+* built-ins; those merge into the hook's own imports, one statement per module.
+*/
+function inlineShellSplit(hook, module) {
+	if (!SHELL_SPLIT_IMPORT.test(hook)) return hook;
+	const nodeImports = /* @__PURE__ */ new Map();
+	const body = module.replace(NAMED_IMPORT, (statement, names, _quote, specifier) => {
+		if (!specifier.startsWith(NODE_SPECIFIER_PREFIX)) return statement;
+		const set = nodeImports.get(specifier) ?? /* @__PURE__ */ new Set();
+		for (const name of names.split(IMPORT_NAME_SEPARATOR)) if (name.trim()) set.add(name.trim());
+		nodeImports.set(specifier, set);
+		return "";
+	}).replace(EXPORT_KEYWORD, "");
+	const leftover = body.match(ANY_IMPORT);
+	if (leftover) throw new Error(`${SHELL_SPLIT_FILE} may only import named node: modules: ${leftover[0]}`);
+	const leftoverExport = body.match(LEFTOVER_EXPORT);
+	if (leftoverExport) throw new Error(`${SHELL_SPLIT_FILE} has an export form that cannot be inlined: ${leftoverExport[0]}`);
+	const hookNames = new Set([...hook.matchAll(TOP_LEVEL_DECLARATION)].map((m) => m[1]));
+	for (const m of body.matchAll(TOP_LEVEL_DECLARATION)) if (hookNames.has(m[1])) throw new Error(`${SHELL_SPLIT_FILE} declares ${m[1]}, which the hook already declares`);
+	let out = hook.replace(SHELL_SPLIT_IMPORT, () => `${body.trim()}\n\n`);
+	for (const [specifier, names] of nodeImports) {
+		const own = [...out.matchAll(NAMED_IMPORT)].find((m) => m[3] === specifier);
+		const escaped = specifier.replace(REGEX_ESCAPE, REGEX_ESCAPE_REPLACEMENT);
+		if (!own && new RegExp(`^import\\b[^;]*?["']${escaped}["']`, "m").test(out)) throw new Error(`the hook imports ${specifier} in a form that cannot be merged`);
+		const merged = new Set(names);
+		if (own) {
+			for (const n of own[1].split(IMPORT_NAME_LIST)) if (n.trim()) merged.add(n.trim());
+		}
+		const statement = `import { ${[...merged].sort().join(", ")} } from ${JSON.stringify(specifier)};`;
+		if (own) out = out.replace(own[0], () => statement);
+		else {
+			const last = [...out.matchAll(NAMED_IMPORT)].at(-1);
+			if (last) {
+				const at = last.index + last[0].length;
+				out = `${out.slice(0, at)}\n${statement}${out.slice(at)}`;
+			} else {
+				const at = out.match(SHEBANG_LINE)?.[0].length ?? 0;
+				out = `${out.slice(0, at)}${statement}\n${out.slice(at)}`;
+			}
+		}
+	}
+	return out;
+}
+/** A hook asset as installed: self-contained, with an import of ./shell-split.mjs inlined. */
+function renderHook(file) {
+	const hook = assetSource(file);
+	return SHELL_SPLIT_IMPORT.test(hook) ? inlineShellSplit(hook, assetSource(SHELL_SPLIT_FILE)) : hook;
+}
+/**
+* Claude only: copies a hook script asset, rendered self-contained (an import of ./shell-split.mjs
+* is inlined), into the hooks folder and registers it as a PreToolUse hook for the matcher. A project's settings are committed, so its hook finds the script from the
 * project root.
 */
 function guardHookOps(project, file, matcher, scriptLabel, hookLabel) {
@@ -6330,7 +6397,7 @@ function guardHookOps(project, file, matcher, scriptLabel, hookLabel) {
 		...base,
 		kind: "file",
 		path: script,
-		content: assetSource(file),
+		content: renderHook(file),
 		executable: true,
 		label: scriptLabel
 	}, {
