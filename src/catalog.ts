@@ -44,6 +44,8 @@ import {
 } from "./paths.ts";
 import {
   PLANNING,
+  PLANNING_GUARD_FILE,
+  PLANNING_GUARD_MATCHER,
   PLANNING_INSTRUCTIONS_BLOCK,
   plannerBody,
   plannerDescription,
@@ -741,6 +743,17 @@ const PLANNER_CLAUDE_TOOLS = ["Read", "Grep", "Glob", "Bash"];
 const PLANNER_OPENCODE_DENY = ["edit", "task"];
 const PLANNER_PI_TOOLS = ["read", "grep", "find", "ls", "bash"];
 
+/** Claude only: the guard that keeps a /planning run to planning (no writes outside .plans/). */
+function planningGuardOps(project: string | undefined): Op[] {
+  return guardHookOps(
+    project,
+    PLANNING_GUARD_FILE,
+    PLANNING_GUARD_MATCHER,
+    "planning-guard hook script",
+    `PreToolUse hook (${PLANNING_GUARD_MATCHER}) planning guard`,
+  );
+}
+
 function planningOps(entry: CatalogEntry, runtime: Runtime, config: Config): Op[] {
   const project = entry.project;
   const tiers = config.tiers[runtime];
@@ -781,6 +794,7 @@ function planningOps(entry: CatalogEntry, runtime: Runtime, config: Config): Op[
     markers: [blockMarkers(PLANNING, "html")],
     label: "planning instructions block",
   });
+  if (runtime === "claude") ops.push(...planningGuardOps(project));
   return ops;
 }
 

@@ -4765,6 +4765,10 @@ function uninstall(filter, force = false) {
 //#endregion
 //#region src/planning.ts
 const PLANNING = "planning";
+/** The planning guard hook's file name, in the assets folder and in the hooks folder. */
+const PLANNING_GUARD_FILE = "planning-guard.mjs";
+/** The tools the planning guard hook runs for. */
+const PLANNING_GUARD_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash|Agent|Task";
 const DESCRIPTION$1 = "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed) without changing any file outside .plans/.";
 const READ_ONLY_SENTENCE = "This run is read-only: it changes no file outside .plans/ and no tracker item except this plan's own epics and stories.";
 /**
@@ -6605,6 +6609,10 @@ const PLANNER_PI_TOOLS = [
 	"ls",
 	"bash"
 ];
+/** Claude only: the guard that keeps a /planning run to planning (no writes outside .plans/). */
+function planningGuardOps(project) {
+	return guardHookOps(project, PLANNING_GUARD_FILE, PLANNING_GUARD_MATCHER, "planning-guard hook script", `PreToolUse hook (${PLANNING_GUARD_MATCHER}) planning guard`);
+}
 function planningOps(entry, runtime, config) {
 	const project = entry.project;
 	const tiers = config.tiers[runtime];
@@ -6644,6 +6652,7 @@ function planningOps(entry, runtime, config) {
 		markers: [blockMarkers(PLANNING, "html")],
 		label: "planning instructions block"
 	});
+	if (runtime === "claude") ops.push(...planningGuardOps(project));
 	return ops;
 }
 const STATUSLINE_FILE = "statusline.sh";

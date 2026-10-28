@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,6 +10,9 @@ import { defaultConfig, type Config } from "../src/config.ts";
 import { BLOCK_BEGIN, BLOCK_END, applyPlan, uninstall } from "../src/ops.ts";
 import { claudeDir, codexDir, opencodeDir, piDir } from "../src/paths.ts";
 import { read, sandbox } from "./helpers.ts";
+// @ts-expect-error plain .mjs asset without type declarations
+import { PLANNING_COMMAND_TAG } from "../assets/planning-guard.mjs";
+import { BRIEF_GUARD_FILE } from "../src/brief.ts";
 import { WAVE_RULE } from "../src/kaneo.ts";
 import { PHASE_PREFIX } from "../src/loop.ts";
 import {
@@ -19,6 +23,8 @@ import {
   NOT_AUTHORIZATION_SENTENCE,
   PLANNING_INSTRUCTIONS_BLOCK,
   PLAN_STORE_PATH,
+  PLANNING_GUARD_FILE,
+  PLANNING_GUARD_MATCHER,
   READ_ONLY_SENTENCE,
   PYTHON_FALLBACK,
   REVIEW_VERDICT,
@@ -465,5 +471,165 @@ describe("planning instructions block", () => {
       expect(text).not.toContain(PLANNING_END);
       expect(ladderBlock(text)).toBe(before[i]);
     });
+  });
+});
+
+describe("planning guard install", () => {
+  const OTHERS: Runtime[] = ["opencode", "codex", "pi"];
+  const PRE_TOOL_USE = "PreToolUse";
+  const JSON_HOOK_KIND = "json-hook";
+  const IMPORT_STATEMENT = /^import\s*\{([^}]*)\}\s*from\s*["']([^"']+)["'];?/gm;
+  const RELATIVE_IMPORT = /\bfrom\s*["']\.\.?\//;
+  const NODE_PREFIX = "node:";
+  const DENY = "deny";
+
+  let box: ReturnType<typeof sandbox>;
+  beforeEach(() => {
+    box = sandbox();
+  });
+  afterEach(() => box.restore());
+
+  const entry = (item: string, runtimes: Runtime[]): CatalogEntry => ({
+    item,
+    runtimes,
+    settings: {},
+  });
+  function install(item: string, runtimes: Runtime[] = ["claude"]): void {
+    const config: Config = defaultConfig();
+    upsertEntry(config, entry(item, runtimes));
+    expect(applyPlan(buildPlan(config, [entryKey(entry(item, runtimes))])).errors).toEqual([]);
+  }
+  const hooksDir = () => join(claudeDir(), "hooks", "agent-config");
+  const guardPath = () => join(hooksDir(), PLANNING_GUARD_FILE);
+  const settings = () => JSON.parse(read(join(claudeDir(), "settings.json")));
+  const preToolUse = (file: string): { matcher: string; hooks: { command: string }[] }[] =>
+    (settings().hooks?.[PRE_TOOL_USE] ?? []).filter((e: { hooks: { command: string }[] }) =>
+      e.hooks.some((h) => h.command.includes(file)),
+    );
+  const importsOf = (text: string) =>
+    [...text.matchAll(IMPORT_STATEMENT)].map((m) => ({ specifier: m[2] }));
+
+  test("claude settings get one planning guard PreToolUse entry with PLANNING_GUARD_MATCHER", () => {
+    install("planning");
+    const entries = preToolUse(PLANNING_GUARD_FILE);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].matcher === PLANNING_GUARD_MATCHER).toBe(true);
+  });
+
+  test("installed planning-guard.mjs has no relative import", () => {
+    install("planning");
+    expect(read(guardPath())).not.toMatch(RELATIVE_IMPORT);
+  });
+
+  test("installed planning-guard.mjs passes node --check", () => {
+    install("planning");
+    const res = spawnSync(process.execPath, ["--check", guardPath()], { encoding: "utf8" });
+    expect(res.stderr).toBe("");
+    expect(res.status).toBe(0);
+  });
+
+  test("installed planning-guard.mjs has one import per node: module", () => {
+    install("planning");
+    const specifiers = importsOf(read(guardPath())).map((i) => i.specifier);
+    expect(new Set(specifiers).size).toBe(specifiers.length);
+    expect(specifiers.every((s) => s.startsWith(NODE_PREFIX))).toBe(true);
+  });
+
+  test("installed planning-guard.mjs run from its install folder blocks Edit of src/x.ts in a /planning transcript", () => {
+    install("planning");
+    const cwd = mkdtempSync(join(tmpdir(), "planning-install-cwd-"));
+    try {
+      const transcript = join(cwd, "transcript.jsonl");
+      const entryLine = {
+        type: "user",
+        message: {
+          role: "user",
+          content: `${PLANNING_COMMAND_TAG}\n<command-message>planning</command-message>\n<command-args>x</command-args>`,
+        },
+      };
+      writeFileSync(transcript, JSON.stringify(entryLine) + "\n");
+      const res = spawnSync(process.execPath, [guardPath()], {
+        input: JSON.stringify({
+          tool_name: "Edit",
+          cwd,
+          transcript_path: transcript,
+          tool_input: { file_path: join(cwd, "src", "x.ts") },
+        }),
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, HOME: box.home, NO_COLOR: "1" },
+      });
+      expect(res.status).toBe(0);
+      expect(JSON.parse(res.stdout).hookSpecificOutput.permissionDecision).toBe(DENY);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("opencode, codex and pi get no planning guard hook", () => {
+    for (const runtime of OTHERS) {
+      const config: Config = defaultConfig();
+      upsertEntry(config, entry("planning", [runtime]));
+      const plan = buildPlan(config, [entryKey(entry("planning", [runtime]))]);
+      expect(plan.length).toBeGreaterThan(0);
+      expect(JSON.stringify(plan)).not.toContain(PLANNING_GUARD_FILE);
+      expect(plan.some((p) => p.op.kind === JSON_HOOK_KIND)).toBe(false);
+    }
+    install("planning", OTHERS);
+    expect(existsSync(guardPath())).toBe(false);
+  });
+
+  test("applying twice keeps one planning guard entry", () => {
+    install("planning");
+    install("planning");
+    expect(preToolUse(PLANNING_GUARD_FILE)).toHaveLength(1);
+  });
+
+  test("uninstall removes the planning guard entry and planning-guard.mjs", () => {
+    install("planning");
+    expect(existsSync(guardPath())).toBe(true);
+    uninstall((r) => r.item === "planning@user");
+    expect(existsSync(guardPath())).toBe(false);
+    const text = existsSync(join(claudeDir(), "settings.json"))
+      ? read(join(claudeDir(), "settings.json"))
+      : "";
+    expect(text).not.toContain(PLANNING_GUARD_FILE);
+  });
+
+  test("with brief and planning both installed, uninstalling planning leaves brief-guard.mjs installed and its hook still returns the same decisions", () => {
+    install("brief");
+    install("planning");
+    const briefGuard = join(hooksDir(), BRIEF_GUARD_FILE);
+    const cases = [
+      {
+        tool_name: "Agent",
+        tool_input: { prompt: "Phase: plan", subagent_type: "ladder-edit-fast" },
+      },
+      {
+        tool_name: "Agent",
+        tool_input: { prompt: "Phase: plan", subagent_type: "ladder-read-deep" },
+      },
+      {
+        tool_name: "Bash",
+        cwd: tmpdir(),
+        tool_input: { command: "cat agent-config/briefs/FEX-404.md | pbcopy" },
+      },
+      { tool_name: "Bash", cwd: tmpdir(), tool_input: { command: "ls -la" } },
+    ];
+    const run = () =>
+      cases.map(
+        (payload) =>
+          spawnSync(process.execPath, [briefGuard], {
+            input: JSON.stringify(payload),
+            encoding: "utf8",
+            env: { PATH: process.env.PATH, HOME: box.home, NO_COLOR: "1" },
+          }).stdout,
+      );
+    const before = run();
+    expect(before.some((out) => out.includes(DENY))).toBe(true);
+    uninstall((r) => r.item === "planning@user");
+    expect(existsSync(briefGuard)).toBe(true);
+    expect(existsSync(guardPath())).toBe(false);
+    expect(preToolUse(BRIEF_GUARD_FILE)).toHaveLength(1);
+    expect(run()).toEqual(before);
   });
 });
