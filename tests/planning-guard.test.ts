@@ -390,11 +390,16 @@ const bash = (command: string, cwd: string) => ({
   cwd,
 });
 const SHELL_BLOCKED = blockMessage(guard.SHELL_WRITE_DETAIL);
+const GIT_BLOCKED = blockMessage(guard.GIT_WRITE_DETAIL);
 
 describe("planning guard shell writes", () => {
   const blocked = (commands: string[], cwd: string) => {
     for (const command of commands)
       expect([command, decide(bash(command, cwd))]).toEqual([command, SHELL_BLOCKED]);
+  };
+  const gitBlocked = (commands: string[], cwd: string) => {
+    for (const command of commands)
+      expect([command, decide(bash(command, cwd))]).toEqual([command, GIT_BLOCKED]);
   };
   const passes = (commands: string[], cwd: string) => {
     for (const command of commands)
@@ -471,8 +476,185 @@ describe("planning guard shell writes", () => {
     );
   });
 
-  test("sqlite3 store < schema.sql passes", () => {
-    passes(["sqlite3 store < schema.sql"], gitFixture());
+  test("sqlite3 store < schema.sql outside .plans is blocked", () => {
+    blocked(["sqlite3 store < schema.sql"], gitFixture());
+  });
+
+  test("the git deny detail is pinned", () => {
+    expect(guard.GIT_WRITE_DETAIL).toBe(
+      "git may not change history, branches or the checked-out tree; read forms such as git status, git diff, git log and git branch --list pass.",
+    );
+  });
+
+  test("git with the commit verb and -m x is blocked", () => {
+    gitBlocked(
+      [
+        "git commit -m x",
+        "git commit -am x",
+        "env FOO=1 git commit -m x",
+        "command git commit -m x",
+      ],
+      gitFixture(),
+    );
+  });
+
+  test("git push is blocked", () => {
+    gitBlocked(["git push", "git push origin main"], gitFixture());
+  });
+
+  test("git checkout -b feat is blocked", () => {
+    gitBlocked(
+      [
+        "git checkout -b feat",
+        "git checkout -B feat",
+        "git checkout src/a.ts",
+        "git checkout -- src/a.ts",
+      ],
+      gitFixture(),
+    );
+  });
+
+  test("git switch -c feat is blocked", () => {
+    gitBlocked(["git switch -c feat", "git switch -C feat", "git switch main"], gitFixture());
+  });
+
+  test("git branch feat is blocked; git branch --list passes", () => {
+    const root = gitFixture();
+    gitBlocked(["git branch feat", "git branch -D feat", "git branch -m a b"], root);
+    passes(
+      [
+        "git branch",
+        "git branch --list",
+        "git branch -a",
+        "git branch --list 'feat*'",
+        "git branch --contains HEAD",
+      ],
+      root,
+    );
+  });
+
+  test("git worktree add is blocked", () => {
+    const root = gitFixture();
+    gitBlocked(["git worktree add ../x", "git worktree remove ../x"], root);
+    passes(["git worktree list"], root);
+  });
+
+  test("git -C ../other with a push is blocked", () => {
+    gitBlocked(["git -C ../other push", "git -C ../other commit -m x"], gitFixture());
+  });
+
+  test("git status and git diff pass", () => {
+    passes(
+      [
+        "git status",
+        "git diff",
+        "git diff --stat",
+        "git log --oneline",
+        "git -C ../other status",
+        "git stash list",
+        "git tag -l",
+      ],
+      gitFixture(),
+    );
+  });
+
+  test("git reset, stash and tag creation are blocked", () => {
+    gitBlocked(
+      [
+        "git reset --hard",
+        "git reset HEAD~1",
+        "git stash",
+        "git stash pop",
+        "git tag v1",
+        "git merge x",
+        "git rebase main",
+      ],
+      gitFixture(),
+    );
+  });
+
+  test("git history writes inside sh -c, eval and substitutions are blocked", () => {
+    gitBlocked(["sh -c 'git commit -m x'", "eval git push", "echo $(git push)"], gitFixture());
+  });
+
+  test("git with an unknown subcommand is blocked", () => {
+    gitBlocked(["git $X", "X=push; git $X", 'git "$(echo push)"'], gitFixture());
+  });
+
+  test("git stash -m list is blocked", () => {
+    gitBlocked(["git stash -m list", "git worktree --porcelain list"], gitFixture());
+    passes(["git stash show", "git worktree list"], gitFixture());
+  });
+
+  test("git branch --format --list feat is blocked", () => {
+    gitBlocked(["git branch --format --list feat", "git tag --sort --list v1"], gitFixture());
+    passes(
+      ["git branch --format %(refname) --list feat", "git tag -l", "git tag --sort=-v:refname"],
+      gitFixture(),
+    );
+  });
+
+  test("git branch upstream and clustered options are blocked", () => {
+    gitBlocked(
+      [
+        "git branch -uorigin/main",
+        "git branch --set-u=origin/main",
+        "git branch --unset",
+        "git branch -Df feat",
+        "git tag -af v1",
+      ],
+      gitFixture(),
+    );
+    passes(
+      ["git branch -vv", "git branch -a", "git branch --show-current", "git tag -n5"],
+      gitFixture(),
+    );
+  });
+
+  test("sqlite3 with a file: URI is blocked", () => {
+    blocked(
+      ["cd .plans && sqlite3 file:/tmp/x.db 'create table t(a)'", "sqlite3 FILE:/tmp/x.db"],
+      gitFixture(),
+    );
+  });
+
+  test("python3 -Im sqlite3 and python3.12 -m sqlite3 outside .plans are blocked", () => {
+    blocked(
+      [
+        "python3 -Im sqlite3 /tmp/x.sqlite",
+        "python3.12 -m sqlite3 /tmp/x.sqlite",
+        "python3 -Imsqlite3 /tmp/x.sqlite",
+      ],
+      gitFixture(),
+    );
+    passes(["python3 -m sqlite3 .plans/x/plan.sqlite"], gitFixture());
+  });
+
+  test("sqlite3 .plans/x/plan.sqlite with select passes", () => {
+    passes(
+      [
+        'sqlite3 .plans/x/plan.sqlite "SELECT 1;"',
+        'sqlite3 -line .plans/x/plan.sqlite "SELECT 1;"',
+        'sqlite3 -cmd ".timeout 5000" .plans/x/plan.sqlite "SELECT 1;"',
+      ],
+      gitFixture(),
+    );
+  });
+
+  test("python3 -m sqlite3 .plans/x/plan.sqlite passes", () => {
+    passes(["python3 -m sqlite3 .plans/x/plan.sqlite"], gitFixture());
+  });
+
+  test("python3 -m sqlite3 /tmp/x.sqlite is blocked", () => {
+    blocked(
+      [
+        "python3 -m sqlite3 /tmp/x.sqlite",
+        'sqlite3 /tmp/x.sqlite "SELECT 1;"',
+        "sqlite3",
+        "python3 -msqlite3 /tmp/x.sqlite",
+      ],
+      gitFixture(),
+    );
   });
 
   test("a heredoc into sqlite3 on .plans passes", () => {

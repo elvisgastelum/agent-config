@@ -257,6 +257,10 @@ export function writerAgentRule(input) {
 export const SHELL_WRITE_DETAIL =
   "shell commands may write only under .plans/ at the repository root.";
 
+/** The detail the shell rule denies a git history, branch or checked-out tree change with. */
+export const GIT_WRITE_DETAIL =
+  "git may not change history, branches or the checked-out tree; read forms such as git status, git diff, git log and git branch --list pass.";
+
 const SHELL_TOOL = "Bash";
 const COMMAND_FIELD = "command";
 const MAX_DEPTH = 8;
@@ -381,6 +385,104 @@ const GIT_VALUE_OPTIONS = new Set([
 /** Git subcommands that write the working tree. */
 export const GIT_WRITE_SUBCOMMANDS = new Set(["apply", "clean", "mv", "restore", "rm"]);
 
+/** Git subcommands that change history, branches or the checked-out tree in every form. */
+export const GIT_HISTORY_SUBCOMMANDS = new Set([
+  "commit",
+  "push",
+  "pull",
+  "merge",
+  "rebase",
+  "cherry-pick",
+  "revert",
+  "am",
+  "reset",
+  "checkout",
+  "switch",
+  "update-ref",
+  "symbolic-ref",
+  "filter-branch",
+  "replace",
+]);
+
+const GIT_BRANCH = "branch";
+const GIT_TAG = "tag";
+const GIT_STASH = "stash";
+const GIT_WORKTREE = "worktree";
+/** `git stash` and `git worktree` read with these first operands only. */
+const GIT_STASH_READS = new Set(["list", "show"]);
+const GIT_WORKTREE_READS = new Set(["list"]);
+/** `git branch` and `git tag` list instead of creating with these options. */
+const GIT_LIST_OPTIONS = new Set(["--list", "-l"]);
+const GIT_LONG_PREFIX = "--";
+const GIT_VALUE_SEPARATOR = "=";
+/** The only long options `git branch` and `git tag` may take; any other (or a unique prefix of one) denies. */
+const GIT_LISTING_LONG_OPTIONS = [
+  "--list",
+  "--contains",
+  "--no-contains",
+  "--merged",
+  "--no-merged",
+  "--points-at",
+  "--sort",
+  "--format",
+  "--column",
+  "--no-column",
+  "--color",
+  "--no-color",
+  "--ignore-case",
+];
+const GIT_BRANCH_READ_LONG_OPTIONS = new Set([
+  ...GIT_LISTING_LONG_OPTIONS,
+  "--all",
+  "--remotes",
+  "--verbose",
+  "--show-current",
+  "--abbrev",
+  "--no-abbrev",
+]);
+const GIT_TAG_READ_LONG_OPTIONS = new Set(GIT_LISTING_LONG_OPTIONS);
+/** Letters a short-option word of a listing form may hold. */
+const GIT_BRANCH_READ_LETTERS = /^-[arlvi]+$/;
+const GIT_TAG_READ_LETTERS = /^-[lni0-9]+$/;
+const GIT_LIST_LETTER = "l";
+/** Listing options of `git branch` and `git tag` that take the next word as their value. */
+const GIT_LIST_VALUE_OPTIONS = new Set([
+  "--contains",
+  "--no-contains",
+  "--merged",
+  "--no-merged",
+  "--points-at",
+  "--sort",
+  "--format",
+]);
+
+/** sqlite3 options that take the next word as their value (single- or double-dash spelling). */
+const SQLITE_VALUE_OPTIONS = new Set(
+  [
+    "cmd",
+    "init",
+    "separator",
+    "newline",
+    "nullvalue",
+    "vfs",
+    "mmap",
+    "maxsize",
+    "lookaside",
+    "pagecache",
+    "heap",
+  ].flatMap((name) => [`-${name}`, `--${name}`]),
+);
+const SQLITE_COMMANDS = ["sqlite3"];
+/** Interpreter names that get the python check: python, python3, python3.12... */
+const PYTHON_NAME = /^python[0-9.]*$/;
+const PYTHON_COMMAND = "python";
+/** A short cluster ending in `m` (`-m`, `-Im`), and one ending in `msqlite3` (`-msqlite3`). */
+const PYTHON_MODULE_CLUSTER = /^-[A-Za-z]*m$/;
+const PYTHON_SQLITE_CLUSTER = /^-[A-Za-z]*msqlite3$/;
+/** sqlite3 opens `file:` URIs, which can name any path. */
+const SQLITE_URI_PREFIX = "file:";
+const SQLITE_MODULE = "sqlite3";
+
 const PACKAGE_MANAGERS = [
   "npm",
   "pnpm",
@@ -483,11 +585,70 @@ function wgetWrites(args) {
   return !toStdout;
 }
 
+/**
+ * True when `args` (after `git branch` / `git tag`) create, change or delete: any option outside
+ * the read set, an unknown word, or an operand without a list option.
+ */
+function gitCreates(args, readLong, readLetters) {
+  let listed = false;
+  let operandSeen = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.includes(UNKNOWN_VALUE)) return true;
+    if (arg.startsWith(GIT_LONG_PREFIX)) {
+      const [name] = arg.split(GIT_VALUE_SEPARATOR);
+      if (!readLong.has(name)) return true;
+      if (GIT_LIST_OPTIONS.has(name)) listed = true;
+      if (GIT_LIST_VALUE_OPTIONS.has(name) && !arg.includes(GIT_VALUE_SEPARATOR)) i++;
+    } else if (arg.startsWith(OPTION_PREFIX)) {
+      if (!readLetters.test(arg)) return true;
+      if (arg.includes(GIT_LIST_LETTER)) listed = true;
+    } else operandSeen = true;
+  }
+  return operandSeen && !listed;
+}
+
 function gitWrites(args) {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (GIT_VALUE_OPTIONS.has(arg)) i++;
-    else if (!arg.startsWith(OPTION_PREFIX)) return GIT_WRITE_SUBCOMMANDS.has(arg);
+    if (arg.includes(UNKNOWN_VALUE)) return GIT_WRITE_DETAIL;
+    if (GIT_VALUE_OPTIONS.has(arg)) {
+      i++;
+      continue;
+    }
+    if (arg.startsWith(OPTION_PREFIX)) continue;
+    const rest = args.slice(i + 1);
+    if (GIT_WRITE_SUBCOMMANDS.has(arg)) return true;
+    if (GIT_HISTORY_SUBCOMMANDS.has(arg)) return GIT_WRITE_DETAIL;
+    if (arg === GIT_BRANCH)
+      return gitCreates(rest, GIT_BRANCH_READ_LONG_OPTIONS, GIT_BRANCH_READ_LETTERS)
+        ? GIT_WRITE_DETAIL
+        : false;
+    if (arg === GIT_TAG)
+      return gitCreates(rest, GIT_TAG_READ_LONG_OPTIONS, GIT_TAG_READ_LETTERS)
+        ? GIT_WRITE_DETAIL
+        : false;
+    if (arg === GIT_STASH) return GIT_STASH_READS.has(rest[0]) ? false : GIT_WRITE_DETAIL;
+    if (arg === GIT_WORKTREE) return GIT_WORKTREE_READS.has(rest[0]) ? false : GIT_WRITE_DETAIL;
+    return false;
+  }
+  return false;
+}
+
+/** sqlite3 writes unless its database (the first operand) is a file under .plans/. */
+function sqliteWrites(args, cwd) {
+  const at = firstOperand(args, 0, SQLITE_VALUE_OPTIONS);
+  return (
+    at === -1 || args[at].toLowerCase().startsWith(SQLITE_URI_PREFIX) || outsidePlans(args[at], cwd)
+  );
+}
+
+/** `python -m sqlite3 <db>` gets the sqlite3 database check; any other python invocation passes. */
+function pythonWrites(args, cwd) {
+  for (let i = 0; i < args.length; i++) {
+    if (PYTHON_SQLITE_CLUSTER.test(args[i])) return sqliteWrites(args.slice(i + 1), cwd);
+    if (PYTHON_MODULE_CLUSTER.test(args[i]) && args[i + 1] === SQLITE_MODULE)
+      return sqliteWrites(args.slice(i + 2), cwd);
   }
   return false;
 }
@@ -505,11 +666,11 @@ function shellWrites(args, cwd, depth) {
   return script.includes(UNKNOWN_VALUE) || commandWrites(script, cwd, depth + 1);
 }
 
-/** True when the command in `words` writes; `extra` are operands the caller appends (xargs input). */
+/** The verdict of the command in `words` (see SHELL_WRITE_COMMANDS); `extra` are operands the caller appends (xargs input). */
 function runsWriter(words, cwd, depth, extra = []) {
   const command = commandWords(words);
   if (!command) return false;
-  return SHELL_WRITE_COMMANDS.get(command.name)?.([...command.args, ...extra], cwd, depth) === true;
+  return writerFor(command.name)?.([...command.args, ...extra], cwd, depth);
 }
 
 /** xargs runs the first non-option word with unknown operands appended. */
@@ -520,14 +681,17 @@ function xargsWrites(args, cwd, depth) {
 
 function findWrites(args, cwd, depth) {
   if (args.some((arg) => FIND_WRITE_ACTIONS.has(arg))) return true;
-  return args.some(
-    (arg, i) => FIND_EXEC_ACTIONS.has(arg) && runsWriter(args.slice(i + 1), cwd, depth),
-  );
+  for (let i = 0; i < args.length; i++) {
+    const verdict = FIND_EXEC_ACTIONS.has(args[i]) && runsWriter(args.slice(i + 1), cwd, depth);
+    if (verdict) return verdict;
+  }
+  return false;
 }
 
 /**
- * Each command that can write, by name: `(args, cwd, depth) => boolean`, true when it writes
- * outside .plans/. PSR-6 adds the git history/branch and sqlite3 entries here.
+ * Each command that can write, by name: `(args, cwd, depth) => verdict`. A verdict is `true` when
+ * it writes outside .plans/ (SHELL_WRITE_DETAIL), a detail string to deny with that detail, or
+ * falsy to pass.
  */
 export const SHELL_WRITE_COMMANDS = new Map([
   ...PATH_COMMANDS.map((name) => [name, writesPaths]),
@@ -538,6 +702,8 @@ export const SHELL_WRITE_COMMANDS = new Map([
   ["curl", curlWrites],
   ["wget", wgetWrites],
   ["git", gitWrites],
+  ...SQLITE_COMMANDS.map((name) => [name, sqliteWrites]),
+  [PYTHON_COMMAND, pythonWrites],
   ...PACKAGE_MANAGERS.map((name) => [name, managerWrites(name)]),
   ...SHELLS.map((name) => [name, shellWrites]),
   [
@@ -550,6 +716,11 @@ export const SHELL_WRITE_COMMANDS = new Map([
   ["xargs", xargsWrites],
   ["find", findWrites],
 ]);
+
+/** The writer check for a command name: a python interpreter name (python3.12) resolves to the python check. */
+const writerFor = (name) =>
+  SHELL_WRITE_COMMANDS.get(PYTHON_NAME.test(name) ? PYTHON_COMMAND : name) ??
+  SHELL_WRITE_COMMANDS.get(name);
 
 /**
  * A command's name and arguments, past assignments, control-flow words and wrappers (with their
@@ -691,12 +862,18 @@ function changeDir(args, cwd) {
   return resolve(cwd, dir);
 }
 
-/** True when running `command` from `cwd` writes outside .plans/. */
+/** `true` is a file write; a string already is the detail. */
+const verdictDetail = (verdict) => (verdict === true ? SHELL_WRITE_DETAIL : verdict);
+
+/** The detail to deny with when running `command` from `cwd` writes; undefined when it passes. */
 function commandWrites(command, cwd, depth) {
-  if (depth > MAX_DEPTH) return true;
+  if (depth > MAX_DEPTH) return SHELL_WRITE_DETAIL;
   const kinds = quoteKinds(command);
   const found = substitutions(command, kinds);
-  if (found.some(({ body }) => commandWrites(body, cwd, depth + 1))) return true;
+  for (const { body } of found) {
+    const inner = commandWrites(body, cwd, depth + 1);
+    if (inner) return inner;
+  }
   const subshell = hasSubshell(command, kinds);
   let inCase = false;
   let here = cwd;
@@ -708,7 +885,7 @@ function commandWrites(command, cwd, depth) {
             word.output && !NON_FILE_TARGETS.has(word.text) && outsidePlans(word.text, here),
         )
       )
-        return true;
+        return SHELL_WRITE_DETAIL;
       const named = words.filter((word) => !word.output && !word.input);
       const texts = named.map((word) => word.text);
       const lead = leadingWord(texts);
@@ -716,7 +893,12 @@ function commandWrites(command, cwd, depth) {
       else if (lead === CASE_END_WORD) inCase = false;
       // Inside a case, or after a `{` that opens a function body, any word may start a command.
       const hidden = inCase || texts.indexOf(BLOCK_OPEN_WORD, 1) > 0;
-      if (hidden && texts.some((_, k) => runsWriter(texts.slice(k), here, depth))) return true;
+      if (hidden) {
+        for (let k = 0; k < texts.length; k++) {
+          const verdict = runsWriter(texts.slice(k), here, depth);
+          if (verdict) return verdictDetail(verdict);
+        }
+      }
       const parsed = commandWords(texts);
       if (!parsed) continue;
       const { name, args } = parsed;
@@ -724,15 +906,18 @@ function commandWrites(command, cwd, depth) {
       // `(cd .plans && rm x)` is denied on purpose.
       if (CD_COMMANDS.has(name)) here = subshell ? undefined : changeDir(args, here);
       else if (name === POPD_COMMAND) here = undefined;
-      if (SHELL_WRITE_COMMANDS.get(name)?.(args, here, depth)) return true;
+      const verdict = writerFor(name)?.(args, here, depth);
+      if (verdict) return verdictDetail(verdict);
     }
   }
-  return false;
+  return undefined;
 }
 
 // Variables are not expanded: a path holding one counts as outside .plans/. Accepted residual: interpreter code (python3 -c, node -e, perl, ruby, awk system(), sed's w
-// command), build tools and npm scripts (make, vp pack, npm run) and sqlite3 dot-commands can still
-// write outside .plans/. The skill text and the always-on block cover them, not this guard.
+// command), build tools and npm scripts (make, vp pack, npm run) and sqlite3 dot-commands such as
+// .open and .output can still write outside .plans/, as can SQL such as ATTACH and VACUUM INTO on
+// a .plans database; git aliases are not resolved. The skill text
+// and the always-on block cover them, not this guard.
 
 /** Denies a Bash command that writes outside .plans/; fails closed on any error. */
 export function shellWriteRule(input) {
@@ -741,7 +926,7 @@ export function shellWriteRule(input) {
     const cwd = typeof input.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd();
     const command = input.tool_input?.[COMMAND_FIELD];
     if (typeof command !== "string" || command === "") return SHELL_WRITE_DETAIL;
-    return commandWrites(command, cwd, 0) ? SHELL_WRITE_DETAIL : undefined;
+    return commandWrites(command, cwd, 0);
   } catch {
     return SHELL_WRITE_DETAIL;
   }
@@ -751,7 +936,7 @@ export function shellWriteRule(input) {
 
 /**
  * Each rule is `(input) => string | undefined`: a detail sentence to deny the call, or undefined
- * to pass. PSR-6 adds the git history and branch rules here.
+ * to pass. Git history and branch changes are part of the shell rule.
  */
 export const RULES = [fileWriteRule, writerAgentRule, shellWriteRule];
 
