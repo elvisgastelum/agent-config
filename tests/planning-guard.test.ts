@@ -382,3 +382,253 @@ describe("planning guard writer sub-agents", () => {
     for (const input of [EDIT, BASH]) expect(guard.writerAgentRule(input)).toBeUndefined();
   });
 });
+
+const bash = (command: string, cwd: string) => ({
+  tool_name: "Bash",
+  tool_input: { command },
+  transcript_path: planningPath(),
+  cwd,
+});
+const SHELL_BLOCKED = blockMessage(guard.SHELL_WRITE_DETAIL);
+
+describe("planning guard shell writes", () => {
+  const blocked = (commands: string[], cwd: string) => {
+    for (const command of commands)
+      expect([command, decide(bash(command, cwd))]).toEqual([command, SHELL_BLOCKED]);
+  };
+  const passes = (commands: string[], cwd: string) => {
+    for (const command of commands)
+      expect([command, decide(bash(command, cwd))]).toEqual([command, undefined]);
+  };
+
+  test("the shell deny detail is pinned", () => {
+    expect(guard.SHELL_WRITE_DETAIL).toBe(
+      "shell commands may write only under .plans/ at the repository root.",
+    );
+  });
+
+  test("echo x > src/a.ts is blocked", () => {
+    blocked(["echo x > src/a.ts", "echo x &> src/a.ts", "echo x 2> src/a.ts"], gitFixture());
+  });
+
+  test("echo x >> ../outside is blocked", () => {
+    blocked(["echo x >> ../outside"], gitFixture());
+  });
+
+  test("echo x >| src/a.ts is blocked", () => {
+    blocked(["echo x >| src/a.ts"], gitFixture());
+  });
+
+  test("sed -i on src/a.ts is blocked", () => {
+    const root = gitFixture();
+    blocked(
+      [
+        "sed -i s/a/b/ src/a.ts",
+        "sed -i.bak s/a/b/ src/a.ts",
+        "sed -Ei s/a/b/ src/a.ts",
+        "sed --in-place s/a/b/ src/a.ts",
+      ],
+      root,
+    );
+    passes(["sed -n 1p src/a.ts"], root);
+  });
+
+  test("tee, cp, mv and rm outside .plans are blocked", () => {
+    const root = gitFixture();
+    blocked(["tee src/a.ts", "cp a.txt src/a.ts", "mv a.txt src/b.ts", "rm src/a.ts"], root);
+    passes(["tee .plans/x.txt", "cp .plans/a .plans/b"], root);
+  });
+
+  test("git apply and npm install are blocked", () => {
+    const root = gitFixture();
+    blocked(
+      [
+        "git apply x.patch",
+        "git -C . apply x.patch",
+        "npm install",
+        "npm --prefix x install",
+        "pnpm add x",
+        "pip install x",
+        "brew install x",
+        "patch -p1 < x.diff",
+      ],
+      root,
+    );
+    passes(["git status", "git log --grep apply"], root);
+  });
+
+  test("env FOO=1 wrapper around a write is blocked", () => {
+    blocked(
+      ["env FOO=1 rm src/a.ts", "FOO=1 command rm src/a.ts", "sudo -u root tee src/a.ts"],
+      gitFixture(),
+    );
+  });
+
+  test("cat, grep and ls pass", () => {
+    passes(
+      ["cat src/a.ts | grep x && ls -la", "ls 2>/dev/null", "grep x src/a.ts 2>&1"],
+      gitFixture(),
+    );
+  });
+
+  test("sqlite3 store < schema.sql passes", () => {
+    passes(["sqlite3 store < schema.sql"], gitFixture());
+  });
+
+  test("a heredoc into sqlite3 on .plans passes", () => {
+    passes(["sqlite3 .plans/x/plan.sqlite <<'SQL'\nINSERT INTO t VALUES (1);\nSQL"], gitFixture());
+  });
+
+  test("echo x > .plans/x.txt passes", () => {
+    passes(["echo x > .plans/x.txt"], gitFixture());
+  });
+
+  test("python3 -c writing a file is not blocked (documented residual)", () => {
+    passes([`python3 -c "open('src/a.ts','w').write('x')"`], gitFixture());
+  });
+
+  test("with hook cwd in a subfolder, .plans resolves against the git toplevel", () => {
+    const cwd = join(gitFixture(), "src");
+    passes(["echo x > ../.plans/x.txt"], cwd);
+    blocked(["echo x > a.ts"], cwd);
+  });
+
+  test("ln outside .plans is blocked", () => {
+    const root = gitFixture();
+    blocked(["ln src/a.ts .plans/a", "ln -s ../src .plans/l"], root);
+    passes(["ln .plans/a .plans/b"], root);
+  });
+
+  test("subshells, sh -c, eval and command substitution do not hide a write", () => {
+    blocked(
+      [
+        "(rm src/a.ts)",
+        'bash -c "rm src/a.ts"',
+        "eval rm src/a.ts",
+        'echo "$(rm src/a.ts)"',
+        "echo `rm src/a.ts`",
+        "find . -delete",
+        "ls | xargs rm",
+      ],
+      gitFixture(),
+    );
+  });
+
+  test("cd before a redirect moves the target", () => {
+    const root = gitFixture();
+    blocked(["cd src && echo x > a.ts", "cd && echo x > x.txt"], root);
+    passes(["cd .plans && echo x > x.txt"], root);
+  });
+
+  test("shell reserved words are not taken as the command name", () => {
+    const root = gitFixture();
+    blocked(
+      [
+        "for f in src/*; do rm $f; done",
+        "if true; then rm src/a.ts; fi",
+        "{ rm src/a.ts; }",
+        "! rm src/a.ts",
+        'while read f; do rm "$f"; done < list',
+      ],
+      root,
+    );
+    passes(["for f in rm cp; do echo $f; done", "if true; then echo ok; fi"], root);
+  });
+
+  test("a variable in a write target counts as outside .plans", () => {
+    const root = gitFixture();
+    blocked(["OUT=src/a.ts; echo x > $OUT", 'F=src/a.ts; rm "$F"', 'echo x > "$OUT"'], root);
+    passes(
+      [
+        `sqlite3 .plans/x/plan.sqlite "UPDATE t SET a = '$SID'"`,
+        "echo $HOME",
+        "ls $PWD 2>/dev/null",
+      ],
+      root,
+    );
+  });
+
+  test("a cd inside a subshell makes the folder unknown", () => {
+    blocked(["(cd .plans) && echo x > a", "(cd .plans && ls); rm x"], gitFixture());
+  });
+
+  test("an apostrophe inside double quotes does not hide a substitution", () => {
+    blocked(
+      ['echo "it\'s" $(rm src/a.ts)', 'git log -m "don\'t break" && echo `rm src/a.ts`'],
+      gitFixture(),
+    );
+  });
+
+  test("a quoted heredoc body is not scanned for substitutions", () => {
+    passes(
+      ["cat > .plans/p/plan.md <<'EOF'\nRun `npm install` and `rm -rf dist`\nEOF"],
+      gitFixture(),
+    );
+  });
+
+  test("only the command after a wrapper is judged", () => {
+    const root = gitFixture();
+    passes(["env echo rm x", "xargs grep -n cp", "find . -exec grep -l rm {} +"], root);
+    blocked(
+      [
+        "sudo -u root tee src/a.ts",
+        "timeout 5 rm src/a.ts",
+        "nice -n 5 rm src/a.ts",
+        "ls | xargs rm",
+        "find . -exec rm {} +",
+      ],
+      root,
+    );
+  });
+
+  test("the mode or owner of chmod is not a path", () => {
+    const root = gitFixture();
+    passes(["chmod 644 .plans/p/x", "chmod +x .plans/p/x"], root);
+    blocked(["chmod +x src/a.ts", "chmod -x src/a.ts"], root);
+  });
+
+  test("case arms and function bodies are judged", () => {
+    const root = gitFixture();
+    blocked(
+      [
+        "case x in a) rm src/a.ts ;; esac",
+        "case $x in a) ls ;; b) rm src/a.ts ;; esac",
+        "f() { rm src/a.ts; }; f",
+        "function f { rm src/a.ts; }; f",
+      ],
+      root,
+    );
+    passes(["case x in a) ls ;; esac"], root);
+  });
+
+  test("a command substitution in a cd folder or redirect target is unknown", () => {
+    blocked(
+      [
+        'cd "$(git rev-parse --show-toplevel)" && echo x > .plans/p/x',
+        "echo x > .plans/$(echo ../src/a.ts)",
+      ],
+      gitFixture(),
+    );
+  });
+
+  test("stdbuf, ionice and caffeinate wrap a write", () => {
+    blocked(
+      ["stdbuf -oL rm src/a.ts", "ionice -c 3 rm src/a.ts", "caffeinate rm src/a.ts"],
+      gitFixture(),
+    );
+  });
+
+  test("a Bash call without a command is blocked", () => {
+    const root = gitFixture();
+    expect(decide({ ...bash("", root), tool_input: {} })).toBe(SHELL_BLOCKED);
+    expect(decide(bash("", root))).toBe(SHELL_BLOCKED);
+  });
+
+  test("outside planning a shell write passes", () => {
+    const input = {
+      ...bash("rm src/a.ts", gitFixture()),
+      transcript_path: transcript(userEntry("hi")),
+    };
+    expect(decide(input)).toBeUndefined();
+  });
+});

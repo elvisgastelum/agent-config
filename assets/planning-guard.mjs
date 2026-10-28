@@ -6,8 +6,10 @@
 // calls run through the rules in RULES and the first rule that objects denies the call. This file
 // holds the activation detection, the shared deny message, the rule pipeline, the file-write
 // rule (with planning active, file edits are denied unless they land under .plans/ at the
-// repository root) and the writer-agent rule (sub-agents on the WRITER_AGENTS denylist, or
-// started without subagent_type, are denied).
+// repository root), the writer-agent rule (sub-agents on the WRITER_AGENTS denylist, or
+// started without subagent_type, are denied) and the shell-write rule (Bash commands that write
+// outside .plans/ are denied: redirects, known writing commands, wrapped, nested and substituted
+// commands).
 //
 // Unexpected hook input or an error outside a rule lets the call through: the guard never breaks
 // a session. Inside a rule, a malformed call it guards (no file path, no subagent_type) fails
@@ -19,6 +21,19 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  ASSIGNMENT,
+  DOUBLE_QUOTE,
+  ESCAPE,
+  HEREDOC,
+  INPUT_REDIRECT,
+  NEWLINE,
+  OPTION_PREFIX,
+  SINGLE_QUOTE,
+  WRAPPERS,
+  afterHeredocs,
+  parse,
+} from "./shell-split.mjs";
 
 // ---------------------------------------------------------------- activation
 
@@ -236,13 +251,509 @@ export function writerAgentRule(input) {
   }
 }
 
+// ---------------------------------------------------------------- shell writes
+
+/** The detail the shell-write rule denies with. */
+export const SHELL_WRITE_DETAIL =
+  "shell commands may write only under .plans/ at the repository root.";
+
+const SHELL_TOOL = "Bash";
+const COMMAND_FIELD = "command";
+const MAX_DEPTH = 8;
+
+/** Redirect targets that are not files on disk. */
+const NON_FILE_TARGETS = new Set(["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"]);
+
+/** Commands that change the working directory for the commands after them. */
+const CD_COMMANDS = new Set(["cd", "pushd"]);
+/** `popd` returns to a directory the guard does not track. */
+const POPD_COMMAND = "popd";
+const PREVIOUS_DIR = "-";
+
+// Command substitution syntax.
+const SUBSTITUTION_OPENERS = ["$(", "<(", ">("];
+const OPEN_PAREN = "(";
+/** The characters that make a `(` a substitution rather than a subshell. */
+const SUBSTITUTION_PREFIXES = ["$", "<", ">"];
+const CLOSE_PAREN = ")";
+const BACKTICK = "`";
+
+/** Stands in for a variable reference: its value is unknown, so a path holding it is outside .plans/. */
+const UNKNOWN_VALUE = "\u0000var";
+/** `$NAME`, `${...}`, `$1`, `$@`, `$?`...; `$(` is a command substitution, not a variable. */
+const VARIABLE_REFERENCE = /^\$(?:\{[^}]*\}|\w+|[@*#?$!-])/;
+
+/** The delimiter word after `<<`: quoted (`'EOF'`, `"EOF"`, `\EOF`) bodies never expand. */
+const HEREDOC_DELIMITER = /^[ \t]*(?:(["'])(.*?)\1|(\\)?([^\s"'();&|<>]+))/;
+
+/** Words that only shape control flow: they are skipped before the command name. */
+const RESERVED_WORDS = new Set([
+  "{",
+  "}",
+  "!",
+  "if",
+  "then",
+  "else",
+  "elif",
+  "fi",
+  "do",
+  "done",
+  "while",
+  "until",
+  "case",
+  "esac",
+  "in",
+  "function",
+]);
+/** `for NAME in LIST` and `select NAME in LIST`: the whole command is a loop head, the list is data. */
+const LOOP_HEAD_WORDS = new Set(["for", "select"]);
+/** `case` arms and function bodies hide commands behind patterns and names: every word is tried. */
+const CASE_WORD = "case";
+const CASE_END_WORD = "esac";
+const BLOCK_OPEN_WORD = "{";
+
+/** Wrappers beyond the shared WRAPPERS that run the command after them. */
+const EXTRA_WRAPPERS = new Set(["timeout", "nice", "doas", "stdbuf", "ionice", "caffeinate"]);
+/** Wrapper options that take the next word as their value. */
+const WRAPPER_VALUE_OPTIONS = new Map([
+  ["sudo", new Set(["-u", "-g"])],
+  ["env", new Set(["-u"])],
+  ["nice", new Set(["-n"])],
+  ["doas", new Set(["-u"])],
+  ["timeout", new Set(["-s", "-k"])],
+  ["stdbuf", new Set(["-i", "-o", "-e"])],
+  ["ionice", new Set(["-c", "-n"])],
+  ["caffeinate", new Set(["-t", "-w"])],
+]);
+/** Wrappers whose first operand is not the command (`timeout DURATION command`). */
+const OPERAND_WRAPPERS = new Set(["timeout"]);
+
+/** xargs options that take the next word as their value. */
+const XARGS_VALUE_OPTIONS = new Set(["-I", "-n", "-P", "-L", "-d", "-s", "-E"]);
+
+/** chmod and chown take the mode or owner first; the rest are the paths they write. */
+const MODE_COMMANDS = ["chmod", "chown"];
+/** A mode such as `-x` looks like an option but is the mode operand. */
+const NEGATIVE_MODE = /^-[rwxXst]+$/;
+
+/** Commands whose every non-option operand is a path they write. */
+const PATH_COMMANDS = [
+  "tee",
+  "cp",
+  "mv",
+  "rm",
+  "rmdir",
+  "mkdir",
+  "touch",
+  "ln",
+  "install",
+  "truncate",
+  "unlink",
+  "rsync",
+];
+
+/** `sed -i`, `-i.bak`, `-Ei`: a short-option cluster holding `i`. */
+const SED_SHORT_IN_PLACE = /^-[^-]*i/;
+const SED_IN_PLACE = "--in-place";
+const DD_OUTPUT_PREFIX = "of=";
+
+/** curl writes a file with `-o`, `-O`, `-sSLo` or the long forms. */
+const CURL_SHORT_OUTPUT = /^-[^-]*[oO]/;
+const CURL_OUTPUT_OPTIONS = new Set(["--output", "--remote-name", "--remote-name-all"]);
+const CURL_OUTPUT_PREFIX = "--output=";
+
+/** wget prints to stdout only with `-O -`, `-O-`, `-qO-` or `--output-document=-`. */
+const WGET_STDOUT_CLUSTER = /^-[^-]*O-$/;
+const WGET_OUTPUT_CLUSTER = /^-[^-]*O$/;
+const WGET_STDOUT_LONG = "--output-document=-";
+const STDOUT_DASH = "-";
+
+/** Git global options that take the next word as their value. */
+const GIT_VALUE_OPTIONS = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--config-env",
+]);
+
+/** Git subcommands that write the working tree. */
+export const GIT_WRITE_SUBCOMMANDS = new Set(["apply", "clean", "mv", "restore", "rm"]);
+
+const PACKAGE_MANAGERS = [
+  "npm",
+  "pnpm",
+  "yarn",
+  "bun",
+  "vp",
+  "pip",
+  "pip3",
+  "pipx",
+  "uv",
+  "brew",
+  "apt",
+  "apt-get",
+  "dnf",
+  "yum",
+  "gem",
+  "cargo",
+  "go",
+  "composer",
+];
+const INSTALL_SUBCOMMANDS = new Set([
+  "install",
+  "i",
+  "add",
+  "ci",
+  "remove",
+  "rm",
+  "uninstall",
+  "un",
+  "update",
+  "upgrade",
+  "up",
+  "link",
+  "sync",
+]);
+/** `yarn` and `bun` with no subcommand install. */
+const BARE_INSTALL_MANAGERS = new Set(["yarn", "bun"]);
+
+const SHELLS = ["sh", "bash", "zsh", "dash", "ksh"];
+const SHELL_COMMAND_OPTION = /^-[^-]*c/;
+const EVAL_COMMAND = "eval";
+const ARGUMENT_SEPARATOR = " ";
+
+const FIND_WRITE_ACTIONS = new Set(["-delete", "-fprint", "-fprint0", "-fprintf", "-fls"]);
+const FIND_EXEC_ACTIONS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+
+/** The non-option words: the operands of a command. */
+const operands = (args) => args.filter((arg) => !arg.startsWith(OPTION_PREFIX));
+
+/** True when `path` is not under .plans/; a relative path is outside once the folder is unknown. */
+function outsidePlans(path, cwd) {
+  if (path.includes(UNKNOWN_VALUE)) return true;
+  if (cwd === undefined) return !isAbsolute(path) || !underPlans(path, process.cwd());
+  return !underPlans(path, cwd);
+}
+
+const writesPaths = (args, cwd) => operands(args).some((path) => outsidePlans(path, cwd));
+
+/** chmod / chown: the mode or owner is not a path, so it is left out of the operands. */
+function writesPathsAfterMode(args, cwd) {
+  const mode = args.findIndex((arg) => NEGATIVE_MODE.test(arg) || !arg.startsWith(OPTION_PREFIX));
+  return writesPaths(
+    args.filter((_, i) => i !== mode),
+    cwd,
+  );
+}
+
+/** The index of the first word from `from` that is not an option, skipping the values of `valueOptions`; -1 when none. */
+function firstOperand(words, from, valueOptions) {
+  for (let i = from; i < words.length; i++) {
+    if (!words[i].startsWith(OPTION_PREFIX)) return i;
+    if (valueOptions?.has(words[i])) i++;
+  }
+  return -1;
+}
+
+function sedWrites(args) {
+  return args.some(
+    (arg) =>
+      arg === SED_IN_PLACE || arg.startsWith(`${SED_IN_PLACE}=`) || SED_SHORT_IN_PLACE.test(arg),
+  );
+}
+
+function curlWrites(args) {
+  return args.some(
+    (arg) =>
+      CURL_OUTPUT_OPTIONS.has(arg) ||
+      arg.startsWith(CURL_OUTPUT_PREFIX) ||
+      CURL_SHORT_OUTPUT.test(arg),
+  );
+}
+
+function wgetWrites(args) {
+  const toStdout = args.some(
+    (arg, i) =>
+      arg === WGET_STDOUT_LONG ||
+      WGET_STDOUT_CLUSTER.test(arg) ||
+      (WGET_OUTPUT_CLUSTER.test(arg) && args[i + 1] === STDOUT_DASH),
+  );
+  return !toStdout;
+}
+
+function gitWrites(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (GIT_VALUE_OPTIONS.has(arg)) i++;
+    else if (!arg.startsWith(OPTION_PREFIX)) return GIT_WRITE_SUBCOMMANDS.has(arg);
+  }
+  return false;
+}
+
+const managerWrites = (name) => (args) => {
+  const words = operands(args);
+  if (words.length === 0) return BARE_INSTALL_MANAGERS.has(name);
+  return words.some((word) => INSTALL_SUBCOMMANDS.has(word));
+};
+
+function shellWrites(args, cwd, depth) {
+  const at = args.findIndex((arg) => SHELL_COMMAND_OPTION.test(arg));
+  const script = at === -1 ? undefined : args[at + 1];
+  if (script === undefined) return false;
+  return script.includes(UNKNOWN_VALUE) || commandWrites(script, cwd, depth + 1);
+}
+
+/** True when the command in `words` writes; `extra` are operands the caller appends (xargs input). */
+function runsWriter(words, cwd, depth, extra = []) {
+  const command = commandWords(words);
+  if (!command) return false;
+  return SHELL_WRITE_COMMANDS.get(command.name)?.([...command.args, ...extra], cwd, depth) === true;
+}
+
+/** xargs runs the first non-option word with unknown operands appended. */
+function xargsWrites(args, cwd, depth) {
+  const at = firstOperand(args, 0, XARGS_VALUE_OPTIONS);
+  return at !== -1 && runsWriter(args.slice(at), cwd, depth, [UNKNOWN_VALUE]);
+}
+
+function findWrites(args, cwd, depth) {
+  if (args.some((arg) => FIND_WRITE_ACTIONS.has(arg))) return true;
+  return args.some(
+    (arg, i) => FIND_EXEC_ACTIONS.has(arg) && runsWriter(args.slice(i + 1), cwd, depth),
+  );
+}
+
+/**
+ * Each command that can write, by name: `(args, cwd, depth) => boolean`, true when it writes
+ * outside .plans/. PSR-6 adds the git history/branch and sqlite3 entries here.
+ */
+export const SHELL_WRITE_COMMANDS = new Map([
+  ...PATH_COMMANDS.map((name) => [name, writesPaths]),
+  ...MODE_COMMANDS.map((name) => [name, writesPathsAfterMode]),
+  ["patch", () => true],
+  ["sed", sedWrites],
+  ["dd", (args) => args.some((arg) => arg.startsWith(DD_OUTPUT_PREFIX))],
+  ["curl", curlWrites],
+  ["wget", wgetWrites],
+  ["git", gitWrites],
+  ...PACKAGE_MANAGERS.map((name) => [name, managerWrites(name)]),
+  ...SHELLS.map((name) => [name, shellWrites]),
+  [
+    EVAL_COMMAND,
+    (args, cwd, depth) => {
+      const script = args.join(ARGUMENT_SEPARATOR);
+      return script.includes(UNKNOWN_VALUE) || commandWrites(script, cwd, depth + 1);
+    },
+  ],
+  ["xargs", xargsWrites],
+  ["find", findWrites],
+]);
+
+/**
+ * A command's name and arguments, past assignments, control-flow words and wrappers (with their
+ * options); undefined for a loop head. The first non-option word after a wrapper is the command.
+ */
+function commandWords(words) {
+  for (let i = 0; i < words.length; i++) {
+    const text = words[i];
+    const name = basename(text);
+    if (ASSIGNMENT.test(text) || RESERVED_WORDS.has(text)) continue;
+    if (LOOP_HEAD_WORDS.has(text)) return undefined;
+    if (!WRAPPERS.has(name) && !EXTRA_WRAPPERS.has(name)) return { name, args: words.slice(i + 1) };
+    const operand = firstOperand(words, i + 1, WRAPPER_VALUE_OPTIONS.get(name));
+    i = (operand === -1 ? words.length : operand) - 1;
+    if (OPERAND_WRAPPERS.has(name)) i++;
+  }
+  return undefined;
+}
+
+/** The index just past the `)` closing the `(` before `from`, or the end of the text. */
+function closingParen(text, from) {
+  let depth = 1;
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === OPEN_PAREN) depth++;
+    else if (text[i] === CLOSE_PAREN && --depth === 0) return i;
+  }
+  return text.length;
+}
+
+/**
+ * The quoting around each character: the single or double quote it sits in, ESCAPE for a
+ * backslash-escaped one, "" outside quotes. Heredoc bodies count as single-quoted when the
+ * delimiter is quoted (nothing expands) and as double-quoted otherwise.
+ */
+function quoteKinds(command) {
+  const kinds = Array.from({ length: command.length }, () => "");
+  const pending = [];
+  let quote = "";
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    kinds[i] = quote;
+    if (quote === SINGLE_QUOTE) {
+      if (c === SINGLE_QUOTE) quote = "";
+    } else if (c === ESCAPE) {
+      if (i + 1 < command.length) kinds[++i] = ESCAPE;
+    } else if (c === SINGLE_QUOTE && !quote) {
+      quote = SINGLE_QUOTE;
+    } else if (c === DOUBLE_QUOTE) {
+      quote = quote ? "" : DOUBLE_QUOTE;
+    } else if (!quote && c === INPUT_REDIRECT && HEREDOC.test(command.slice(i))) {
+      const operator = HEREDOC.exec(command.slice(i))[0];
+      const word = HEREDOC_DELIMITER.exec(command.slice(i + operator.length));
+      if (word)
+        pending.push({ delimiter: word[2] ?? word[4], quoted: Boolean(word[1] || word[3]) });
+      i += operator.length - 1;
+    } else if (!quote && c === NEWLINE && pending.length > 0) {
+      let at = i + 1;
+      for (const { delimiter, quoted } of pending.splice(0)) {
+        const end = afterHeredocs(command, at, [delimiter]);
+        kinds.fill(quoted ? SINGLE_QUOTE : DOUBLE_QUOTE, at, end);
+        at = end;
+      }
+      i = at - 1;
+    }
+  }
+  return kinds;
+}
+
+/** The `$( )`, backtick, `<( )` and `>( )` substitutions outside single quotes (double quotes still run them). */
+function substitutions(command, kinds) {
+  const found = [];
+  for (let i = 0; i < command.length; i++) {
+    if (kinds[i] === SINGLE_QUOTE || kinds[i] === ESCAPE) continue;
+    if (command[i] === BACKTICK) {
+      let end = i + 1;
+      while (end < command.length && command[end] !== BACKTICK)
+        end += command[end] === ESCAPE ? 2 : 1;
+      found.push({ from: i, to: end + 1, body: command.slice(i + 1, end) });
+      i = end;
+    } else {
+      const opener = SUBSTITUTION_OPENERS.find((open) => command.startsWith(open, i));
+      if (!opener) continue;
+      const start = i + opener.length;
+      const end = closingParen(command, start);
+      found.push({ from: i, to: end + 1, body: command.slice(start, end) });
+      i = start - 1;
+    }
+  }
+  return found;
+}
+
+/** True when a `(` outside quotes opens a subshell (not a substitution), where a `cd` does not last. */
+function hasSubshell(command, kinds) {
+  return [...command].some(
+    (c, i) =>
+      c === OPEN_PAREN && kinds[i] === "" && !SUBSTITUTION_PREFIXES.includes(command[i - 1]),
+  );
+}
+
+/**
+ * Replaces each variable reference outside single quotes and each outermost substitution with
+ * UNKNOWN_VALUE: the guard cannot know either value (substitution bodies are checked on their own).
+ */
+function maskUnknowns(command, kinds, found) {
+  let masked = "";
+  for (let i = 0; i < command.length; i++) {
+    const inner = found.find((sub) => sub.from === i);
+    const variable =
+      kinds[i] === SINGLE_QUOTE || kinds[i] === ESCAPE
+        ? null
+        : VARIABLE_REFERENCE.exec(command.slice(i));
+    if (inner) {
+      masked += UNKNOWN_VALUE;
+      i = Math.min(inner.to, command.length) - 1;
+    } else if (variable) {
+      masked += UNKNOWN_VALUE;
+      i += variable[0].length - 1;
+    } else {
+      masked += command[i];
+    }
+  }
+  return masked;
+}
+
+/** The first word that is not an assignment or control-flow word (`case` and `esac` count). */
+const leadingWord = (words) =>
+  words.find(
+    (text) =>
+      !ASSIGNMENT.test(text) &&
+      (text === CASE_WORD || text === CASE_END_WORD || !RESERVED_WORDS.has(text)),
+  );
+
+/** The folder after `cd dir`; undefined when it cannot be known. */
+function changeDir(args, cwd) {
+  const dir = operands(args)[0];
+  if (cwd === undefined || dir === undefined) return undefined;
+  if (dir === PREVIOUS_DIR || dir.startsWith(HOME_PREFIX) || dir.includes(UNKNOWN_VALUE))
+    return undefined;
+  return resolve(cwd, dir);
+}
+
+/** True when running `command` from `cwd` writes outside .plans/. */
+function commandWrites(command, cwd, depth) {
+  if (depth > MAX_DEPTH) return true;
+  const kinds = quoteKinds(command);
+  const found = substitutions(command, kinds);
+  if (found.some(({ body }) => commandWrites(body, cwd, depth + 1))) return true;
+  const subshell = hasSubshell(command, kinds);
+  let inCase = false;
+  let here = cwd;
+  for (const pipeline of parse(maskUnknowns(command, kinds, found))) {
+    for (const words of pipeline) {
+      if (
+        words.some(
+          (word) =>
+            word.output && !NON_FILE_TARGETS.has(word.text) && outsidePlans(word.text, here),
+        )
+      )
+        return true;
+      const named = words.filter((word) => !word.output && !word.input);
+      const texts = named.map((word) => word.text);
+      const lead = leadingWord(texts);
+      if (lead === CASE_WORD) inCase = true;
+      else if (lead === CASE_END_WORD) inCase = false;
+      // Inside a case, or after a `{` that opens a function body, any word may start a command.
+      const hidden = inCase || texts.indexOf(BLOCK_OPEN_WORD, 1) > 0;
+      if (hidden && texts.some((_, k) => runsWriter(texts.slice(k), here, depth))) return true;
+      const parsed = commandWords(texts);
+      if (!parsed) continue;
+      const { name, args } = parsed;
+      // A cd inside a subshell would not last, so with any subshell the folder is unknown:
+      // `(cd .plans && rm x)` is denied on purpose.
+      if (CD_COMMANDS.has(name)) here = subshell ? undefined : changeDir(args, here);
+      else if (name === POPD_COMMAND) here = undefined;
+      if (SHELL_WRITE_COMMANDS.get(name)?.(args, here, depth)) return true;
+    }
+  }
+  return false;
+}
+
+// Variables are not expanded: a path holding one counts as outside .plans/. Accepted residual: interpreter code (python3 -c, node -e, perl, ruby, awk system(), sed's w
+// command), build tools and npm scripts (make, vp pack, npm run) and sqlite3 dot-commands can still
+// write outside .plans/. The skill text and the always-on block cover them, not this guard.
+
+/** Denies a Bash command that writes outside .plans/; fails closed on any error. */
+export function shellWriteRule(input) {
+  if (input?.tool_name !== SHELL_TOOL) return undefined;
+  try {
+    const cwd = typeof input.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd();
+    const command = input.tool_input?.[COMMAND_FIELD];
+    if (typeof command !== "string" || command === "") return SHELL_WRITE_DETAIL;
+    return commandWrites(command, cwd, 0) ? SHELL_WRITE_DETAIL : undefined;
+  } catch {
+    return SHELL_WRITE_DETAIL;
+  }
+}
+
 // ---------------------------------------------------------------- rules
 
 /**
  * Each rule is `(input) => string | undefined`: a detail sentence to deny the call, or undefined
- * to pass. PSR-5 and PSR-6 add the shell and git rules here.
+ * to pass. PSR-6 adds the git history and branch rules here.
  */
-export const RULES = [fileWriteRule, writerAgentRule];
+export const RULES = [fileWriteRule, writerAgentRule, shellWriteRule];
 
 /** Returns the reason to deny a tool call, or undefined to let it through. */
 export function decide(input, rules = RULES) {
