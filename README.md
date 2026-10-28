@@ -243,16 +243,26 @@ A manual action that plans a project, epic, feature, fix or ticket with you befo
 - With Kaneo it writes `Epic:` tasks and P5-or-smaller stories with `blocks` relations and `Touches:` lines, ready for `/continue parallel-wave` or `/brief`.
 - Plans with a UI follow a design-system standard: every size token a multiple of 4 px, WCAG 2.2 AA accessibility, and scroll-driven motion as first-party components that animate only transform and opacity and honor `prefers-reduced-motion`.
 
-| Runtime  | User scope                                              | Project scope (`--project <dir>`)  |
-| -------- | ------------------------------------------------------- | ---------------------------------- |
-| Claude   | `~/.claude/skills/planning/SKILL.md`                    | `.claude/skills/planning/SKILL.md` |
-| OpenCode | `~/.config/opencode/commands/planning.md`               | `.opencode/commands/planning.md`   |
-| Codex    | `~/.codex/skills/planning/` (with `agents/openai.yaml`) | `.agents/skills/planning/`         |
-| Pi       | `~/.pi/agent/prompts/planning.md`                       | `.pi/prompts/planning.md`          |
+| Runtime      | User scope                                                                   | Project scope (`--project <dir>`)                                        |
+| ------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Claude       | `~/.claude/skills/planning/SKILL.md`                                         | `.claude/skills/planning/SKILL.md`                                       |
+| OpenCode     | `~/.config/opencode/commands/planning.md`                                    | `.opencode/commands/planning.md`                                         |
+| Codex        | `~/.codex/skills/planning/` (with `agents/openai.yaml`)                      | `.agents/skills/planning/`                                               |
+| Pi           | `~/.pi/agent/prompts/planning.md`                                            | `.pi/prompts/planning.md`                                                |
+| Claude guard | `~/.claude/hooks/agent-config/planning-guard.mjs`, `~/.claude/settings.json` | `.claude/hooks/agent-config/planning-guard.mjs`, `.claude/settings.json` |
 
 The planner agents install beside the other agents as `agents/planner-<tier>.md` (Codex: `agents/planner-<tier>.toml`).
 
-It also writes an always-on instructions block to `CLAUDE.md` (Claude) or `AGENTS.md` (OpenCode, Codex, Pi), at user or project scope: a planning run stays read-only, and its report is not authorization to implement.
+It also writes an always-on instructions block (`## Planning stays planning`) to `CLAUDE.md` (Claude) or `AGENTS.md` (OpenCode, Codex, Pi), at user or project scope, on every runtime: a planning run stays read-only, and its report is not authorization to implement; its next command belongs to a fresh session. That is why a planning run stops after its report instead of starting the work.
+
+On Claude Code a planning guard enforces it: a PreToolUse hook on `Write|Edit|MultiEdit|NotebookEdit|Bash|Agent|Task` (Node, no dependencies). It turns on once the transcript shows `/planning` (the slash command or a `planning` Skill call), scanned from its first line, so it stays on after a compact, a later `/continue` or a resume. While on, it denies:
+
+- file writes (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`) outside `.plans/` at the repository root;
+- shell writes outside `.plans/`: redirects, `sed -i`, `tee`, `cp`, `mv`, `rm`, `git apply`, package installs, also behind wrappers such as `env`; `sqlite3` on the plan store stays open. Writes hidden inside an interpreter (`python3 -c ...`) are not caught;
+- git history and branch writes: commits, `git push`, `git checkout -b`, `git switch -c`, `git branch <name>`, `git worktree add` (also through `git -C`); `git status`, `git diff` and other reads pass;
+- writer sub-agents: `ladder-edit-*`, `ladder-orchestrator`, `general-purpose`, and any `Agent`/`Task` call without `subagent_type`. Planners, readers, explorers, researchers and reviewers still run.
+
+Each denial says what was refused and points to the way out: start a fresh session (`/clear` or a new session) and run `/brief` or `/continue` there. Hook input it cannot read lets the call through, so the guard never breaks a session; a malformed call it guards is denied.
 
 ### statusline
 
