@@ -44,6 +44,7 @@ import {
 } from "./paths.ts";
 import {
   PLANNING,
+  PLANNING_INSTRUCTIONS_BLOCK,
   plannerBody,
   plannerDescription,
   plannerName,
@@ -740,7 +741,8 @@ const PLANNER_CLAUDE_TOOLS = ["Read", "Grep", "Glob", "Bash"];
 const PLANNER_OPENCODE_DENY = ["edit", "task"];
 const PLANNER_PI_TOOLS = ["read", "grep", "find", "ls", "bash"];
 
-function planningOps(runtime: Runtime, project: string | undefined, config: Config): Op[] {
+function planningOps(entry: CatalogEntry, runtime: Runtime, config: Config): Op[] {
+  const project = entry.project;
   const tiers = config.tiers[runtime];
   const content = planningMarkdown(runtime, {
     fast: modelName(runtime, tiers),
@@ -769,6 +771,16 @@ function planningOps(runtime: Runtime, project: string | undefined, config: Conf
       label: `planning agent ${name} (${modelName(runtime, tiers, tiers[tier].effort, tier)})`,
     });
   }
+  // Runtime-neutral text, so runtimes that share this file (AGENTS.md in a project) write one block.
+  ops.push({
+    runtime,
+    component: "catalog",
+    kind: "block",
+    path: layout(runtime, project).instructions,
+    content: PLANNING_INSTRUCTIONS_BLOCK,
+    markers: [blockMarkers(PLANNING, "html")],
+    label: "planning instructions block",
+  });
   return ops;
 }
 
@@ -872,10 +884,10 @@ const planningItem: CatalogItem = {
   id: PLANNING,
   title: "Plan work with you",
   description:
-    "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed, and installs the planner-fast, planner-balanced and planner-deep agents, one per rung",
+    "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed, and installs the planner-fast, planner-balanced and planner-deep agents, one per rung, and an always-on instructions block saying planning reports do not authorize changes",
   settings: [],
   discover: () => ({}),
-  ops: (entry, runtime, config) => planningOps(runtime, entry.project, config),
+  ops: (entry, runtime, config) => planningOps(entry, runtime, config),
 };
 
 export const CATALOG: CatalogItem[] = [

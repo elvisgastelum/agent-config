@@ -36,6 +36,20 @@ export const READ_ONLY_SENTENCE =
 export const NOT_AUTHORIZATION_SENTENCE =
   "A planning report is not authorization to implement; its next command belongs to a fresh session.";
 
+export const PLANNING_BLOCK_HEADING = "## Planning stays planning";
+
+/**
+ * The always-on instructions block. Runtime-neutral, so runtimes that share one AGENTS.md get the
+ * same text, and it reuses the skill's read-only sentence word for word.
+ */
+export const PLANNING_INSTRUCTIONS_BLOCK = `${PLANNING_BLOCK_HEADING}
+
+While a \`${PLANNING}\` run is active:
+
+- ${READ_ONLY_SENTENCE}
+- ${NOT_AUTHORIZATION_SENTENCE}
+- After the report, stop: do not edit files, run commands that change the repository, or start writer agents.`;
+
 const EPIC_ID_PLACEHOLDER = "<EPIC-ID>";
 const STOP_DONE = "Planning done.";
 const STOP_PREFIX = `${STOP_DONE} Start the work in a fresh session: `;

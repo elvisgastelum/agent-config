@@ -252,6 +252,8 @@ A manual action that plans a project, epic, feature, fix or ticket with you befo
 
 The planner agents install beside the other agents as `agents/planner-<tier>.md` (Codex: `agents/planner-<tier>.toml`).
 
+It also writes an always-on instructions block to `CLAUDE.md` (Claude) or `AGENTS.md` (OpenCode, Codex, Pi), at user or project scope: a planning run stays read-only, and its report is not authorization to implement.
+
 ### statusline
 
 A compact Claude Code status line styled after zap-prompt, moved here from [claude-statusline](https://github.com/elvisgastelum/claude-statusline). Claude Code only, user scope only; it needs `bash`, `git` and [`jq`](https://jqlang.org/).

@@ -4767,6 +4767,17 @@ function uninstall(filter, force = false) {
 const PLANNING = "planning";
 const DESCRIPTION$1 = "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed) without changing any file outside .plans/.";
 const READ_ONLY_SENTENCE = "This run is read-only: it changes no file outside .plans/ and no tracker item except this plan's own epics and stories.";
+/**
+* The always-on instructions block. Runtime-neutral, so runtimes that share one AGENTS.md get the
+* same text, and it reuses the skill's read-only sentence word for word.
+*/
+const PLANNING_INSTRUCTIONS_BLOCK = `## Planning stays planning
+
+While a \`${PLANNING}\` run is active:
+
+- ${READ_ONLY_SENTENCE}
+- A planning report is not authorization to implement; its next command belongs to a fresh session.
+- After the report, stop: do not edit files, run commands that change the repository, or start writer agents.`;
 const EPIC_ID_PLACEHOLDER = "<EPIC-ID>";
 const STOP_DONE = "Planning done.";
 const STOP_PREFIX = `${STOP_DONE} Start the work in a fresh session: `;
@@ -6594,7 +6605,8 @@ const PLANNER_PI_TOOLS = [
 	"ls",
 	"bash"
 ];
-function planningOps(runtime, project, config) {
+function planningOps(entry, runtime, config) {
+	const project = entry.project;
 	const tiers = config.tiers[runtime];
 	const content = planningMarkdown(runtime, {
 		fast: modelName(runtime, tiers),
@@ -6623,6 +6635,15 @@ function planningOps(runtime, project, config) {
 			label: `planning agent ${name} (${modelName(runtime, tiers, tiers[tier].effort, tier)})`
 		});
 	}
+	ops.push({
+		runtime,
+		component: "catalog",
+		kind: "block",
+		path: layout(runtime, project).instructions,
+		content: PLANNING_INSTRUCTIONS_BLOCK,
+		markers: [blockMarkers(PLANNING, "html")],
+		label: "planning instructions block"
+	});
 	return ops;
 }
 const STATUSLINE_FILE = "statusline.sh";
@@ -6649,10 +6670,10 @@ const CATALOG = [
 	{
 		id: PLANNING,
 		title: "Plan work with you",
-		description: "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed, and installs the planner-fast, planner-balanced and planner-deep agents, one per rung",
+		description: "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed, and installs the planner-fast, planner-balanced and planner-deep agents, one per rung, and an always-on instructions block saying planning reports do not authorize changes",
 		settings: [],
 		discover: () => ({}),
-		ops: (entry, runtime, config) => planningOps(runtime, entry.project, config)
+		ops: (entry, runtime, config) => planningOps(entry, runtime, config)
 	},
 	{
 		id: "statusline",

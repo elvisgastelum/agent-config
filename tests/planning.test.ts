@@ -1,5 +1,14 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, test } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
+import { entryKey, upsertEntry, type CatalogEntry } from "../src/catalog.ts";
+import { buildPlan } from "../src/commands.ts";
+import { defaultConfig, type Config } from "../src/config.ts";
+import { BLOCK_BEGIN, BLOCK_END, applyPlan, uninstall } from "../src/ops.ts";
+import { claudeDir, codexDir, opencodeDir, piDir } from "../src/paths.ts";
+import { read, sandbox } from "./helpers.ts";
 import { WAVE_RULE } from "../src/kaneo.ts";
 import { PHASE_PREFIX } from "../src/loop.ts";
 import {
@@ -8,6 +17,7 @@ import {
   PLAN_KINDS,
   PLAN_SCHEMA,
   NOT_AUTHORIZATION_SENTENCE,
+  PLANNING_INSTRUCTIONS_BLOCK,
   PLAN_STORE_PATH,
   READ_ONLY_SENTENCE,
   PYTHON_FALLBACK,
@@ -20,7 +30,7 @@ import {
   planningMarkdown,
   stopLines,
 } from "../src/planning.ts";
-import { TIERS } from "../src/tiers.ts";
+import { TIERS, type Runtime } from "../src/tiers.ts";
 
 const MODELS = { fast: "fast-model", balanced: "balanced-model", deep: "deep-model" };
 
@@ -334,5 +344,126 @@ describe("read-only rule and stop line", () => {
     );
     expect(READ_ONLY_SENTENCE).not.toContain("gap");
     expect(READ_ONLY_SENTENCE.endsWith("except this plan's own epics and stories.")).toBe(true);
+  });
+});
+
+describe("planning instructions block", () => {
+  const ALL: Runtime[] = ["claude", "opencode", "codex", "pi"];
+  const PLANNING_BEGIN_PREFIX = "<!-- BEGIN agent-config:planning:";
+  const PLANNING_END = "<!-- END agent-config:planning -->";
+  const NOT_AUTHORIZATION =
+    "A planning report is not authorization to implement; its next command belongs to a fresh session.";
+
+  let box: ReturnType<typeof sandbox>;
+  let project: string | undefined;
+  beforeEach(() => {
+    box = sandbox();
+  });
+  afterEach(() => {
+    box.restore();
+    if (project) rmSync(project, { recursive: true, force: true });
+    project = undefined;
+  });
+
+  const userInstructions = (): Record<Runtime, string> => ({
+    claude: join(claudeDir(), "CLAUDE.md"),
+    opencode: join(opencodeDir(), "AGENTS.md"),
+    codex: join(codexDir(), "AGENTS.md"),
+    pi: join(piDir(), "AGENTS.md"),
+  });
+
+  const planningEntry = (runtimes: Runtime[], dir?: string): CatalogEntry => ({
+    item: "planning",
+    ...(dir ? { project: dir } : {}),
+    runtimes,
+    settings: {},
+  });
+
+  function installEntry(entry: CatalogEntry): void {
+    const config: Config = defaultConfig();
+    upsertEntry(config, entry);
+    const result = applyPlan(buildPlan(config, [entryKey(entry)]));
+    expect(result.errors).toEqual([]);
+  }
+
+  function installLadder(): void {
+    const config: Config = {
+      ...defaultConfig(),
+      components: ["instructions"],
+      catalog: [{ item: "model-ladder", runtimes: ALL, settings: {} }],
+    };
+    expect(applyPlan(buildPlan(config)).errors).toEqual([]);
+  }
+
+  const ladderBlock = (text: string): string => {
+    const start = text.indexOf(BLOCK_BEGIN);
+    const end = text.indexOf(BLOCK_END);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    return text.slice(start, end + BLOCK_END.length);
+  };
+
+  const count = (text: string, needle: string): number => text.split(needle).length - 1;
+
+  test("planning block is installed in each runtime's instructions file", () => {
+    const configs = [
+      join(codexDir(), "config.toml"),
+      join(piDir(), "config.json"),
+      join(piDir(), "settings.json"),
+    ];
+    const before = configs.map((p) => (existsSync(p) ? read(p) : undefined));
+    installEntry(planningEntry(ALL));
+    for (const path of Object.values(userInstructions())) {
+      const text = read(path);
+      const start = text.indexOf(PLANNING_BEGIN_PREFIX);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(text).toContain(PLANNING_INSTRUCTIONS_BLOCK);
+      expect(text.indexOf(PLANNING_END)).toBeGreaterThan(start);
+    }
+    const after = configs.map((p) => (existsSync(p) ? read(p) : undefined));
+    expect(after).toEqual(before);
+  });
+
+  test("project scope AGENTS.md gets exactly one planning block", () => {
+    project = mkdtempSync(join(tmpdir(), "agent-config-project-"));
+    installEntry(planningEntry(ALL, project));
+    const agents = read(join(project, "AGENTS.md"));
+    expect(count(agents, PLANNING_BEGIN_PREFIX)).toBe(1);
+    expect(count(agents, PLANNING_END)).toBe(1);
+    expect(count(agents, PLANNING_INSTRUCTIONS_BLOCK)).toBe(1);
+    const claude = read(join(project, "CLAUDE.md"));
+    expect(count(claude, PLANNING_BEGIN_PREFIX)).toBe(1);
+    expect(count(claude, PLANNING_END)).toBe(1);
+  });
+
+  test("block says a planning report does not authorize changes", () => {
+    expect(PLANNING_INSTRUCTIONS_BLOCK).toContain(NOT_AUTHORIZATION);
+    expect(NOT_AUTHORIZATION_SENTENCE).toBe(NOT_AUTHORIZATION);
+  });
+
+  test("block and skill share the same read-only sentence", () => {
+    expect(PLANNING_INSTRUCTIONS_BLOCK).toContain(READ_ONLY_SENTENCE);
+    for (const rt of ALL) expect(planningMarkdown(rt, MODELS)).toContain(READ_ONLY_SENTENCE);
+  });
+
+  test("model-ladder block is byte-identical after planning install", () => {
+    installLadder();
+    const before = Object.values(userInstructions()).map((p) => ladderBlock(read(p)));
+    installEntry(planningEntry(ALL));
+    const after = Object.values(userInstructions()).map((p) => ladderBlock(read(p)));
+    expect(after).toEqual(before);
+  });
+
+  test("uninstall removes the planning block", () => {
+    installLadder();
+    const before = Object.values(userInstructions()).map((p) => ladderBlock(read(p)));
+    installEntry(planningEntry(ALL));
+    uninstall((r) => r.item === "planning@user");
+    Object.values(userInstructions()).forEach((path, i) => {
+      const text = read(path);
+      expect(text).not.toContain(PLANNING_BEGIN_PREFIX);
+      expect(text).not.toContain(PLANNING_END);
+      expect(ladderBlock(text)).toBe(before[i]);
+    });
   });
 });
