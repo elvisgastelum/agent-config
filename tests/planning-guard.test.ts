@@ -286,3 +286,99 @@ describe("planning guard file writes", () => {
     );
   });
 });
+
+const agent = (tool_input: object, tool_name = "Agent") => ({
+  tool_name,
+  tool_input,
+  transcript_path: planningPath(),
+});
+const agentBlocked = (type: string) => blockMessage(guard.writerAgentDetail(type));
+
+describe("planning guard writer sub-agents", () => {
+  test("Agent with subagent_type ladder-edit-balanced is blocked", () => {
+    expect(decide(agent({ subagent_type: "ladder-edit-balanced", prompt: "x" }))).toBe(
+      agentBlocked("ladder-edit-balanced"),
+    );
+    for (const type of ["ladder-edit-fast", "ladder-edit-deep"])
+      expect(decide(agent({ subagent_type: type }))).toBe(agentBlocked(type));
+  });
+
+  test("ladder-orchestrator is blocked", () => {
+    expect(decide(agent({ subagent_type: "ladder-orchestrator" }))).toBe(
+      agentBlocked("ladder-orchestrator"),
+    );
+  });
+
+  test("general-purpose is blocked", () => {
+    expect(decide(agent({ subagent_type: "general-purpose" }))).toBe(
+      agentBlocked("general-purpose"),
+    );
+  });
+
+  test("Agent call without subagent_type is blocked", () => {
+    const missing = agentBlocked(guard.MISSING_AGENT_TYPE);
+    expect(decide(agent({ prompt: "write code" }))).toBe(missing);
+    expect(decide(agent({ subagent_type: "" }))).toBe(missing);
+    expect(decide(agent({ subagent_type: "  " }))).toBe(missing);
+    expect(decide(agent({ subagent_type: 3 }))).toBe(missing);
+    expect(decide({ tool_name: "Agent", transcript_path: planningPath() })).toBe(missing);
+  });
+
+  test("the Task tool is guarded the same way", () => {
+    expect(decide(agent({ subagent_type: "ladder-edit-fast" }, "Task"))).toBe(
+      agentBlocked("ladder-edit-fast"),
+    );
+    expect(decide(agent({}, "Task"))).toBe(agentBlocked(guard.MISSING_AGENT_TYPE));
+    expect(decide(agent({ subagent_type: "Explore" }, "Task"))).toBeUndefined();
+  });
+
+  test("case, whitespace and a plugin namespace do not slip a writer through", () => {
+    for (const type of ["Ladder-Edit-Fast", " general-purpose ", "plugin:ladder-orchestrator"])
+      expect(decide(agent({ subagent_type: type }))).toBe(agentBlocked(type));
+  });
+
+  test("planner-deep, ladder-reviewer-deep, kaneo-scribe and Explore pass", () => {
+    for (const type of [
+      "planner-deep",
+      "planner-fast",
+      "ladder-reviewer-deep",
+      "kaneo-scribe",
+      "Explore",
+      "ladder-read-fast",
+      "ladder-explorer-balanced",
+      "ladder-researcher-fast",
+      "ladder-designer-balanced",
+      "ladder-user-experience-deep",
+      "ladder-editor",
+    ])
+      expect(decide(agent({ subagent_type: type }))).toBeUndefined();
+  });
+
+  test("outside planning a writer sub-agent passes", () => {
+    const outside = {
+      ...agent({ subagent_type: "ladder-edit-fast" }),
+      transcript_path: transcript(userEntry("hi")),
+    };
+    expect(decide(outside)).toBeUndefined();
+  });
+
+  test("the denylist and the deny detail are pinned", () => {
+    expect(guard.WRITER_AGENTS).toEqual([
+      "ladder-edit-*",
+      "ladder-orchestrator",
+      "general-purpose",
+    ]);
+    expect(guard.writerAgentDetail("ladder-edit-fast")).toBe(
+      "the sub-agent ladder-edit-fast can write files, so it cannot start; read-only agents such as planners, readers, explorers, researchers and reviewers still run.",
+    );
+    expect(guard.MISSING_AGENT_TYPE).toBe("general-purpose (no subagent_type)");
+  });
+
+  test("denial reason names the agent type", () => {
+    expect(decide(agent({ subagent_type: "ladder-edit-balanced" }))).toContain(
+      "ladder-edit-balanced",
+    );
+    expect(decide(agent({}))).toContain("no subagent_type");
+    for (const input of [EDIT, BASH]) expect(guard.writerAgentRule(input)).toBeUndefined();
+  });
+});

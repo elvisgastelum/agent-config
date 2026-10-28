@@ -4,11 +4,14 @@
 //
 // Holds a /planning session to planning: once the transcript shows /planning was started, tool
 // calls run through the rules in RULES and the first rule that objects denies the call. This file
-// holds the activation detection, the shared deny message, the rule pipeline and the file-write
-// rule: with planning active, file edits are denied unless they land under .plans/ at the
-// repository root.
+// holds the activation detection, the shared deny message, the rule pipeline, the file-write
+// rule (with planning active, file edits are denied unless they land under .plans/ at the
+// repository root) and the writer-agent rule (sub-agents on the WRITER_AGENTS denylist, or
+// started without subagent_type, are denied).
 //
-// Any unexpected input or error lets the call through: the guard never breaks a session. The
+// Unexpected hook input or an error outside a rule lets the call through: the guard never breaks
+// a session. Inside a rule, a malformed call it guards (no file path, no subagent_type) fails
+// closed and is denied. The
 // transcript is scanned from its first line, so an earlier /planning keeps the guard on after a
 // compact summary, a later /continue or a resume.
 
@@ -181,13 +184,65 @@ export function fileWriteRule(input) {
   }
 }
 
+// ---------------------------------------------------------------- writer sub-agents
+
+/** The tools that start a sub-agent. */
+export const AGENT_TOOLS = new Set(["Agent", "Task"]);
+
+/** Marks a WRITER_AGENTS entry as a prefix: "ladder-edit-*" matches every ladder-edit rung. */
+export const AGENT_WILDCARD = "*";
+
+/**
+ * The denylist of sub-agents that can write. Every other agent passes. Add a new writer agent
+ * here. A call without subagent_type starts general-purpose, so it is denied too.
+ */
+export const WRITER_AGENTS = ["ladder-edit-*", "ladder-orchestrator", "general-purpose"];
+
+/** How the denial names a call that has no subagent_type. */
+export const MISSING_AGENT_TYPE = "general-purpose (no subagent_type)";
+
+const SUBAGENT_TYPE_FIELD = "subagent_type";
+const NAMESPACE_SEPARATOR = ":";
+
+/** The detail the writer-agent rule denies with; `type` is the agent named in the call. */
+export function writerAgentDetail(type) {
+  return `the sub-agent ${type} can write files, so it cannot start; read-only agents such as planners, readers, explorers, researchers and reviewers still run.`;
+}
+
+/** The bare, lower-case agent name: a plugin namespace ("plugin:agent") is dropped. */
+function agentName(type) {
+  const name = type.trim().toLowerCase();
+  return name.slice(name.lastIndexOf(NAMESPACE_SEPARATOR) + 1);
+}
+
+function isWriterAgent(name) {
+  return WRITER_AGENTS.some((entry) =>
+    entry.endsWith(AGENT_WILDCARD)
+      ? name.startsWith(entry.slice(0, -AGENT_WILDCARD.length))
+      : name === entry,
+  );
+}
+
+/** Denies starting a sub-agent on the WRITER_AGENTS denylist or without subagent_type. */
+export function writerAgentRule(input) {
+  if (!AGENT_TOOLS.has(input?.tool_name)) return undefined;
+  try {
+    const type = input.tool_input?.[SUBAGENT_TYPE_FIELD];
+    if (typeof type !== "string" || type.trim() === "")
+      return writerAgentDetail(MISSING_AGENT_TYPE);
+    return isWriterAgent(agentName(type)) ? writerAgentDetail(type) : undefined;
+  } catch {
+    return writerAgentDetail(MISSING_AGENT_TYPE);
+  }
+}
+
 // ---------------------------------------------------------------- rules
 
 /**
  * Each rule is `(input) => string | undefined`: a detail sentence to deny the call, or undefined
- * to pass. PSR-5 to PSR-7 add the shell, git and writer-agent rules here.
+ * to pass. PSR-5 and PSR-6 add the shell and git rules here.
  */
-export const RULES = [fileWriteRule];
+export const RULES = [fileWriteRule, writerAgentRule];
 
 /** Returns the reason to deny a tool call, or undefined to let it through. */
 export function decide(input, rules = RULES) {
