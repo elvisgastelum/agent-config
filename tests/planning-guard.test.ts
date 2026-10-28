@@ -1,12 +1,20 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vite-plus/test";
 // @ts-expect-error plain .mjs asset without type declarations
 import * as guard from "../assets/planning-guard.mjs";
 
-const { PLANNING_COMMAND_TAG, blockMessage, decide } = guard;
+const { FILE_WRITE_DETAIL, PLANNING_COMMAND_TAG, blockMessage, decide, repoRoot } = guard;
 
 const GUARD_PATH = join(import.meta.dirname, "..", "assets", "planning-guard.mjs");
 const IMPORT_SPECIFIER = /(?:\bfrom\s+|^\s*import\s+)["']([^"']+)["']/gm;
@@ -136,13 +144,145 @@ describe("planning guard script", () => {
     }
   });
 
-  test("hook run on an active transcript prints nothing while no rules exist", () => {
-    const path = transcript(planningEntry);
+  test("hook run denying a write prints a PreToolUse deny", () => {
+    const root = gitFixture();
+    const input = write("Edit", "src/x.ts", root);
     const result = spawnSync("node", [GUARD_PATH], {
-      input: JSON.stringify(withTranscript(path)),
+      input: JSON.stringify(input),
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(output.hookSpecificOutput.permissionDecisionReason).toBe(
+      blockMessage(FILE_WRITE_DETAIL),
+    );
+  });
+
+  test("hook run allowing a write prints nothing", () => {
+    const root = gitFixture();
+    const input = write("Write", ".plans/x/plan.sqlite", root);
+    const result = spawnSync("node", [GUARD_PATH], {
+      input: JSON.stringify(input),
       encoding: "utf8",
     });
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("");
+  });
+});
+
+function gitFixture() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "planning-guard-repo-")));
+  dirs.push(root);
+  const init = spawnSync("git", ["init", "-q"], { cwd: root });
+  expect(init.status).toBe(0);
+  mkdirSync(join(root, "src"));
+  mkdirSync(join(root, ".plans", "10-2026", "p"), { recursive: true });
+  return root;
+}
+
+const planningPath = () => transcript(planningEntry);
+const write = (tool: string, path: string, cwd: string) => ({
+  tool_name: tool,
+  tool_input: tool === "NotebookEdit" ? { notebook_path: path } : { file_path: path },
+  transcript_path: planningPath(),
+  cwd,
+});
+const BLOCKED = blockMessage(FILE_WRITE_DETAIL);
+
+describe("planning guard file writes", () => {
+  test("Edit of src/x.ts is blocked", () => {
+    const root = gitFixture();
+    expect(decide(write("Edit", "src/x.ts", root))).toBe(BLOCKED);
+  });
+
+  test("Write to .plans/10-2026/p/plan.sqlite is allowed", () => {
+    const root = gitFixture();
+    expect(decide(write("Write", ".plans/10-2026/p/plan.sqlite", root))).toBeUndefined();
+  });
+
+  test("with hook cwd in a subfolder (src/), Write to <root>/.plans/x/plan.sqlite is allowed and Write to src/x.ts is blocked", () => {
+    const root = gitFixture();
+    const cwd = join(root, "src");
+    expect(repoRoot(cwd)).toBe(root);
+    expect(decide(write("Write", join(root, ".plans", "x", "plan.sqlite"), cwd))).toBeUndefined();
+    expect(decide(write("Write", join(root, "src", "x.ts"), cwd))).toBe(BLOCKED);
+    expect(decide(write("Write", "x.ts", cwd))).toBe(BLOCKED);
+  });
+
+  test("cwd outside any git repo falls back to cwd as root", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "planning-guard-plain-")));
+    dirs.push(dir);
+    expect(repoRoot(dir)).toBe(dir);
+    expect(decide(write("Write", ".plans/x/plan.sqlite", dir))).toBeUndefined();
+    expect(decide(write("Write", "x.ts", dir))).toBe(BLOCKED);
+  });
+
+  test("path through .plans/../src/x.ts is blocked", () => {
+    const root = gitFixture();
+    expect(decide(write("Write", ".plans/../src/x.ts", root))).toBe(BLOCKED);
+  });
+
+  test("symlink under .plans that points into src is blocked", () => {
+    const root = gitFixture();
+    symlinkSync(join(root, "src"), join(root, ".plans", "link"));
+    expect(decide(write("Write", ".plans/link/x.ts", root))).toBe(BLOCKED);
+    writeFileSync(join(root, "src", "f.ts"), "");
+    symlinkSync(join(root, "src", "f.ts"), join(root, ".plans", "f.ts"));
+    expect(decide(write("Write", ".plans/f.ts", root))).toBe(BLOCKED);
+    symlinkSync(join(root, "src", "missing.ts"), join(root, ".plans", "d.ts"));
+    expect(decide(write("Write", ".plans/d.ts", root))).toBe(BLOCKED);
+  });
+
+  test("src/.plans/x.sqlite is blocked", () => {
+    const root = gitFixture();
+    expect(decide(write("Write", "src/.plans/x.sqlite", root))).toBe(BLOCKED);
+  });
+
+  test("MultiEdit and NotebookEdit get the same decision as Edit", () => {
+    const root = gitFixture();
+    const decisions = { "src/x.ts": BLOCKED, ".plans/x/plan.sqlite": undefined };
+    for (const [path, decision] of Object.entries(decisions)) {
+      const expected = decide(write("Edit", path, root));
+      expect(expected).toBe(decision);
+      expect(decide(write("MultiEdit", path, root))).toBe(expected);
+      expect(decide(write("NotebookEdit", path, root))).toBe(expected);
+    }
+  });
+
+  test("path starting with ~ is blocked", () => {
+    const root = gitFixture();
+    const cwd = join(root, ".plans");
+    expect(decide(write("Write", "~/x", cwd))).toBe(BLOCKED);
+    expect(decide(write("Write", "~", cwd))).toBe(BLOCKED);
+  });
+
+  test("GIT_* variables in the environment do not move the root", () => {
+    const root = gitFixture();
+    process.env.GIT_WORK_TREE = join(root, "src");
+    try {
+      expect(repoRoot(root)).toBe(root);
+      expect(decide(write("Write", "src/.plans/x.sqlite", root))).toBe(BLOCKED);
+    } finally {
+      delete process.env.GIT_WORK_TREE;
+    }
+  });
+
+  test("the deny detail is pinned", () => {
+    expect(guard.FILE_WRITE_DETAIL).toBe(
+      "file writes are allowed only under .plans/ at the repository root.",
+    );
+  });
+
+  test("denial reason names the .plans rule", () => {
+    const root = gitFixture();
+    const message = decide(write("Edit", "src/x.ts", root));
+    expect(message).toContain(".plans/");
+    expect(message).toBe(blockMessage(FILE_WRITE_DETAIL));
+    for (const input of [BASH, AGENT]) expect(guard.fileWriteRule(input)).toBeUndefined();
+    expect(guard.fileWriteRule({ tool_name: "Edit", tool_input: {}, cwd: root })).toBe(
+      FILE_WRITE_DETAIL,
+    );
   });
 });
