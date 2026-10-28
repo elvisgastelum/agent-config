@@ -21,7 +21,35 @@ import { agentName, type Runtime, type Tier } from "./tiers.ts";
 export const PLANNING = "planning";
 
 const DESCRIPTION =
-  "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed).";
+  "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed) without changing any file outside .plans/.";
+
+export const READ_ONLY_SENTENCE =
+  "This run is read-only: it changes no file outside .plans/ and no tracker item except this plan's own epics and stories.";
+
+/** Runtime-neutral: it names no command, so it reads the same on every runtime. */
+export const NOT_AUTHORIZATION_SENTENCE =
+  "A planning report is not authorization to implement; its next command belongs to a fresh session.";
+
+const EPIC_ID_PLACEHOLDER = "<EPIC-ID>";
+const STOP_DONE = "Planning done.";
+const STOP_PREFIX = `${STOP_DONE} Start the work in a fresh session: `;
+
+/** The line that ends the report, one per set of installed follow-up commands. */
+export function stopLines(runtime: Runtime): {
+  both: string;
+  brief: string;
+  continue: string;
+  none: string;
+} {
+  const b = actionCommand(runtime, BRIEF);
+  const c = actionCommand(runtime, CONTINUE);
+  return {
+    both: `${STOP_PREFIX}${b} ${EPIC_ID_PLACEHOLDER} or ${c}.`,
+    brief: `${STOP_PREFIX}${b} ${EPIC_ID_PLACEHOLDER}.`,
+    continue: `${STOP_PREFIX}${c}.`,
+    none: `${STOP_DONE} Work the tickets by hand from the store in a fresh session.`,
+  };
+}
 
 /** The plan kinds: how many sub-agents may run at once, and the planner rung a draft starts on. */
 export const PLAN_KINDS = {
@@ -282,6 +310,7 @@ export function planningMarkdown(runtime: Runtime, models: PlanningModels): stri
   const cmd = actionCommand(runtime, PLANNING);
   const cont = actionCommand(runtime, CONTINUE);
   const brief = actionCommand(runtime, BRIEF);
+  const s = stopLines(runtime);
   const args =
     runtime === "codex"
       ? `Argument: the user's message after ${code(cmd)}.`
@@ -306,6 +335,7 @@ ${args} Its first word may name the kind of plan: ${KIND_NAMES.map(code).join(",
 
 ## Ground rules
 
+- **Read-only.** ${READ_ONLY_SENTENCE}
 - **Facts are yours, decisions are the user's.** Look up whatever the code, the board or the tools can answer; ask the user only what they alone can decide.
 - **Plain words.** Write every question and summary so someone new to the field can answer it: name the concept, say in one line why it matters, and give the trade-off of each option. Match the user's vocabulary when they use technical terms.
 - **Recommend.** Every question carries your recommended answer and why. When the user skips a question or says to choose, take the recommendation and record it as decided by recommendation.
@@ -332,7 +362,7 @@ When one of these agents is not installed, do the step yourself with bounded rea
 | --- | --- |
 | ${code(KANEO_ITEM)} with a working MCP | Tickets become Kaneo epics and stories, as the ${code(KANEO_SKILL)} skill says. |
 | ${code(CONTINUE)} | Stories are cut to run in parallel waves; the report names ${code(`${cont} ${PARALLEL_WAVE}`)}. |
-| ${code(BRIEF)} | The report offers ${code(`${brief} <EPIC-ID>`)} to prepare a brief for a fresh session. |
+| ${code(BRIEF)} | The report offers ${code(`${brief} ${EPIC_ID_PLACEHOLDER}`)} to prepare a brief for a fresh session. |
 | ${code(LADDER_ITEM)} | Code facts come from ${fast}. |
 
 A missing item costs nothing: say in one line what it would add, then go on.
@@ -421,9 +451,15 @@ In plain words: what will be built, the epics, the waves and the widest wave's s
 
 - ${code(`${cont} ${PARALLEL_WAVE}`)} builds the next wave of an epic in parallel;
 - ${code(`${cont} parallel <N>`)} works up to N tickets at once, ${code(cont)} one at a time;
-- ${code(`${brief} <EPIC-ID>`)} prepares a brief that works a whole epic in a fresh session.
+- ${code(`${brief} ${EPIC_ID_PLACEHOLDER}`)} prepares a brief that works a whole epic in a fresh session.
 
 With none installed, say how to work the tickets by hand from the store.
+
+End the report with exactly the matching stop line, in a line of its own, and write nothing after it:
+- With ${code(BRIEF)} and ${code(CONTINUE)} installed: ${code(s.both)}
+- With only ${code(BRIEF)} installed: ${code(s.brief)}
+- With only ${code(CONTINUE)} installed: ${code(s.continue)}
+- With none installed: ${code(s.none)}
 
 ## Plan store
 

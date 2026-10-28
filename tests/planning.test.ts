@@ -7,7 +7,9 @@ import {
   DRAFT_STATUS,
   PLAN_KINDS,
   PLAN_SCHEMA,
+  NOT_AUTHORIZATION_SENTENCE,
   PLAN_STORE_PATH,
+  READ_ONLY_SENTENCE,
   PYTHON_FALLBACK,
   REVIEW_VERDICT,
   STORE_MIGRATION,
@@ -16,6 +18,7 @@ import {
   plannerDescription,
   plannerName,
   planningMarkdown,
+  stopLines,
 } from "../src/planning.ts";
 import { TIERS } from "../src/tiers.ts";
 
@@ -262,5 +265,74 @@ describe("planner agents", () => {
     expect(plannerDescription("fast", "haiku")).toContain("(haiku)");
     expect(plannerDescription("fast", "")).toContain("(session model)");
     expect(plannerDescription("deep", "opus")).toContain("reviews every plan");
+  });
+});
+
+describe("read-only rule and stop line", () => {
+  const RUNTIMES = ["claude", "opencode", "codex", "pi"] as const;
+  const report = (rt: (typeof RUNTIMES)[number]): string =>
+    planningMarkdown(rt, MODELS).split("## 8. Report")[1]!.split("\n## ")[0]!;
+  const forms = (rt: (typeof RUNTIMES)[number]) =>
+    rt === "codex"
+      ? { b: "$brief", c: "$continue", otherB: "/brief", otherC: "/continue" }
+      : { b: "/brief", c: "/continue", otherB: "$brief", otherC: "$continue" };
+  const READ_ONLY =
+    "This run is read-only: it changes no file outside .plans/ and no tracker item except this plan's own epics and stories.";
+
+  test("skill states the read-only rule", () => {
+    expect(READ_ONLY_SENTENCE).toBe(READ_ONLY);
+    for (const rt of RUNTIMES) expect(planningMarkdown(rt, MODELS)).toContain(READ_ONLY);
+  });
+
+  const variants = [
+    ["stop line with brief and continue installed", "both", "`brief` and `continue`"],
+    ["stop line with only brief installed", "brief", "only `brief`"],
+    ["stop line with only continue installed", "continue", "only `continue`"],
+    ["stop line with none installed", "none", "none"],
+  ] as const;
+  for (const [name, key, cond] of variants) {
+    test(name, () => {
+      for (const rt of RUNTIMES) {
+        const { b, c, otherB, otherC } = forms(rt);
+        const expected = {
+          both: `Planning done. Start the work in a fresh session: ${b} <EPIC-ID> or ${c}.`,
+          brief: `Planning done. Start the work in a fresh session: ${b} <EPIC-ID>.`,
+          continue: `Planning done. Start the work in a fresh session: ${c}.`,
+          none: "Planning done. Work the tickets by hand from the store in a fresh session.",
+        }[key];
+        expect(stopLines(rt)[key]).toBe(expected);
+        const prefix = key === "none" ? "With none" : `With ${cond}`;
+        expect(report(rt)).toContain(
+          `- ${prefix} installed: \`${expected}\``.replace("installed installed", "installed"),
+        );
+        expect(report(rt)).not.toContain(otherB);
+        expect(report(rt)).not.toContain(otherC);
+      }
+    });
+  }
+
+  test("report step ends with the stop line rule", () => {
+    for (const rt of RUNTIMES) {
+      const blocks = report(rt).trim().split("\n\n");
+      const last = blocks[blocks.length - 1]!;
+      expect(last.startsWith("End the report with exactly the matching stop line")).toBe(true);
+      expect(last.split("\n").pop()).toBe(`- With none installed: \`${stopLines(rt).none}\``);
+    }
+  });
+
+  test("NOT_AUTHORIZATION_SENTENCE text", () => {
+    expect(NOT_AUTHORIZATION_SENTENCE).toBe(
+      "A planning report is not authorization to implement; its next command belongs to a fresh session.",
+    );
+    expect(NOT_AUTHORIZATION_SENTENCE).not.toContain("/");
+    expect(NOT_AUTHORIZATION_SENTENCE).not.toContain("$");
+  });
+
+  test("skill states the tracker exception", () => {
+    expect(READ_ONLY_SENTENCE).toContain(
+      "no tracker item except this plan's own epics and stories",
+    );
+    expect(READ_ONLY_SENTENCE).not.toContain("gap");
+    expect(READ_ONLY_SENTENCE.endsWith("except this plan's own epics and stories.")).toBe(true);
   });
 });
