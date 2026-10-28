@@ -702,6 +702,26 @@ describe("planning guard shell writes", () => {
     passes(["cd .plans && echo x > x.txt"], root);
   });
 
+  test("cd into a store folder not yet created keeps the repository root", () => {
+    const root = gitFixture();
+    passes(
+      [
+        'mkdir -p .plans/10-2026/new && cd .plans/10-2026/new && sqlite3 plan.sqlite "select 1"',
+        "cd .plans/10-2026/new && echo x > notes.md",
+        "cd src/x && echo x > ../../.plans/a",
+      ],
+      root,
+    );
+    blocked(
+      [
+        "cd src/new && echo x > a.ts",
+        "cd .plans/10-2026/new && echo x > ../../../a.ts",
+        "cd src/x && echo x > .plans/a",
+      ],
+      root,
+    );
+  });
+
   test("shell reserved words are not taken as the command name", () => {
     const root = gitFixture();
     blocked(

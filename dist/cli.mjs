@@ -4846,6 +4846,8 @@ const STORY_SIZES = [
 const STORE_WRITE_PREFIX = "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;";
 /** `python3 -m sqlite3` runs one statement per `execute()`, so two on one line fail. */
 const PYTHON_FALLBACK = "When `sqlite3` is missing, pipe the same statements to `python3 -m sqlite3 <store>` on stdin, never two statements on one line: it runs one statement at a time, so each PRAGMA of the prefix goes on a line of its own.";
+/** The planning guard does not expand shell variables, so a store path held in one is denied. */
+const STORE_PATH_RULE = "Write the store path out in full in every shell command, never through a shell variable: the planning guard cannot follow a variable and denies the command.";
 /** The sessions that worked each ticket; a deleted ticket takes its sessions with it. */
 const SESSIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ticket_sessions (
   ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
@@ -5013,7 +5015,7 @@ Every handoff opens with a phase line and names the plan store, a SQLite file. R
 ## Phases
 
 - \`${phase("plan")}\`: answer what the handoff asks (such as classifying a request) in its answer shape. Change nothing.
-- \`${phase(DRAFT_PHASE)}\`: write the draft into the store yourself, following the draft rules. Start every write with \`${STORE_WRITE_PREFIX}\`, and first delete any earlier draft (its ticket_sessions, blocks, tickets and epics). When the handoff lists issues from earlier drafts, fix every one.
+- \`${phase(DRAFT_PHASE)}\`: write the draft into the store yourself, following the draft rules. Start every write with \`${STORE_WRITE_PREFIX}\`, and first delete any earlier draft (its ticket_sessions, blocks, tickets and epics). ${STORE_PATH_RULE} When the handoff lists issues from earlier drafts, fix every one.
 - \`${phase("review")}\`: check what the handoff names against its lenses, the decisions in the store and the draft rules. Change nothing.
 
 ## Draft rules
@@ -5193,7 +5195,7 @@ Path: ${code(PLAN_STORE_PATH)} under the repository root, where \`<MM-yyyy>\` is
 ${PLAN_SCHEMA}
 \`\`\`
 
-Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist; \`busy_timeout\` makes a write wait up to 5 seconds while another session is writing the store, instead of failing at once. ${PYTHON_FALLBACK} Query the store with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
+Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist; \`busy_timeout\` makes a write wait up to 5 seconds while another session is writing the store, instead of failing at once. ${PYTHON_FALLBACK} ${STORE_PATH_RULE} Query the store with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
 A store created before \`tickets.pr_url\` and \`ticket_sessions\` existed needs them before its first write: when ${code(STORE_MIGRATION.check)} returns no row, run ${code(STORE_MIGRATION.addPrUrl)}, which fails when run twice, so the check always comes first; then run the \`ticket_sessions\` statement from the schema above, which is safe to repeat.
 

@@ -18,7 +18,7 @@
 // compact summary, a later /continue or a resume.
 
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -129,11 +129,29 @@ function cleanGitEnv() {
   );
 }
 
-/** The repository root containing `cwd`, or `cwd` itself when git cannot tell. */
+/** `path` itself, or its nearest ancestor that is an existing folder. */
+function existingDir(path) {
+  let candidate = path;
+  for (;;) {
+    try {
+      if (statSync(candidate).isDirectory()) return candidate;
+    } catch {
+      // the entry does not exist: try its parent
+    }
+    const parent = dirname(candidate);
+    if (parent === candidate) return candidate;
+    candidate = parent;
+  }
+}
+
+/**
+ * The repository root containing `cwd`, or `cwd` itself when git cannot tell. Git runs from the
+ * nearest existing folder, so a `cd` into a folder a command creates first keeps the root.
+ */
 export function repoRoot(cwd) {
   try {
     const root = execFileSync(GIT_COMMAND, GIT_ROOT_ARGS, {
-      cwd,
+      cwd: existingDir(cwd),
       env: cleanGitEnv(),
       encoding: TRANSCRIPT_ENCODING,
       stdio: ["ignore", "pipe", "ignore"],

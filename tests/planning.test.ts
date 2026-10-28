@@ -28,6 +28,7 @@ import {
   READ_ONLY_SENTENCE,
   PYTHON_FALLBACK,
   REVIEW_VERDICT,
+  STORE_PATH_RULE,
   STORE_MIGRATION,
   STORE_WRITE_PREFIX,
   plannerBody,
@@ -225,6 +226,15 @@ describe("planningMarkdown", () => {
       expect(text).toContain(`${kind} ${fanOut}`);
     expect(text).toContain(PLAN_STORE_PATH);
     expect(text).toContain(`\`${STORE_WRITE_PREFIX}\``);
+  });
+
+  test("skill and planners write the store path out in full", () => {
+    expect(STORE_PATH_RULE).toBe(
+      "Write the store path out in full in every shell command, never through a shell variable: the planning guard cannot follow a variable and denies the command.",
+    );
+    for (const rt of ["claude", "opencode", "codex", "pi"] as const)
+      expect(planningMarkdown(rt, MODELS)).toContain(STORE_PATH_RULE);
+    for (const tier of TIERS) expect(plannerBody(tier)).toContain(STORE_PATH_RULE);
   });
 
   test("explains the busy timeout as waiting for a store another session is writing", () => {
