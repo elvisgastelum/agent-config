@@ -231,7 +231,7 @@ A manual action that reads a whole Kaneo epic, finds what is missing and writes 
 
 ### planning
 
-A manual action that plans a project, epic, feature, fix or ticket with you before any work starts, keeping the plan in a SQLite store. Install `kaneo` with it to write Kaneo tickets, and `continue` and `kick-off` to run them (and the model ladder for its deep rung).
+A manual action that plans a project, epic, feature, fix or ticket with you before any work starts, keeping the plan in a SQLite store. Install `kaneo` with it to write Kaneo tickets, and `continue` and `brief` to run them (and the model ladder for its deep rung).
 
 - `/planning [project | epic | feat | fix | ticket] <what to plan>` (`$planning` in Codex) is never invoked by the model on its own.
 - It checks what agi installed (`agent-config catalog --json`) and whether the Kaneo MCP answers, then classifies the request on the deep rung.
@@ -259,7 +259,7 @@ On Claude Code a planning guard enforces it: a PreToolUse hook on `Write|Edit|Mu
 
 - file writes (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`) outside `.plans/` at the repository root;
 - shell writes outside `.plans/`: redirects, `sed -i`, `tee`, `cp`, `mv`, `rm`, `git apply`, package installs, also behind wrappers such as `env`; `sqlite3` on the plan store stays open. Writes hidden inside an interpreter (`python3 -c ...`) are not caught;
-- git history and branch writes: commits, `git push`, `git checkout -b`, `git switch -c`, `git branch <name>`, `git worktree add` (also through `git -C`); `git status`, `git diff` and other reads pass;
+- git history, branch and checkout writes: commits, `git push`, merges and rebases, `git checkout` and `git switch` in every form, `git reset`, `git stash` (except `list` and `show`), `git branch <name>`, `git worktree add` (also through `git -C`); `git status`, `git diff`, `git log` and `git branch --list` pass. `sqlite3` on a database outside `.plans/` is denied too;
 - writer sub-agents: `ladder-edit-*`, `ladder-orchestrator`, `general-purpose`, and any `Agent`/`Task` call without `subagent_type`. Planners, readers, explorers, researchers and reviewers still run.
 
 Each denial says what was refused and points to the way out: start a fresh session (`/clear` or a new session) and run `/brief` or `/continue` there. Hook input it cannot read lets the call through, so the guard never breaks a session; a malformed call it guards is denied.
