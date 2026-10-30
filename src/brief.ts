@@ -17,7 +17,7 @@ import {
 } from "./loop.ts";
 import { STORE_WRITE_PREFIX } from "./planning.ts";
 import { START_SESSION, STORE_HEADING, setStatus, storeAccess } from "./store.ts";
-import { T3_DELEGATE_TOOL, claudeT3Tool } from "./t3.ts";
+import { T3_DELEGATE_TOOL, claudeT3Tool, exactToolMatcher } from "./t3.ts";
 import { ORCHESTRATOR, agentName, type Runtime } from "./tiers.ts";
 
 export const BRIEF = "brief";
@@ -44,7 +44,13 @@ export { PHASE_PREFIX };
 export const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
 
 /** The Claude tools the brief guard hook checks: agent handoffs (T3 delegate_task too), clipboard copies, brief writes. */
-export const BRIEF_GUARD_MATCHER = `Agent|Task|Bash|Write|${claudeT3Tool(T3_DELEGATE_TOOL)}`;
+export const BRIEF_GUARD_MATCHER = exactToolMatcher([
+  "Agent",
+  "Task",
+  "Bash",
+  "Write",
+  claudeT3Tool(T3_DELEGATE_TOOL),
+]);
 
 /** Claude's tool for asking the user a question with options. */
 const CLAUDE_QUESTION_TOOL = "AskUserQuestion";

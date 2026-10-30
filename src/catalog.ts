@@ -53,6 +53,16 @@ import {
   planningMarkdown,
 } from "./planning.ts";
 import { assetSource, opencodeConfigPath, runtimeOps, tomlMultiline } from "./runtimes.ts";
+import {
+  T3_ITEM,
+  T3_SKILL,
+  t3BriefSection,
+  t3ContinueSection,
+  t3InstructionsBlock,
+  t3PlanningSection,
+  t3SkillMarkdown,
+  type T3Models,
+} from "./t3.ts";
 import { TIERS, type Effort, type Runtime, type Tier, type TierMap } from "./tiers.ts";
 
 export type Scope = "user" | "project";
@@ -686,7 +696,10 @@ function continueOps(runtime: Runtime, project: string | undefined, config: Conf
     },
     briefDirText(project),
   );
-  return actionOps(runtime, project, CONTINUE, content, "continue");
+  const t3 = t3Composed(config, project, runtime)
+    ? withT3(content, t3ContinueSection(runtime, t3Models(tiers)))
+    : content;
+  return actionOps(runtime, project, CONTINUE, t3, "continue");
 }
 
 // ---------------------------------------------------------------- brief
@@ -733,7 +746,10 @@ function briefOps(runtime: Runtime, project: string | undefined, config: Config)
     },
     briefDirText(project),
   );
-  const ops = actionOps(runtime, project, BRIEF, content, "brief");
+  const t3 = t3Composed(config, project, runtime)
+    ? withT3(content, t3BriefSection(runtime))
+    : content;
+  const ops = actionOps(runtime, project, BRIEF, t3, "brief");
   if (runtime === "claude") ops.push(...briefGuardOps(project));
   return ops;
 }
@@ -762,7 +778,10 @@ function planningOps(entry: CatalogEntry, runtime: Runtime, config: Config): Op[
     balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
     deep: modelName(runtime, tiers, tiers.deep.effort, "deep"),
   });
-  const ops = actionOps(runtime, project, PLANNING, content, "planning");
+  const t3 = t3Composed(config, project, runtime)
+    ? withT3(content, t3PlanningSection(runtime))
+    : content;
+  const ops = actionOps(runtime, project, PLANNING, t3, "planning");
   for (const tier of TIERS) {
     const name = plannerName(tier);
     const agent = catalogAgent(runtime, layout(runtime, project).agents, tiers, {
@@ -904,6 +923,84 @@ const planningItem: CatalogItem = {
   ops: (entry, runtime, config) => planningOps(entry, runtime, config),
 };
 
+// ---------------------------------------------------------------- t3 code
+
+/** The actions that render T3 Code lines when the T3 item is installed at their scope. */
+export const T3_COMPOSED_ITEMS = [CONTINUE, BRIEF, PLANNING];
+
+/**
+ * Whether an action at this scope and runtime renders its T3 Code lines: the T3 item is installed
+ * at the same scope for that runtime. A user-scope T3 item does not reach a project's actions,
+ * which are committed and read on machines without it.
+ */
+function t3Composed(config: Config, project: string | undefined, runtime: Runtime): boolean {
+  return config.catalog.some(
+    (e) => e.item === T3_ITEM && e.project === project && e.runtimes.includes(runtime),
+  );
+}
+
+/** An action's text with its T3 Code section appended. */
+function withT3(content: string, section: string): string {
+  return `${content.trimEnd()}\n\n${section}\n`;
+}
+
+/** The rung models as raw IDs, as T3 Code's delegate_task takes them. */
+function t3Models(tiers: TierMap): T3Models {
+  return { fast: tiers.fast.model, balanced: tiers.balanced.model, deep: tiers.deep.model };
+}
+
+/**
+ * The keys to plan with the composed actions added: planning the T3 item at a scope also
+ * re-renders that scope's continue, brief and planning actions, so their T3 lines follow it.
+ */
+export function withT3Composed(config: Config, keys: string[]): string[] {
+  const scopes = keys
+    .map(parseEntryKey)
+    .filter((k) => k.item === T3_ITEM)
+    .map((k) => k.project);
+  if (scopes.length === 0) return keys;
+  const composed = config.catalog
+    .filter((e) => T3_COMPOSED_ITEMS.includes(e.item) && scopes.includes(e.project))
+    .map(entryKey);
+  return [...new Set([...keys, ...composed])];
+}
+
+const t3Code: CatalogItem = {
+  id: T3_ITEM,
+  title: "T3 Code integration",
+  description:
+    "routes agents, background work, worktrees, questions, visuals and thread-to-thread work through the T3 Code MCP tools when a session runs inside T3 Code, and changes nothing outside it: a t3-code skill, an always-on instructions block, and T3 Code lines in the /continue, /brief and /planning actions installed at the same scope",
+  settings: [],
+  discover: () => ({}),
+  ops: (entry, runtime, config) => {
+    const where = layout(runtime, entry.project);
+    return [
+      {
+        runtime,
+        component: "catalog",
+        kind: "file",
+        path: join(where.skills, T3_SKILL, "SKILL.md"),
+        content: t3SkillMarkdown(runtime, t3Models(config.tiers[runtime])),
+        label: `t3 code skill ${T3_SKILL}`,
+      },
+      {
+        runtime,
+        component: "catalog",
+        kind: "block",
+        path: where.instructions,
+        // Runtimes that share this file (AGENTS.md in a project) get one block naming them all.
+        content: t3InstructionsBlock(
+          entry.runtimes.filter(
+            (r) => layout(r, entry.project).instructions === where.instructions,
+          ),
+        ),
+        markers: [blockMarkers(T3_ITEM, "html")],
+        label: "t3 code instructions block",
+      },
+    ];
+  },
+};
+
 export const CATALOG: CatalogItem[] = [
   modelLadder,
   kaneo,
@@ -911,6 +1008,7 @@ export const CATALOG: CatalogItem[] = [
   continueItem,
   briefItem,
   planningItem,
+  t3Code,
   statusline,
   bypassPermissions,
 ];

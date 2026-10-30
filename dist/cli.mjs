@@ -3473,7 +3473,7 @@ const setStatus = (status) => `${STORE_WRITE_PREFIX} UPDATE tickets SET status =
 const START_SESSION = "INSERT INTO ticket_sessions (ticket_id, session_id, started_at, last_seen_at) VALUES ('<ID>', '<session id>', datetime('now'), datetime('now'));";
 /** The heading shared by every action's store section. */
 const STORE_HEADING = "Plan store fallback";
-const code$1 = (text) => `\`${text}\``;
+const code$2 = (text) => `\`${text}\``;
 /**
 * The store rules every action renders under its own heading: lookup order, discovery, writes,
 * the migration and sessions. Built on call, since planning.ts imports the actions that import this.
@@ -3487,16 +3487,18 @@ function storeAccess(scribe) {
 2. Fall back to the stores only when Kaneo is not installed, \`whoami\` gets no answer, or Kaneo answers explicitly that no such identifier exists after \`whoami\` succeeded. Any other Kaneo error (timeouts, permissions, server errors) stops the run: report it, never fall back.
 3. A store plan whose \`plan.tracker\` is \`kaneo\` already lives in Kaneo: work its tickets in Kaneo through their \`tracker_id\`.
 
-**Discovery.** Resolve the main checkout's root to an absolute path (the first \`worktree\` line of \`git worktree list --porcelain\`); a worktree has no \`${PLANS_DIR}\` of its own. Its stores are ${code$1(storeGlob())}. Use only stores whose plan row has \`status = '${WRITTEN_STATUS}'\`, and look the ID up in their \`tickets\` and \`epics\`. One match is taken silently. Several matches ask the user which plan, newest first: order the \`MM-yyyy\` folders by year, then by month, newest first, never as plain text (${MONTH_ORDER_EXAMPLE}). Hand every agent that works a store ticket this absolute store path.
+**Discovery.** Resolve the main checkout's root to an absolute path (the first \`worktree\` line of \`git worktree list --porcelain\`); a worktree has no \`${PLANS_DIR}\` of its own. Its stores are ${code$2(storeGlob())}. Use only stores whose plan row has \`status = '${WRITTEN_STATUS}'\`, and look the ID up in their \`tickets\` and \`epics\`. One match is taken silently. Several matches ask the user which plan, newest first: order the \`MM-yyyy\` folders by year, then by month, newest first, never as plain text (${MONTH_ORDER_EXAMPLE}). Hand every agent that works a store ticket this absolute store path.
 
-**Reads and writes.** Query with small selects (\`sqlite3 -box <store> "SELECT …"\`). Start every write with ${code$1(STORE_WRITE_PREFIX)}: a leading \`5000\` line from a write is the busy_timeout prefix echoing, not an error. ${PYTHON_FALLBACK}
+**Reads and writes.** Query with small selects (\`sqlite3 -box <store> "SELECT …"\`). Start every write with ${code$2(STORE_WRITE_PREFIX)}: a leading \`5000\` line from a write is the busy_timeout prefix echoing, not an error. ${PYTHON_FALLBACK}
 
-**Migration.** Before the first write to a store, including the status update right after reading the ticket at pick, bring it up to date: when ${code$1(STORE_MIGRATION.check)} returns no row, run ${code$1(STORE_MIGRATION.addPrUrl)}, which fails when run twice, so the check always comes first; then run \`CREATE TABLE IF NOT EXISTS ${SESSIONS_TABLE}\` from the planning schema (\`ticket_id\` referencing \`tickets(id)\` with \`ON DELETE CASCADE\`, \`session_id\`, \`started_at\`, \`last_seen_at\`, \`ended_at\`, primary key \`(ticket_id, session_id)\`), which is safe to repeat.
+**Migration.** Before the first write to a store, including the status update right after reading the ticket at pick, bring it up to date: when ${code$2(STORE_MIGRATION.check)} returns no row, run ${code$2(STORE_MIGRATION.addPrUrl)}, which fails when run twice, so the check always comes first; then run \`CREATE TABLE IF NOT EXISTS ${SESSIONS_TABLE}\` from the planning schema (\`ticket_id\` referencing \`tickets(id)\` with \`ON DELETE CASCADE\`, \`session_id\`, \`started_at\`, \`last_seen_at\`, \`ended_at\`, primary key \`(ticket_id, session_id)\`), which is safe to repeat.
 
-**Sessions.** A session's id is the runtime's session id when the runtime exposes one, otherwise a UUID generated at the start of the run and kept for the whole run. The session or orchestrator working a ticket writes the store itself, at the absolute path it was given, and owns its \`${SESSIONS_TABLE}\` row: it inserts the row (\`started_at\`, \`last_seen_at\`) when it takes the ticket, updates \`last_seen_at\` on each of its store writes, writes the PR URL to ${code$1(PR_URL_COLUMN)} after opening the PR, and sets \`ended_at\` when the PR is opened, it stops or it fails. Ended sessions never count as active.`;
+**Sessions.** A session's id is the runtime's session id when the runtime exposes one, otherwise a UUID generated at the start of the run and kept for the whole run. The session or orchestrator working a ticket writes the store itself, at the absolute path it was given, and owns its \`${SESSIONS_TABLE}\` row: it inserts the row (\`started_at\`, \`last_seen_at\`) when it takes the ticket, updates \`last_seen_at\` on each of its store writes, writes the PR URL to ${code$2(PR_URL_COLUMN)} after opening the PR, and sets \`ended_at\` when the PR is opened, it stops or it fails. Ended sessions never count as active.`;
 }
 //#endregion
 //#region src/t3.ts
+/** The catalog item's ID. */
+const T3_ITEM = "t3-code-integration";
 /** The MCP server T3 Code adds to every session it starts. */
 const T3_SERVER = "t3-code";
 /**
@@ -3516,6 +3518,148 @@ const T3_LAUNCH_TOOLS = [
 const T3_DELEGATE_TOOL = "delegate_task";
 /** Claude's name for a T3 Code tool, as a hook matcher sees it. */
 const claudeT3Tool = (tool) => `mcp__${T3_SERVER}__${tool}`;
+/**
+* A hook matcher that matches exactly these tool names. Claude Code reads a matcher with a `-`
+* (as in `t3-code`) as a regex, so it is anchored: unanchored, `Write` would match `TodoWrite`.
+*/
+const exactToolMatcher = (tools) => `^(?:${tools.join("|")})$`;
+/** The skill the item installs, loaded inside T3 Code before delegating or coordinating. */
+const T3_SKILL = "t3-code";
+/** Each runtime's tool for asking the user a question with selectable options. */
+const QUESTION_TOOLS = {
+	claude: "AskUserQuestion",
+	opencode: "question",
+	codex: "request_user_input",
+	pi: void 0
+};
+/** The gate every T3 line sits behind, so a session outside T3 Code reads it as a no-op. */
+const T3_GATE = `Only when the \`${T3_SERVER}\` MCP tools are available (T3 Code also sets \`T3CODE_THREAD_ID\`) does this apply; otherwise skip it and work exactly as the rest of these instructions say.`;
+const T3_SECTION_HEADING = "## In T3 Code";
+const code$1 = (text) => `\`${text}\``;
+/** How a run asks the user: the runtime's question tool with options, never plain text when one exists. */
+function questionRule(runtime) {
+	const tool = QUESTION_TOOLS[runtime];
+	return `Ask every question with ${tool ? `the ${code$1(tool)} tool` : "the runtime's question tool when it has one (otherwise one message with numbered options)"}: selectable options, the recommended one first and labelled so, multi-select when the choices combine, and a short description per option. Never ask in plain text when a question tool exists.`;
+}
+/** The rule for showing coordination visually. */
+const VISUAL_RULE = `When coordination has several parts (waves, dependencies, parallel tickets, merge order, a status board), show it as a diagram or table: check the page with ${code$1("html_preview")}, then show it with ${code$1("html_render")}, and keep a one-line text summary beside it.`;
+const RELAY_RULE = `A child that asks a question waits for an answer: read it with ${code$1("t3_pending_request")} (${code$1("list")}, then ${code$1("read")}), ask the user with the question tool, and answer it with ${code$1("respond")}.`;
+const rungModel = (model) => model ? code$1(model) : "the session model";
+function questionLines(runtimes) {
+	return runtimes.map((r) => {
+		const tool = QUESTION_TOOLS[r];
+		return `${RUNTIME_LABELS[r]}: ${tool ? code$1(tool) : "numbered options when it has no question tool"}`;
+	}).join("; ");
+}
+/**
+* The always-on block. Runtimes that share one instructions file (AGENTS.md in a project) get one
+* block naming each runtime's question tool, so its text does not depend on which runtime planned it.
+*/
+function t3InstructionsBlock(runtimes) {
+	return `${T3_SECTION_HEADING}
+
+${T3_GATE}
+
+Inside T3 Code, load the \`${T3_SKILL}\` skill before delegating, running background work, creating worktrees, messaging another thread or session, or delivering a PR. Where T3 Code's own harness rules are stricter, they win.
+
+- **Questions**: ask with the question tool (${questionLines(runtimes)}), as selectable options, the recommended one first, multi-select when choices combine; never as plain text when a question tool exists.
+- **Visuals**: ${VISUAL_RULE}
+- **Agents**: a same-provider sub-agent that finishes in this turn keeps the native agent tool. \`delegate_task\` is for another provider's model, a separate worktree, or background work. Follow its \`next\`; never poll \`task_status\`.
+- **Worktrees**: T3 Code manages them. A child that needs its own checkout gets \`delegate_task\` with \`isolation:"worktree"\`, never \`git worktree add\`, and its checkout is never removed with \`git worktree remove\`.
+- **Threads and sessions**: \`t3_thread_read\` a thread before answering about it. A new top-level thread (\`t3_thread_launch\`) is started only when the user picks it.`;
+}
+/** The skill: how each flow step maps onto T3 Code's tools. */
+function t3SkillMarkdown(runtime, models) {
+	return `---
+name: ${T3_SKILL}
+description: Inside T3 Code only (the ${T3_SERVER} MCP tools are available). Use before delegating to an agent, running background work, creating a worktree, messaging another thread or session, asking the user a question, showing a plan or status, or delivering a PR, so the work goes through T3 Code's tools. Outside T3 Code it does not apply.
+---
+
+# Working inside T3 Code
+
+${T3_GATE}
+
+Tool names here are bare; ${RUNTIME_LABELS.claude} calls them \`mcp__${T3_SERVER}__<tool>\`.
+
+## Map each step to T3 Code
+
+| Step | Outside T3 Code | Inside T3 Code |
+|---|---|---|
+| Sub-agent on this provider that finishes in this turn (ladder rungs, scribe, planners, reviewers) | the native agent tool | the same native agent tool |
+| Work on another provider's model, in its own checkout, or left running in the background | \`agent-config delegate\` or a native agent | \`delegate_task\` |
+| One ticket per worktree (parallel waves) | \`git worktree add\` plus one orchestrator each | \`delegate_task\` with \`isolation:"worktree"\`, one per ticket, launched together |
+| Long checks, suites and builds | the foreground shell | a background command, then \`t3_background_wait\` with its task ID (${RUNTIME_LABELS.claude} only) |
+| A question for the user | text | the question tool with selectable options |
+| A plan, waves, merge order or status | text | a diagram or table through \`html_preview\` and \`html_render\` |
+| After opening a PR | the PR URL in the report | \`link_pull_request\` with its full URL |
+| Waiting for CI or reviews | polling | \`watch_pull_request\`, then end the turn; \`unwatch_pull_request\` before handing back |
+| A credential | asking in chat | \`request_secret\` |
+| Another session's work | the plan store's session rows | \`t3_thread_read\` that thread |
+
+## Delegating
+
+1. Call \`orchestrator_capabilities\` once per thread before the first \`delegate_task\`.
+2. Pick \`target.model\` from the rung: fast ${rungModel(models.fast)}, balanced ${rungModel(models.balanced)}, deep ${rungModel(models.deep)}. A ladder handoff keeps its phase line as the first line of \`task\`. On ${RUNTIME_LABELS.claude}, the brief guard checks that line against \`target.model\`, and it knows only the haiku, sonnet and opus families, so a \`plan\`, \`risk\` or \`review\` handoff stays on a Claude model.
+3. Write \`task\` so it stands alone: the child gets no history. Name the files, the acceptance criteria, the checks to run and what to report.
+4. Keep each \`taskId\`. Follow the returned \`next\` and never poll: no \`task_status\` loops, no \`sleep\`, no watchers. Read \`task_status\` once its completion wakes you.
+5. Stop a child you no longer need with \`task_cancel\`, never \`t3_thread_interrupt\`.
+6. ${RELAY_RULE}
+
+## Worktrees
+
+A \`delegate_task\` with \`isolation:"worktree"\` gets a new checkout prepared from this thread's commit, under T3 Code's worktree folder. Uncommitted edits stay behind. The child creates its own branch there, \`git fetch origin && git checkout -b <branch> origin/<base>\`, and reports the checkout path (\`pwd\`) with its result. Merges then run in that checkout. T3 Code owns it: never \`git worktree remove\` it. \`t3_worktree_list\` and \`t3_worktree_status\` show what exists.
+
+## Questions and visuals
+
+- ${questionRule(runtime)}
+- ${VISUAL_RULE}
+
+## Threads and sessions
+
+- \`t3_thread_read\` a thread before you answer about it or take over its work; mention a thread by its \`link\`.
+- \`t3_thread_send\` continues another thread's work only when the user asks for it.
+- \`t3_thread_launch\` starts a new top-level thread only when the user picks that option. Offer it as one of the question's options, beside copying the command.
+- A plan store session row records \`T3CODE_THREAD_ID\` as the session id, so another thread can find the owner.
+`;
+}
+/** The T3 lines the /continue action renders when the item is installed at its scope. */
+function t3ContinueSection(runtime, models) {
+	return `${T3_SECTION_HEADING}
+
+${T3_GATE} Load the \`${T3_SKILL}\` skill first.
+
+- **Sessions**: \`${START_SESSION}\` and the orchestrators' session rows use \`T3CODE_THREAD_ID\` as the session id. Before taking over an in_progress ticket, \`t3_thread_read\` the thread its last session names.
+- **Questions**: ${questionRule(runtime)}
+- **Show the plan**: the picked tickets, waves and merge order (parallel step 1.6, parallel-wave step 2.4) are shown as a diagram. ${VISUAL_RULE}
+- **Parallel step 2**: T3 Code manages the worktrees, so skip \`git worktree add\`. Have the scribe move each ticket to In Progress.
+- **Parallel step 3**: launch one child per ticket with \`delegate_task\`, all in the same turn: \`isolation:"worktree"\`, \`role:"implementation"\`, \`target.model\` ${rungModel(models.deep)}, \`title\` \`<IDENTIFIER> <ticket title>\`. Its \`task\` holds the orchestrator duties listed in step 3 and says: create the branch with \`git fetch origin && git checkout -b <branch> origin/<base>\`, act as the ladder orchestrator (load the \`model-ladder\` skill and hand reads, edits and reviews to ladder agents), and report the checkout path. Keep each \`taskId\` and follow \`next\` instead of waiting inline. ${RELAY_RULE}
+- **Merge loop**: step 2 runs in the checkout path each child reported. While a PR waits for CI, \`watch_pull_request\` it instead of polling.
+- **PRs**: after a PR opens, \`link_pull_request\` it with its full URL.
+- **Clean up**: T3 Code owns the children's checkouts, so skip \`git worktree remove\`. The report table adds each ticket's thread link.`;
+}
+/** The T3 lines the /brief action renders when the item is installed at its scope. */
+function t3BriefSection(runtime) {
+	return `${T3_SECTION_HEADING}
+
+${T3_GATE} Load the \`${T3_SKILL}\` skill first.
+
+- **Questions**: ${questionRule(runtime)}
+- **Show the plan**: the epic, its waves, blockers and merge order are shown as a diagram before the brief is written. ${VISUAL_RULE}
+- **Hand-off**: after copying the brief, also offer to start it in a new T3 Code thread as one option of the question. Only when the user picks it, \`t3_thread_launch\` with the brief as \`message\` and mention the thread by its \`link\`.`;
+}
+/**
+* The T3 lines the /planning action renders when the item is installed at its scope. Planning
+* stays planning: the planning guard denies T3 tools that start work elsewhere.
+*/
+function t3PlanningSection(runtime) {
+	return `${T3_SECTION_HEADING}
+
+${T3_GATE} Load the \`${T3_SKILL}\` skill first.
+
+- **Questions**: ${questionRule(runtime)}
+- **Show the plan**: the report shows the epics, waves and dependencies as a diagram, not only as text. ${VISUAL_RULE}
+- **Stay read-only**: planners stay native read-only agents. Never \`delegate_task\`, \`t3_thread_launch\`, \`create_threads\`, \`t3_thread_send\`, \`t3_worktree_handoff\` or \`schedule_task\` during planning; the next command is given to copy into a fresh thread.`;
+}
 //#endregion
 //#region src/brief.ts
 const BRIEF = "brief";
@@ -3531,7 +3675,13 @@ const CALL$1 = {
 /** The line a user adds under the phase line to let a review run on the fast rung. */
 const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
 /** The Claude tools the brief guard hook checks: agent handoffs (T3 delegate_task too), clipboard copies, brief writes. */
-const BRIEF_GUARD_MATCHER = `Agent|Task|Bash|Write|${claudeT3Tool(T3_DELEGATE_TOOL)}`;
+const BRIEF_GUARD_MATCHER = exactToolMatcher([
+	"Agent",
+	"Task",
+	"Bash",
+	"Write",
+	claudeT3Tool(T3_DELEGATE_TOOL)
+]);
 /** Claude's tool for asking the user a question with options. */
 const CLAUDE_QUESTION_TOOL$1 = "AskUserQuestion";
 const DEEP_READER$1 = agentName("read", "deep");
@@ -4789,7 +4939,16 @@ const PLANNING = "planning";
 /** The planning guard hook's file name, in the assets folder and in the hooks folder. */
 const PLANNING_GUARD_FILE = "planning-guard.mjs";
 /** The tools the planning guard hook runs for, the T3 Code tools that start work elsewhere too. */
-const PLANNING_GUARD_MATCHER = ["Write|Edit|MultiEdit|NotebookEdit|Bash|Agent|Task", ...T3_LAUNCH_TOOLS.map(claudeT3Tool)].join("|");
+const PLANNING_GUARD_MATCHER = exactToolMatcher([
+	"Write",
+	"Edit",
+	"MultiEdit",
+	"NotebookEdit",
+	"Bash",
+	"Agent",
+	"Task",
+	...T3_LAUNCH_TOOLS.map(claudeT3Tool)
+]);
 const DESCRIPTION$1 = "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed) without changing any file outside .plans/.";
 const READ_ONLY_SENTENCE = "This run is read-only: it changes no file outside .plans/ and no tracker item except this plan's own epics and stories.";
 /**
@@ -6583,7 +6742,8 @@ function continueOps(runtime, project, config) {
 		balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
 		deep: modelName(runtime, tiers, tiers.deep.effort, "deep")
 	}, briefDirText(project));
-	return actionOps(runtime, project, CONTINUE, content, "continue");
+	const t3 = t3Composed(config, project, runtime) ? withT3(content, t3ContinueSection(runtime, t3Models(tiers))) : content;
+	return actionOps(runtime, project, CONTINUE, t3, "continue");
 }
 /** How the skill shows the home directory. */
 const HOME_SHORTHAND = "~";
@@ -6613,7 +6773,8 @@ function briefOps(runtime, project, config) {
 		balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
 		deep: modelName(runtime, tiers, tiers.deep.effort, "deep")
 	}, briefDirText(project));
-	const ops = actionOps(runtime, project, BRIEF, content, "brief");
+	const t3 = t3Composed(config, project, runtime) ? withT3(content, t3BriefSection(runtime)) : content;
+	const ops = actionOps(runtime, project, BRIEF, t3, "brief");
 	if (runtime === "claude") ops.push(...briefGuardOps(project));
 	return ops;
 }
@@ -6644,7 +6805,8 @@ function planningOps(entry, runtime, config) {
 		balanced: modelName(runtime, tiers, tiers.balanced.effort, "balanced"),
 		deep: modelName(runtime, tiers, tiers.deep.effort, "deep")
 	});
-	const ops = actionOps(runtime, project, PLANNING, content, "planning");
+	const t3 = t3Composed(config, project, runtime) ? withT3(content, t3PlanningSection(runtime)) : content;
+	const ops = actionOps(runtime, project, PLANNING, t3, "planning");
 	for (const tier of TIERS) {
 		const name = plannerName(tier);
 		const agent = catalogAgent(runtime, layout(runtime, project).agents, tiers, {
@@ -6679,98 +6841,165 @@ function planningOps(entry, runtime, config) {
 	return ops;
 }
 const STATUSLINE_FILE = "statusline.sh";
+const statusline = {
+	id: "statusline",
+	title: "Status line",
+	description: "compact Claude Code status line: directory, git branch and dirty mark, model, context and rate-limit usage",
+	settings: [],
+	userOnly: true,
+	runtimes: ["claude"],
+	discover: () => ({}),
+	ops: () => {
+		const base = {
+			runtime: "claude",
+			component: "catalog"
+		};
+		const script = join(claudeDir(), STATUSLINE_FILE);
+		return [{
+			...base,
+			kind: "file",
+			path: script,
+			content: assetSource(STATUSLINE_FILE),
+			executable: true,
+			label: "status line script"
+		}, {
+			...base,
+			kind: "json-set",
+			path: join(claudeDir(), "settings.json"),
+			pointer: ["statusLine"],
+			value: {
+				type: "command",
+				command: `bash "${script}"`
+			},
+			label: "statusLine command"
+		}];
+	}
+};
+const bypassPermissions = {
+	id: "bypass-permissions",
+	title: "Bypass permissions by default",
+	description: "starts every Claude Code session on this computer with bypass permissions on, so tools run without permission prompts; uninstall restores the previous mode",
+	settings: [],
+	userOnly: true,
+	runtimes: ["claude"],
+	discover: () => ({}),
+	ops: () => {
+		const base = {
+			runtime: "claude",
+			component: "catalog",
+			kind: "json-set"
+		};
+		const settings = join(claudeDir(), "settings.json");
+		return [{
+			...base,
+			path: settings,
+			pointer: ["permissions", "defaultMode"],
+			value: "bypassPermissions",
+			label: "permissions.defaultMode = \"bypassPermissions\""
+		}, {
+			...base,
+			path: settings,
+			pointer: ["skipDangerousModePermissionPrompt"],
+			value: true,
+			label: "skipDangerousModePermissionPrompt = true"
+		}];
+	}
+};
+const continueItem = {
+	id: CONTINUE,
+	title: "Continue Kaneo or plan store tickets",
+	description: "manual /continue action that works the next Kaneo ticket, or a ticket ID from a .plans store, (or several in parallel worktrees) end to end, handing reads, edits, ticket writes and commit titles to cheap agents",
+	settings: [],
+	discover: () => ({}),
+	ops: (entry, runtime, config) => continueOps(runtime, entry.project, config)
+};
+const briefItem = {
+	id: BRIEF,
+	title: "Brief a Kaneo epic or plan store ticket for a fresh session",
+	description: "manual /brief action that diagnoses what a Kaneo epic, or a ticket ID from a .plans store, is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
+	settings: [],
+	discover: () => ({}),
+	ops: (entry, runtime, config) => briefOps(runtime, entry.project, config)
+};
+const planningItem = {
+	id: PLANNING,
+	title: "Plan work with you",
+	description: "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed, and installs the planner-fast, planner-balanced and planner-deep agents, one per rung, and an always-on instructions block saying planning reports do not authorize changes",
+	settings: [],
+	discover: () => ({}),
+	ops: (entry, runtime, config) => planningOps(entry, runtime, config)
+};
+/** The actions that render T3 Code lines when the T3 item is installed at their scope. */
+const T3_COMPOSED_ITEMS = [
+	CONTINUE,
+	BRIEF,
+	PLANNING
+];
+/**
+* Whether an action at this scope and runtime renders its T3 Code lines: the T3 item is installed
+* at the same scope for that runtime. A user-scope T3 item does not reach a project's actions,
+* which are committed and read on machines without it.
+*/
+function t3Composed(config, project, runtime) {
+	return config.catalog.some((e) => e.item === "t3-code-integration" && e.project === project && e.runtimes.includes(runtime));
+}
+/** An action's text with its T3 Code section appended. */
+function withT3(content, section) {
+	return `${content.trimEnd()}\n\n${section}\n`;
+}
+/** The rung models as raw IDs, as T3 Code's delegate_task takes them. */
+function t3Models(tiers) {
+	return {
+		fast: tiers.fast.model,
+		balanced: tiers.balanced.model,
+		deep: tiers.deep.model
+	};
+}
+/**
+* The keys to plan with the composed actions added: planning the T3 item at a scope also
+* re-renders that scope's continue, brief and planning actions, so their T3 lines follow it.
+*/
+function withT3Composed(config, keys) {
+	const scopes = keys.map(parseEntryKey).filter((k) => k.item === T3_ITEM).map((k) => k.project);
+	if (scopes.length === 0) return keys;
+	const composed = config.catalog.filter((e) => T3_COMPOSED_ITEMS.includes(e.item) && scopes.includes(e.project)).map(entryKey);
+	return [.../* @__PURE__ */ new Set([...keys, ...composed])];
+}
 const CATALOG = [
 	modelLadder,
 	kaneo,
 	commit,
+	continueItem,
+	briefItem,
+	planningItem,
 	{
-		id: CONTINUE,
-		title: "Continue Kaneo or plan store tickets",
-		description: "manual /continue action that works the next Kaneo ticket, or a ticket ID from a .plans store, (or several in parallel worktrees) end to end, handing reads, edits, ticket writes and commit titles to cheap agents",
+		id: T3_ITEM,
+		title: "T3 Code integration",
+		description: "routes agents, background work, worktrees, questions, visuals and thread-to-thread work through the T3 Code MCP tools when a session runs inside T3 Code, and changes nothing outside it: a t3-code skill, an always-on instructions block, and T3 Code lines in the /continue, /brief and /planning actions installed at the same scope",
 		settings: [],
 		discover: () => ({}),
-		ops: (entry, runtime, config) => continueOps(runtime, entry.project, config)
-	},
-	{
-		id: BRIEF,
-		title: "Brief a Kaneo epic or plan store ticket for a fresh session",
-		description: "manual /brief action that diagnoses what a Kaneo epic, or a ticket ID from a .plans store, is missing on the deep rung, asks how to run it and copies a /continue brief that works the whole epic in a fresh session, with risk-routed reviews and a Claude guard hook",
-		settings: [],
-		discover: () => ({}),
-		ops: (entry, runtime, config) => briefOps(runtime, entry.project, config)
-	},
-	{
-		id: PLANNING,
-		title: "Plan work with you",
-		description: "manual /planning action that interviews you about a project, epic, feature, fix or ticket, finds gaps and red flags on the deep rung, keeps the plan in a SQLite store under .plans and writes Kaneo epics in parallel waves when kaneo is installed, and installs the planner-fast, planner-balanced and planner-deep agents, one per rung, and an always-on instructions block saying planning reports do not authorize changes",
-		settings: [],
-		discover: () => ({}),
-		ops: (entry, runtime, config) => planningOps(entry, runtime, config)
-	},
-	{
-		id: "statusline",
-		title: "Status line",
-		description: "compact Claude Code status line: directory, git branch and dirty mark, model, context and rate-limit usage",
-		settings: [],
-		userOnly: true,
-		runtimes: ["claude"],
-		discover: () => ({}),
-		ops: () => {
-			const base = {
-				runtime: "claude",
-				component: "catalog"
-			};
-			const script = join(claudeDir(), STATUSLINE_FILE);
+		ops: (entry, runtime, config) => {
+			const where = layout(runtime, entry.project);
 			return [{
-				...base,
-				kind: "file",
-				path: script,
-				content: assetSource(STATUSLINE_FILE),
-				executable: true,
-				label: "status line script"
-			}, {
-				...base,
-				kind: "json-set",
-				path: join(claudeDir(), "settings.json"),
-				pointer: ["statusLine"],
-				value: {
-					type: "command",
-					command: `bash "${script}"`
-				},
-				label: "statusLine command"
-			}];
-		}
-	},
-	{
-		id: "bypass-permissions",
-		title: "Bypass permissions by default",
-		description: "starts every Claude Code session on this computer with bypass permissions on, so tools run without permission prompts; uninstall restores the previous mode",
-		settings: [],
-		userOnly: true,
-		runtimes: ["claude"],
-		discover: () => ({}),
-		ops: () => {
-			const base = {
-				runtime: "claude",
+				runtime,
 				component: "catalog",
-				kind: "json-set"
-			};
-			const settings = join(claudeDir(), "settings.json");
-			return [{
-				...base,
-				path: settings,
-				pointer: ["permissions", "defaultMode"],
-				value: "bypassPermissions",
-				label: "permissions.defaultMode = \"bypassPermissions\""
+				kind: "file",
+				path: join(where.skills, T3_SKILL, "SKILL.md"),
+				content: t3SkillMarkdown(runtime, t3Models(config.tiers[runtime])),
+				label: `t3 code skill ${T3_SKILL}`
 			}, {
-				...base,
-				path: settings,
-				pointer: ["skipDangerousModePermissionPrompt"],
-				value: true,
-				label: "skipDangerousModePermissionPrompt = true"
+				runtime,
+				component: "catalog",
+				kind: "block",
+				path: where.instructions,
+				content: t3InstructionsBlock(entry.runtimes.filter((r) => layout(r, entry.project).instructions === where.instructions)),
+				markers: [blockMarkers(T3_ITEM, "html")],
+				label: "t3 code instructions block"
 			}];
 		}
-	}
+	},
+	statusline,
+	bypassPermissions
 ];
 function catalogItem(id) {
 	return CATALOG.find((i) => i.id === id);
@@ -7140,7 +7369,8 @@ function detectedRuntimes() {
 * Plans every saved catalog entry, or with `only` just those (keys such as "kaneo@user" or
 * "model-ladder@user"), leaving the other entries alone.
 */
-function buildPlan(config, only) {
+function buildPlan(config, given) {
+	const only = given && withT3Composed(config, given);
 	const manifest = loadManifest().records;
 	const records = new Map(manifest.map((r) => [recordKey(r), r]));
 	const ops = catalogOps(config, only);
@@ -7175,9 +7405,14 @@ function uninstallSelection(selection, force = false) {
 	forgetCatalog(config, (e) => (key === void 0 || entryKey(e) === key) && (e.item === "model-ladder" || !kept.has(entryKey(e))), runtimes);
 	saveConfig(config);
 	const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
+	const restoreErrors = runtimes.length > 0 ? restoreShared(config, removed) : [];
+	if (key !== void 0 && parseEntryKey(key).item === "t3-code-integration") {
+		const composed = withT3Composed(config, [key]).filter((k) => k !== key);
+		if (composed.length > 0) restoreErrors.push(...applyPlan(buildPlan(config, composed)).errors);
+	}
 	return {
 		results,
-		restoreErrors: runtimes.length > 0 ? restoreShared(config, removed) : []
+		restoreErrors
 	};
 }
 function tildify(path) {

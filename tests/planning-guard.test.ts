@@ -14,7 +14,7 @@ import { afterAll, describe, expect, test } from "vite-plus/test";
 // @ts-expect-error plain .mjs asset without type declarations
 import * as guard from "../assets/planning-guard.mjs";
 import { PLANNING_GUARD_MATCHER } from "../src/planning.ts";
-import { T3_LAUNCH_TOOLS } from "../src/t3.ts";
+import { T3_LAUNCH_TOOLS, matcherTools } from "../src/t3.ts";
 
 const { FILE_WRITE_DETAIL, PLANNING_COMMAND_TAG, blockMessage, decide, repoRoot } = guard;
 
@@ -427,7 +427,7 @@ describe("planning guard T3 Code tools", () => {
   test("the tool list and the deny detail are pinned", () => {
     expect(guard.T3_LAUNCH_TOOLS).toEqual([...T3_LAUNCH_TOOLS]);
     for (const tool of T3_LAUNCH_TOOLS)
-      expect(PLANNING_GUARD_MATCHER.split("|")).toContain(`mcp__t3-code__${tool}`);
+      expect(matcherTools(PLANNING_GUARD_MATCHER)).toContain(`mcp__t3-code__${tool}`);
     expect(guard.t3LaunchDetail("delegate_task")).toBe(
       "the T3 Code tool delegate_task starts work in another thread, worktree or schedule, so it cannot run; read-only agents and T3 read tools such as t3_thread_read still run.",
     );

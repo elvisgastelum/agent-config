@@ -12,6 +12,7 @@ import {
   PHASE_PREFIX,
   briefMarkdown,
 } from "../src/brief.ts";
+import { matcherTools } from "../src/t3.ts";
 
 const { BRIEF_PHASES, BRIEF_SECTIONS, briefProblems, decide } = guard;
 
@@ -79,13 +80,21 @@ describe("brief guard: T3 Code delegate_task handoffs", () => {
   });
 
   test("the hook matcher includes delegate_task", () => {
-    expect(BRIEF_GUARD_MATCHER.split("|")).toEqual([
+    expect(matcherTools(BRIEF_GUARD_MATCHER)).toEqual([
       "Agent",
       "Task",
       "Bash",
       "Write",
       "mcp__t3-code__delegate_task",
     ]);
+  });
+
+  test("the matcher is anchored, so TodoWrite does not reach the hook", () => {
+    const matcher = new RegExp(BRIEF_GUARD_MATCHER);
+    expect(matcher.test("Write")).toBe(true);
+    expect(matcher.test("mcp__t3-code__delegate_task")).toBe(true);
+    for (const tool of ["TodoWrite", "TaskOutput", "BashOutput", "mcp__t3-code__delegate_task_x"])
+      expect(matcher.test(tool)).toBe(false);
   });
 
   test("the Agent tool's denial is unchanged", () => {

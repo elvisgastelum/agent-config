@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   catalogItem,
   catalogOps,
+  withT3Composed,
   entryKey,
   forgetCatalog,
   ladderRuntimes,
@@ -13,6 +14,7 @@ import {
   parseEntryKey,
 } from "./catalog.ts";
 import { loadConfig, saveConfig, type Config } from "./config.ts";
+import { T3_ITEM } from "./t3.ts";
 import {
   applyPlan,
   type ApplyResult,
@@ -71,7 +73,9 @@ export function detectedRuntimes(): Runtime[] {
  * Plans every saved catalog entry, or with `only` just those (keys such as "kaneo@user" or
  * "model-ladder@user"), leaving the other entries alone.
  */
-export function buildPlan(config: Config, only?: string[]): PlannedOp[] {
+export function buildPlan(config: Config, given?: string[]): PlannedOp[] {
+  // Planning the T3 item also re-renders the actions that carry its lines at that scope.
+  const only = given && withT3Composed(config, given);
   const manifest = loadManifest().records;
   const records = new Map(manifest.map((r) => [recordKey(r), r]));
   const ops = catalogOps(config, only);
@@ -162,6 +166,11 @@ export function uninstallSelection(
   // Only a partial uninstall can leave other runtimes needing a file it removed.
   const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
   const restoreErrors = runtimes.length > 0 ? restoreShared(config, removed) : [];
+  // Without the T3 item (or one of its runtimes), the actions at its scope drop their T3 lines.
+  if (key !== undefined && parseEntryKey(key).item === T3_ITEM) {
+    const composed = withT3Composed(config, [key]).filter((k) => k !== key);
+    if (composed.length > 0) restoreErrors.push(...applyPlan(buildPlan(config, composed)).errors);
+  }
   return { results, restoreErrors };
 }
 
