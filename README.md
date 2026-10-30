@@ -131,6 +131,7 @@ agi install commit                              # title-only commits, drafted by
 agi install continue                            # /continue: work the next Kaneo ticket end to end
 agi install brief                               # /brief: prepare a /continue brief for a Kaneo epic
 agi install planning                            # /planning: plan work with you, then tickets for /continue
+agi install t3-code-integration                 # inside T3 Code: agents, worktrees, questions and visuals through its MCP
 agi install statusline                          # compact Claude Code status line
 agi install bypass-permissions                  # Claude Code starts with bypass permissions on
 agi uninstall kaneo [--project .]               # remove that copy only
@@ -208,7 +209,7 @@ A manual action that reads a whole Kaneo epic, finds what is missing and writes 
 - Step 1, what is missing to complete the epic: `kaneo-scribe` reads the epic and every related ticket (subtasks, related, blockers, done tickets and PR links); `ladder-read-deep` diagnoses the done and open tickets in dependency order, then finds missing tickets, gaps and parallel waves. The overview is shown to you.
 - Step 2 asks four questions: create the missing tickets now, list them or leave them out; run parallel waves (`/continue parallel N`) or one ticket at a time; the integration branch (`dev`, the default branch or another); and review routing by risk (`ladder-reviewer-balanced` for none or low, `ladder-reviewer-deep` for medium or high), always deep, or fast for none risk.
 - Step 3 writes a brief to `~/.local/state/agent-config/briefs/<EPIC-ID>.md` (`$XDG_STATE_HOME/agent-config/briefs`) and copies it with `pbcopy`, `wl-copy`, `xclip`, `xsel` or `clip.exe`. The brief starts with `/continue`, so a fresh session works the queue: Pick → Explore (`ladder-explorer-fast`, `ladder-researcher-fast` for outside facts) → Plan (deep, picks the edit rung, prefers fast) → Edit (fast or balanced, climbs) → Risk (deep: none, low, medium or high) → Review (routed by risk, never fast unless you approved it) → Fix until no findings (stops after 3 rounds) → Final check (the ticket's owner runs the checks and reads the diff stat) → PR into the integration branch, CI, merge, ticket Done → Next, until the epic's criteria are met.
-- Every delegated handoff starts with `Phase: <phase>`. Claude's brief guard (a PreToolUse hook on `Agent|Task|Bash|Write`, Node, no dependencies) denies diagnose, plan and risk handoffs that are not on the deep rung, and reviews on fast unless the line right under the phase line is exactly `Fast review: approved by the user`. A brief must start with `/continue` and have every section: the guard checks a brief as it is written and again when it is copied. A command that copies to the clipboard and names a brief must be the copy alone, `pbcopy < <brief>` or `cat <brief> | pbcopy` (any clipboard tool, behind `env` or `sudo` too), so nothing in it can rewrite the brief after the check; a copy of a missing or incomplete brief is denied. It reads commands the way the shell splits them (pipelines, quotes, escapes, redirects, heredocs, `~` and environment variables) but cannot see a variable set inside the same command; such a copy goes through unchecked, like any input the guard cannot read. The guard reads the rung from `ladder-{explorer,researcher,designer,user-experience,reviewer}-<rung>` and `planner-<rung>` names too, and counts `ladder-orchestrator` as deep. In parallel waves each ticket is led by one `ladder-orchestrator`.
+- Every delegated handoff starts with `Phase: <phase>`. Claude's brief guard (a PreToolUse hook on `Agent|Task|Bash|Write` and T3 Code's `delegate_task`, Node, no dependencies) denies diagnose, plan and risk handoffs that are not on the deep rung, and reviews on fast unless the line right under the phase line is exactly `Fast review: approved by the user`. A brief must start with `/continue` and have every section: the guard checks a brief as it is written and again when it is copied. A command that copies to the clipboard and names a brief must be the copy alone, `pbcopy < <brief>` or `cat <brief> | pbcopy` (any clipboard tool, behind `env` or `sudo` too), so nothing in it can rewrite the brief after the check; a copy of a missing or incomplete brief is denied. It reads commands the way the shell splits them (pipelines, quotes, escapes, redirects, heredocs, `~` and environment variables) but cannot see a variable set inside the same command; such a copy goes through unchecked, like any input the guard cannot read. The guard reads the rung from `ladder-{explorer,researcher,designer,user-experience,reviewer}-<rung>` and `planner-<rung>` names too, and counts `ladder-orchestrator` as deep. A `delegate_task` handoff is checked the same way: its `task` is the handoff and `target.model` its model (haiku, sonnet and opus families only). In parallel waves each ticket is led by one `ladder-orchestrator`.
 - `/continue` treats every line after its first as the run's brief.
 
 | Runtime      | User scope (Claude / OpenCode / Codex / Pi)                               | Project scope (`--project <dir>`)                                     |
@@ -255,14 +256,39 @@ The planner agents install beside the other agents as `agents/planner-<tier>.md`
 
 It also writes an always-on instructions block (`## Planning stays planning`) to `CLAUDE.md` (Claude) or `AGENTS.md` (OpenCode, Codex, Pi), at user or project scope, on every runtime: a planning run stays read-only, and its report is not authorization to implement; its next command belongs to a fresh session. That is why a planning run stops after its report instead of starting the work.
 
-On Claude Code a planning guard enforces it: a PreToolUse hook on `Write|Edit|MultiEdit|NotebookEdit|Bash|Agent|Task` (Node, no dependencies). It turns on once the transcript shows `/planning` (the slash command or a `planning` Skill call), scanned from its first line, so it stays on after a compact, a later `/continue` or a resume. While on, it denies:
+On Claude Code a planning guard enforces it: a PreToolUse hook on `Write|Edit|MultiEdit|NotebookEdit|Bash|Agent|Task` and the T3 Code tools that start work elsewhere (Node, no dependencies). It turns on once the transcript shows `/planning` (the slash command or a `planning` Skill call), scanned from its first line, so it stays on after a compact, a later `/continue` or a resume. While on, it denies:
 
 - file writes (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`) outside `.plans/` at the repository root;
 - shell writes outside `.plans/`: redirects, `sed -i`, `tee`, `cp`, `mv`, `rm`, `git apply`, package installs, also behind wrappers such as `env`; `sqlite3` on the plan store stays open. Writes hidden inside an interpreter (`python3 -c ...`) are not caught;
 - git history, branch and checkout writes: commits, `git push`, merges and rebases, `git checkout` and `git switch` in every form, `git reset`, `git stash` (except `list` and `show`), `git branch <name>`, `git worktree add` (also through `git -C`); `git status`, `git diff`, `git log` and `git branch --list` pass. `sqlite3` on a database outside `.plans/` is denied too;
-- writer sub-agents: `ladder-edit-*`, `ladder-orchestrator`, `general-purpose`, and any `Agent`/`Task` call without `subagent_type`. Planners, readers, explorers, researchers and reviewers still run.
+- writer sub-agents: `ladder-edit-*`, `ladder-orchestrator`, `general-purpose`, and any `Agent`/`Task` call without `subagent_type`. Planners, readers, explorers, researchers and reviewers still run;
+- T3 Code tools that start work in another thread, worktree or schedule: `delegate_task`, `t3_thread_launch`, `create_threads`, `t3_thread_send`, `t3_worktree_handoff`, `schedule_task`, `run_scheduled_task_now`. T3 read tools such as `t3_thread_read` still run.
 
 Each denial says what was refused and points to the way out: start a fresh session (`/clear` or a new session) and run `/brief` or `/continue` there. Hook input it cannot read lets the call through, so the guard never breaks a session; a malformed call it guards is denied.
+
+### t3-code-integration
+
+For sessions that T3 Code runs, on any provider it hosts (Claude Code, Codex, OpenCode, Pi). Everything it installs is gated on the `t3-code` MCP tools being available: outside T3 Code, every flow works exactly as without it. Install it at user or project scope.
+
+- A `t3-code` skill maps each flow step onto T3 Code's tools. Same-provider sub-agents that finish in the turn stay native. `delegate_task` covers another provider's model, a separate checkout or background work, and runs follow its `next` instead of polling. Long checks wait with `t3_background_wait`. Opened PRs get `link_pull_request`, and `watch_pull_request` waits on CI. `t3_thread_read` reads another session, and `request_secret` handles credentials.
+- An always-on instructions block (`## In T3 Code`) in `CLAUDE.md` or `AGENTS.md`:
+  - every question goes through the runtime's question tool as selectable options, with the recommended option first and multi-select when choices combine (Claude `AskUserQuestion`, OpenCode `question`, Codex `request_user_input`);
+  - waves, dependencies, merge order and status boards are shown as a diagram through `html_preview` and `html_render`;
+  - worktrees are T3 Code's.
+- The `/continue`, `/brief` and `/planning` actions installed at the same scope get an `## In T3 Code` section:
+  - parallel tickets run as `delegate_task` children with `isolation:"worktree"` (T3 Code makes and keeps the checkout; no `git worktree add` or `remove`);
+  - plan store sessions record `T3CODE_THREAD_ID`;
+  - `/brief` can start its brief in a new thread, when you pick that option;
+  - `/planning` stays read-only: its guard denies the T3 tools that start work.
+
+  Installing or uninstalling the item re-renders those actions. A user-scope item does not change a project's committed actions.
+
+| Agent    | User scope                                                                   | Project scope                                    |
+| -------- | ---------------------------------------------------------------------------- | ------------------------------------------------ |
+| Claude   | `~/.claude/skills/t3-code/SKILL.md`, `~/.claude/CLAUDE.md`                   | `.claude/skills/t3-code/SKILL.md`, `CLAUDE.md`   |
+| OpenCode | `~/.config/opencode/skills/t3-code/SKILL.md`, `~/.config/opencode/AGENTS.md` | `.opencode/skills/t3-code/SKILL.md`, `AGENTS.md` |
+| Codex    | `~/.codex/skills/t3-code/SKILL.md`, `~/.codex/AGENTS.md`                     | `.agents/skills/t3-code/SKILL.md`, `AGENTS.md`   |
+| Pi       | `~/.pi/agent/skills/t3-code/SKILL.md`, `~/.pi/agent/AGENTS.md`               | `.pi/skills/t3-code/SKILL.md`, `AGENTS.md`       |
 
 ### statusline
 

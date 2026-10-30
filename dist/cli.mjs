@@ -8182,7 +8182,7 @@ const HELP = `agent-config ${VERSION}
 Configure Claude Code, OpenCode, Codex and Pi from a catalog of abilities, such as
 the model ladder (route reads and edits to the cheapest capable model: fast → balanced
 → deep), Kaneo work tracking, title-only commits, the /continue and /brief actions for
-Kaneo or .plans store tickets, and a Claude Code status line.
+Kaneo or .plans store tickets, T3 Code integration, and a Claude Code status line.
 Also installed as \`agi\` (short alias) and \`model-ladder\` (its name before 0.3.0).
 
 Usage:
