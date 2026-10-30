@@ -4076,7 +4076,7 @@ function migrateLegacyLayout() {
 }
 //#endregion
 //#region src/version.ts
-const VERSION = "0.20.0";
+const VERSION = "0.21.0";
 /** Whether `version` ("0.15.0") is a later release than `than`, comparing each number in turn. */
 function isNewer(version, than = VERSION) {
 	const a = version.split(".").map(Number);
