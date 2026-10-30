@@ -13,6 +13,8 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vite-plus/test";
 // @ts-expect-error plain .mjs asset without type declarations
 import * as guard from "../assets/planning-guard.mjs";
+import { PLANNING_GUARD_MATCHER } from "../src/planning.ts";
+import { T3_LAUNCH_TOOLS } from "../src/t3.ts";
 
 const { FILE_WRITE_DETAIL, PLANNING_COMMAND_TAG, blockMessage, decide, repoRoot } = guard;
 
@@ -380,6 +382,55 @@ describe("planning guard writer sub-agents", () => {
     );
     expect(decide(agent({}))).toContain("no subagent_type");
     for (const input of [EDIT, BASH]) expect(guard.writerAgentRule(input)).toBeUndefined();
+  });
+});
+
+describe("planning guard T3 Code tools", () => {
+  const t3 = (tool: string, tool_input: object = { task: "implement the plan" }) => ({
+    tool_name: `mcp__t3-code__${tool}`,
+    tool_input,
+    transcript_path: planningPath(),
+  });
+
+  test("tools that start work in another thread, worktree or schedule are blocked", () => {
+    for (const tool of [
+      "delegate_task",
+      "t3_thread_launch",
+      "create_threads",
+      "t3_thread_send",
+      "t3_worktree_handoff",
+      "schedule_task",
+      "run_scheduled_task_now",
+    ])
+      expect(decide(t3(tool))).toBe(blockMessage(guard.t3LaunchDetail(tool)));
+  });
+
+  test("read-only T3 tools and other MCP servers pass", () => {
+    for (const tool of [
+      "t3_thread_read",
+      "task_status",
+      "html_render",
+      "orchestrator_capabilities",
+    ])
+      expect(decide(t3(tool))).toBeUndefined();
+    expect(
+      decide({ ...t3("delegate_task"), tool_name: "mcp__other__delegate_task" }),
+    ).toBeUndefined();
+  });
+
+  test("outside planning a T3 delegation passes", () => {
+    expect(
+      decide({ ...t3("delegate_task"), transcript_path: transcript(userEntry("hi")) }),
+    ).toBeUndefined();
+  });
+
+  test("the tool list and the deny detail are pinned", () => {
+    expect(guard.T3_LAUNCH_TOOLS).toEqual([...T3_LAUNCH_TOOLS]);
+    for (const tool of T3_LAUNCH_TOOLS)
+      expect(PLANNING_GUARD_MATCHER.split("|")).toContain(`mcp__t3-code__${tool}`);
+    expect(guard.t3LaunchDetail("delegate_task")).toBe(
+      "the T3 Code tool delegate_task starts work in another thread, worktree or schedule, so it cannot run; read-only agents and T3 read tools such as t3_thread_read still run.",
+    );
   });
 });
 

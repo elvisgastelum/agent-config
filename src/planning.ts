@@ -16,6 +16,7 @@ import {
 import { BRIEF } from "./brief.ts";
 import { phase } from "./loop.ts";
 import { LADDER_ITEM } from "./ops.ts";
+import { T3_LAUNCH_TOOLS, claudeT3Tool } from "./t3.ts";
 import { agentName, type Runtime, type Tier } from "./tiers.ts";
 
 export const PLANNING = "planning";
@@ -23,8 +24,11 @@ export const PLANNING = "planning";
 /** The planning guard hook's file name, in the assets folder and in the hooks folder. */
 export const PLANNING_GUARD_FILE = "planning-guard.mjs";
 
-/** The tools the planning guard hook runs for. */
-export const PLANNING_GUARD_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash|Agent|Task";
+/** The tools the planning guard hook runs for, the T3 Code tools that start work elsewhere too. */
+export const PLANNING_GUARD_MATCHER = [
+  "Write|Edit|MultiEdit|NotebookEdit|Bash|Agent|Task",
+  ...T3_LAUNCH_TOOLS.map(claudeT3Tool),
+].join("|");
 
 const DESCRIPTION =
   "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed) without changing any file outside .plans/.";

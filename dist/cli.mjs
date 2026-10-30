@@ -3496,6 +3496,27 @@ function storeAccess(scribe) {
 **Sessions.** A session's id is the runtime's session id when the runtime exposes one, otherwise a UUID generated at the start of the run and kept for the whole run. The session or orchestrator working a ticket writes the store itself, at the absolute path it was given, and owns its \`${SESSIONS_TABLE}\` row: it inserts the row (\`started_at\`, \`last_seen_at\`) when it takes the ticket, updates \`last_seen_at\` on each of its store writes, writes the PR URL to ${code$1(PR_URL_COLUMN)} after opening the PR, and sets \`ended_at\` when the PR is opened, it stops or it fails. Ended sessions never count as active.`;
 }
 //#endregion
+//#region src/t3.ts
+/** The MCP server T3 Code adds to every session it starts. */
+const T3_SERVER = "t3-code";
+/**
+* T3 Code tools that start work in a child agent, another thread, a worktree or a scheduled run.
+* The planning guard denies them; keep in step with T3_LAUNCH_TOOLS in assets/planning-guard.mjs.
+*/
+const T3_LAUNCH_TOOLS = [
+	"delegate_task",
+	"t3_thread_launch",
+	"create_threads",
+	"t3_thread_send",
+	"t3_worktree_handoff",
+	"schedule_task",
+	"run_scheduled_task_now"
+];
+/** T3 Code's child-agent tool, whose handoffs the brief guard checks. */
+const T3_DELEGATE_TOOL = "delegate_task";
+/** Claude's name for a T3 Code tool, as a hook matcher sees it. */
+const claudeT3Tool = (tool) => `mcp__${T3_SERVER}__${tool}`;
+//#endregion
 //#region src/brief.ts
 const BRIEF = "brief";
 const BRIEF_GUARD_FILE = "brief-guard.mjs";
@@ -3509,8 +3530,8 @@ const CALL$1 = {
 };
 /** The line a user adds under the phase line to let a review run on the fast rung. */
 const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
-/** The Claude tools the brief guard hook checks: agent handoffs, clipboard copies, brief writes. */
-const BRIEF_GUARD_MATCHER = "Agent|Task|Bash|Write";
+/** The Claude tools the brief guard hook checks: agent handoffs (T3 delegate_task too), clipboard copies, brief writes. */
+const BRIEF_GUARD_MATCHER = `Agent|Task|Bash|Write|${claudeT3Tool(T3_DELEGATE_TOOL)}`;
 /** Claude's tool for asking the user a question with options. */
 const CLAUDE_QUESTION_TOOL$1 = "AskUserQuestion";
 const DEEP_READER$1 = agentName("read", "deep");
@@ -4767,8 +4788,8 @@ function uninstall(filter, force = false) {
 const PLANNING = "planning";
 /** The planning guard hook's file name, in the assets folder and in the hooks folder. */
 const PLANNING_GUARD_FILE = "planning-guard.mjs";
-/** The tools the planning guard hook runs for. */
-const PLANNING_GUARD_MATCHER = "Write|Edit|MultiEdit|NotebookEdit|Bash|Agent|Task";
+/** The tools the planning guard hook runs for, the T3 Code tools that start work elsewhere too. */
+const PLANNING_GUARD_MATCHER = ["Write|Edit|MultiEdit|NotebookEdit|Bash|Agent|Task", ...T3_LAUNCH_TOOLS.map(claudeT3Tool)].join("|");
 const DESCRIPTION$1 = "Plan a project, epic, feature, fix or ticket with you: ask only the questions that matter, each with a recommended answer, find gaps and red flags, then write ready-to-run tickets (Kaneo epics in parallel waves when installed) without changing any file outside .plans/.";
 const READ_ONLY_SENTENCE = "This run is read-only: it changes no file outside .plans/ and no tracker item except this plan's own epics and stories.";
 /**

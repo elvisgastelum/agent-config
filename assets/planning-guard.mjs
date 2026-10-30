@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // agent-config planning guard: a Claude Code PreToolUse hook (Write, Edit, MultiEdit,
-// NotebookEdit, Bash, Agent, Task).
+// NotebookEdit, Bash, Agent, Task and the T3 Code tools in T3_LAUNCH_TOOLS).
 //
 // Holds a /planning session to planning: once the transcript shows /planning was started, tool
 // calls run through the rules in RULES and the first rule that objects denies the call. This file
 // holds the activation detection, the shared deny message, the rule pipeline, the file-write
 // rule (with planning active, file edits are denied unless they land under .plans/ at the
 // repository root), the writer-agent rule (sub-agents on the WRITER_AGENTS denylist, or
-// started without subagent_type, are denied) and the shell-write rule (Bash commands that write
+// started without subagent_type, are denied), the T3 rule (T3 Code tools that start a child
+// agent, a thread, a worktree or a scheduled run are denied) and the shell-write rule (Bash commands that write
 // outside .plans/ are denied: redirects, known writing commands, wrapped, nested and substituted
 // commands).
 //
@@ -267,6 +268,38 @@ export function writerAgentRule(input) {
   } catch {
     return writerAgentDetail(MISSING_AGENT_TYPE);
   }
+}
+
+// ---------------------------------------------------------------- T3 Code tools
+
+/** Claude names a T3 Code MCP tool `mcp__t3-code__<tool>`. */
+const T3_TOOL_PREFIX = "mcp__t3-code__";
+
+/**
+ * T3 Code tools that start work somewhere the guard cannot see: a child agent, another thread,
+ * a worktree or a scheduled run. Keep in step with T3_LAUNCH_TOOLS in src/t3.ts.
+ */
+export const T3_LAUNCH_TOOLS = [
+  "delegate_task",
+  "t3_thread_launch",
+  "create_threads",
+  "t3_thread_send",
+  "t3_worktree_handoff",
+  "schedule_task",
+  "run_scheduled_task_now",
+];
+
+/** The detail the T3 rule denies with; `tool` is the bare T3 tool name. */
+export function t3LaunchDetail(tool) {
+  return `the T3 Code tool ${tool} starts work in another thread, worktree or schedule, so it cannot run; read-only agents and T3 read tools such as t3_thread_read still run.`;
+}
+
+/** Denies the T3 Code tools that start work elsewhere: their writes would escape this guard. */
+export function t3LaunchRule(input) {
+  const name = input?.tool_name;
+  if (typeof name !== "string" || !name.startsWith(T3_TOOL_PREFIX)) return undefined;
+  const tool = name.slice(T3_TOOL_PREFIX.length);
+  return T3_LAUNCH_TOOLS.includes(tool) ? t3LaunchDetail(tool) : undefined;
 }
 
 // ---------------------------------------------------------------- shell writes
@@ -956,7 +989,7 @@ export function shellWriteRule(input) {
  * Each rule is `(input) => string | undefined`: a detail sentence to deny the call, or undefined
  * to pass. Git history and branch changes are part of the shell rule.
  */
-export const RULES = [fileWriteRule, writerAgentRule, shellWriteRule];
+export const RULES = [fileWriteRule, writerAgentRule, t3LaunchRule, shellWriteRule];
 
 /** Returns the reason to deny a tool call, or undefined to let it through. */
 export function decide(input, rules = RULES) {

@@ -428,7 +428,7 @@ test("install brief adds a manual-only action per runtime and a Claude guard hoo
     hooks: { command: string }[];
   }[];
   const guard = entries.find((e) => e.hooks.some((h) => h.command.includes("brief-guard.mjs")));
-  expect(guard?.matcher).toBe("Agent|Task|Bash|Write");
+  expect(guard?.matcher).toBe("Agent|Task|Bash|Write|mcp__t3-code__delegate_task");
 
   expect(existsSync(join(home, ".config/opencode/commands/brief.md"))).toBe(true);
   expect(read(join(home, ".codex/skills/brief/SKILL.md"))).toContain("$continue parallel <N>");

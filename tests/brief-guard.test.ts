@@ -6,7 +6,12 @@ import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 // @ts-expect-error plain .mjs asset without type declarations
 import * as guard from "../assets/brief-guard.mjs";
 import { inlineShellSplit } from "../src/catalog.ts";
-import { FAST_REVIEW_APPROVAL, PHASE_PREFIX, briefMarkdown } from "../src/brief.ts";
+import {
+  BRIEF_GUARD_MATCHER,
+  FAST_REVIEW_APPROVAL,
+  PHASE_PREFIX,
+  briefMarkdown,
+} from "../src/brief.ts";
 
 const { BRIEF_PHASES, BRIEF_SECTIONS, briefProblems, decide } = guard;
 
@@ -45,6 +50,49 @@ const INCOMPLETE = "Continue the epic\n\n# Brief: FEX-2 Epic\n";
 
 afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+});
+
+describe("brief guard: T3 Code delegate_task handoffs", () => {
+  const delegated = (task: string, model?: string) =>
+    decide({
+      tool_name: "mcp__t3-code__delegate_task",
+      tool_input: { task, ...(model ? { target: { model } } : {}) },
+    });
+
+  test("a checked phase runs only on its rung's model", () => {
+    expect(delegated("Phase: plan\nTicket: FEX-1", "claude-opus-5-5")).toBeUndefined();
+    const denied = delegated("Phase: plan\nTicket: FEX-1", "claude-haiku-5-5");
+    expect(denied).toContain("not the fast rung");
+    expect(denied).toContain("set `target.model` to a deep model");
+  });
+
+  test("a checked phase without a model is denied, unchecked phases pass", () => {
+    expect(delegated("Phase: risk\nTicket: FEX-1")).toContain("set `target.model`");
+    expect(delegated("Phase: edit\nTicket: FEX-1", "claude-haiku-5-5")).toBeUndefined();
+    expect(delegated("Ticket: FEX-1")).toBeUndefined();
+  });
+
+  test("a fast review needs the approval line, as with the Agent tool", () => {
+    const task = `Phase: review\n${FAST_REVIEW_APPROVAL}\nDiff: x`;
+    expect(delegated(task, "claude-haiku-5-5")).toBeUndefined();
+    expect(delegated("Phase: review\nDiff: x", "claude-sonnet-5-5")).toBeUndefined();
+  });
+
+  test("the hook matcher includes delegate_task", () => {
+    expect(BRIEF_GUARD_MATCHER.split("|")).toEqual([
+      "Agent",
+      "Task",
+      "Bash",
+      "Write",
+      "mcp__t3-code__delegate_task",
+    ]);
+  });
+
+  test("the Agent tool's denial is unchanged", () => {
+    expect(agent("Phase: plan\nTicket: FEX-1", "ladder-read-fast")).toContain(
+      "Use ladder-read-deep without a model override.",
+    );
+  });
 });
 
 describe("brief guard: phase rungs", () => {

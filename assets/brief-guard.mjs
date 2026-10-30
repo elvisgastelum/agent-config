@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// agent-config brief guard: a Claude Code PreToolUse hook (Agent, Task, Bash, Write).
+// agent-config brief guard: a Claude Code PreToolUse hook (Agent, Task, Bash, Write and T3 Code's
+// delegate_task, whose `task` is checked as a handoff and `target.model` as its model).
 //
 // Holds a /brief run to its structure:
 // - A delegated handoff whose prompt starts with `Phase: <phase>` runs on the rung that phase
@@ -28,6 +29,8 @@ const GUARD = "brief-guard";
 
 /** Claude tools that start a delegated agent; their prompt is the handoff. */
 const HANDOFF_TOOLS = new Set(["Agent", "Task"]);
+/** T3 Code's child-agent tool: its `task` is the handoff and `target.model` its model. */
+const T3_DELEGATE_TOOL = "mcp__t3-code__delegate_task";
 
 /** A handoff's first non-empty line names its phase, e.g. `Phase: plan`. */
 const PHASE_LINE = /^Phase:\s*([a-z]+)/i;
@@ -118,6 +121,9 @@ export function decide(input) {
   const tool = input?.tool_name;
   const args = input?.tool_input;
   if (HANDOFF_TOOLS.has(tool) && typeof args?.prompt === "string") return handoff(args);
+  if (tool === T3_DELEGATE_TOOL && typeof args?.task === "string") {
+    return handoff({ prompt: args.task, model: args.target?.model, delegated: true });
+  }
   if (tool === SHELL_TOOL && typeof args?.command === "string") {
     return copy(args.command, input.cwd);
   }
@@ -145,7 +151,7 @@ function rungOf(type, model) {
   return LADDER_AGENT.exec(type ?? "")?.[1];
 }
 
-function handoff({ prompt, subagent_type: type, model }) {
+function handoff({ prompt, subagent_type: type, model, delegated = false }) {
   const [first = "", second = ""] = nonEmptyLines(prompt);
   const phase = PHASE_LINE.exec(first)?.[1]?.toLowerCase();
   const allowed = PHASE_RUNGS.get(phase);
@@ -162,7 +168,10 @@ function handoff({ prompt, subagent_type: type, model }) {
   const fast = review
     ? ` A fast review needs the line "${FAST_REVIEW_APPROVAL}" right under the phase line, and only when the user asked for it.`
     : "";
-  return `${GUARD}: a \`Phase: ${phase}\` handoff runs on the ${allowed.join(" or ")} rung, not ${ran}.\nUse ${agents} without a model override.${fast}`;
+  const fix = delegated
+    ? `In delegate_task, set \`target.model\` to a ${allowed.join(" or ")} model.`
+    : `Use ${agents} without a model override.`;
+  return `${GUARD}: a \`Phase: ${phase}\` handoff runs on the ${allowed.join(" or ")} rung, not ${ran}.\n${fix}${fast}`;
 }
 
 /** What a brief is missing; empty when it is complete. */
