@@ -3516,6 +3516,8 @@ const T3_LAUNCH_TOOLS = [
 ];
 /** T3 Code's child-agent tool, whose handoffs the brief guard checks. */
 const T3_DELEGATE_TOOL = "delegate_task";
+/** T3 Code's tools that start a thread with a model and a first prompt, which the brief guard checks too. */
+const T3_THREAD_START_TOOLS = ["t3_thread_launch", "create_threads"];
 /** Claude's name for a T3 Code tool, as a hook matcher sees it. */
 const claudeT3Tool = (tool) => `mcp__${T3_SERVER}__${tool}`;
 /**
@@ -3599,7 +3601,7 @@ Tool names here are bare; ${RUNTIME_LABELS.claude} calls them \`mcp__${T3_SERVER
 ## Delegating
 
 1. Call \`orchestrator_capabilities\` once per thread before the first \`delegate_task\`.
-2. Pick \`target.model\` from the rung: fast ${rungModel(models.fast)}, balanced ${rungModel(models.balanced)}, deep ${rungModel(models.deep)}. A ladder handoff keeps its phase line as the first line of \`task\`. On ${RUNTIME_LABELS.claude}, the brief guard checks that line against \`target.model\`, and it knows only the haiku, sonnet and opus families, so a \`plan\`, \`risk\` or \`review\` handoff stays on a Claude model.
+2. Pick \`target.model\` from the rung: fast ${rungModel(models.fast)}, balanced ${rungModel(models.balanced)}, deep ${rungModel(models.deep)}. A ladder handoff keeps its phase line as the first line of \`task\`. On ${RUNTIME_LABELS.claude}, the brief guard checks that line against \`target.model\` (\`modelSelection.model\` in \`t3_thread_launch\`, each thread's \`target.model\` in \`create_threads\`), and it knows only the haiku, sonnet and opus families, so a \`plan\`, \`risk\` or \`review\` handoff stays on a Claude model.
 3. Write \`task\` so it stands alone: the child gets no history. Name the files, the acceptance criteria, the checks to run and what to report.
 4. Keep each \`taskId\`. Follow the returned \`next\` and never poll: no \`task_status\` loops, no \`sleep\`, no watchers. Read \`task_status\` once its completion wakes you.
 5. Stop a child you no longer need with \`task_cancel\`, never \`t3_thread_interrupt\`.
@@ -3628,7 +3630,7 @@ function t3ContinueSection(runtime, models) {
 
 ${T3_GATE} Load the \`${T3_SKILL}\` skill first.
 
-- **Sessions**: \`${START_SESSION}\` and the orchestrators' session rows use \`T3CODE_THREAD_ID\` as the session id. Before taking over an in_progress ticket, \`t3_thread_read\` the thread its last session names.
+- **Sessions**: \`${START_SESSION}\` and the orchestrators' session rows use \`T3CODE_THREAD_ID\` as the session id. Before taking over an in_progress ticket, \`t3_thread_read\` the thread its last session names; while that thread's run is still going, \`t3_thread_wait\` for it (end the turn when it returns \`next\`) instead of starting a second writer on the ticket.
 - **Questions**: ${questionRule(runtime)}
 - **Show the plan**: the picked tickets, waves and merge order (parallel step 1.6, parallel-wave step 2.4) are shown as a diagram. ${VISUAL_RULE}
 - **Parallel step 2**: T3 Code manages the worktrees, so skip \`git worktree add\`. Have the scribe move each ticket to In Progress.
@@ -3646,6 +3648,16 @@ ${T3_GATE} Load the \`${T3_SKILL}\` skill first.
 - **Questions**: ${questionRule(runtime)}
 - **Show the plan**: the epic, its waves, blockers and merge order are shown as a diagram before the brief is written. ${VISUAL_RULE}
 - **Hand-off**: after copying the brief, also offer to start it in a new T3 Code thread as one option of the question. Only when the user picks it, \`t3_thread_launch\` with the brief as \`message\` and mention the thread by its \`link\`.`;
+}
+/** The T3 lines the kaneo skill renders when the item is installed at its scope. */
+function t3KaneoSection() {
+	return `${T3_SECTION_HEADING}
+
+${T3_GATE} Load the \`${T3_SKILL}\` skill first.
+
+- **Thread title**: when this thread starts work on a ticket, \`t3_thread_update\` with \`action:"rename"\` and \`title\` \`<IDENTIFIER> <ticket title>\`, so the thread list reads like the board.
+- **PRs**: after the PR opens, \`link_pull_request\` it with its full URL beside the Kaneo comment, and \`watch_pull_request\` it while it waits on checks or reviews. Write a review guide with \`write_pull_request_guides\` only when the user asks for one: it runs for minutes in a temporary checkout and fails while guides are off. It does not change the PR body, so the \`Kaneo:\` line above stays the PR's own.
+- **Done**: once the ticket is in its done column, \`t3_thread_organize\` with \`action:"settle"\` closes this thread out; \`unsettle\` undoes it.`;
 }
 /**
 * The T3 lines the /planning action renders when the item is installed at its scope. Planning
@@ -3674,13 +3686,14 @@ const CALL$1 = {
 };
 /** The line a user adds under the phase line to let a review run on the fast rung. */
 const FAST_REVIEW_APPROVAL = "Fast review: approved by the user";
-/** The Claude tools the brief guard hook checks: agent handoffs (T3 delegate_task too), clipboard copies, brief writes. */
+/** The Claude tools the brief guard hook checks: agent handoffs (T3 delegate_task, t3_thread_launch and create_threads too), clipboard copies, brief writes. */
 const BRIEF_GUARD_MATCHER = exactToolMatcher([
 	"Agent",
 	"Task",
 	"Bash",
 	"Write",
-	claudeT3Tool(T3_DELEGATE_TOOL)
+	claudeT3Tool(T3_DELEGATE_TOOL),
+	...T3_THREAD_START_TOOLS.map(claudeT3Tool)
 ]);
 /** Claude's tool for asking the user a question with options. */
 const CLAUDE_QUESTION_TOOL$1 = "AskUserQuestion";
@@ -6458,7 +6471,7 @@ const kaneo = {
 				component: "catalog",
 				kind: "file",
 				path: join(where.skills, KANEO_SKILL, "SKILL.md"),
-				content: kaneoSkillMarkdown(runtime, modelName(runtime, tiers)),
+				content: t3Composed(config, entry.project, runtime) ? withT3(kaneoSkillMarkdown(runtime, modelName(runtime, tiers)), t3KaneoSection()) : kaneoSkillMarkdown(runtime, modelName(runtime, tiers)),
 				label: `kaneo skill ${KANEO_SKILL}`
 			},
 			{
@@ -6929,11 +6942,12 @@ const planningItem = {
 	discover: () => ({}),
 	ops: (entry, runtime, config) => planningOps(entry, runtime, config)
 };
-/** The actions that render T3 Code lines when the T3 item is installed at their scope. */
+/** The actions and skills that render T3 Code lines when the T3 item is installed at their scope. */
 const T3_COMPOSED_ITEMS = [
 	CONTINUE,
 	BRIEF,
-	PLANNING
+	PLANNING,
+	KANEO_ITEM
 ];
 /**
 * Whether an action at this scope and runtime renders its T3 Code lines: the T3 item is installed
@@ -6975,7 +6989,7 @@ const CATALOG = [
 	{
 		id: T3_ITEM,
 		title: "T3 Code integration",
-		description: "routes agents, background work, worktrees, questions, visuals and thread-to-thread work through the T3 Code MCP tools when a session runs inside T3 Code, and changes nothing outside it: a t3-code skill, an always-on instructions block, and T3 Code lines in the /continue, /brief and /planning actions installed at the same scope",
+		description: "routes agents, background work, worktrees, questions, visuals and thread-to-thread work through the T3 Code MCP tools when a session runs inside T3 Code, and changes nothing outside it: a t3-code skill, an always-on instructions block, and T3 Code lines in the /continue, /brief and /planning actions and the kaneo skill installed at the same scope",
 		settings: [],
 		discover: () => ({}),
 		ops: (entry, runtime, config) => {

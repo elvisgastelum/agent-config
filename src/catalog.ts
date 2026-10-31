@@ -59,6 +59,7 @@ import {
   t3BriefSection,
   t3ContinueSection,
   t3InstructionsBlock,
+  t3KaneoSection,
   t3PlanningSection,
   t3SkillMarkdown,
   type T3Models,
@@ -378,7 +379,9 @@ const kaneo: CatalogItem = {
         component: "catalog",
         kind: "file",
         path: join(where.skills, KANEO_SKILL, "SKILL.md"),
-        content: kaneoSkillMarkdown(runtime, modelName(runtime, tiers)),
+        content: t3Composed(config, entry.project, runtime)
+          ? withT3(kaneoSkillMarkdown(runtime, modelName(runtime, tiers)), t3KaneoSection())
+          : kaneoSkillMarkdown(runtime, modelName(runtime, tiers)),
         label: `kaneo skill ${KANEO_SKILL}`,
       },
       {
@@ -925,8 +928,8 @@ const planningItem: CatalogItem = {
 
 // ---------------------------------------------------------------- t3 code
 
-/** The actions that render T3 Code lines when the T3 item is installed at their scope. */
-export const T3_COMPOSED_ITEMS = [CONTINUE, BRIEF, PLANNING];
+/** The actions and skills that render T3 Code lines when the T3 item is installed at their scope. */
+export const T3_COMPOSED_ITEMS = [CONTINUE, BRIEF, PLANNING, KANEO_ITEM];
 
 /**
  * Whether an action at this scope and runtime renders its T3 Code lines: the T3 item is installed
@@ -969,7 +972,7 @@ const t3Code: CatalogItem = {
   id: T3_ITEM,
   title: "T3 Code integration",
   description:
-    "routes agents, background work, worktrees, questions, visuals and thread-to-thread work through the T3 Code MCP tools when a session runs inside T3 Code, and changes nothing outside it: a t3-code skill, an always-on instructions block, and T3 Code lines in the /continue, /brief and /planning actions installed at the same scope",
+    "routes agents, background work, worktrees, questions, visuals and thread-to-thread work through the T3 Code MCP tools when a session runs inside T3 Code, and changes nothing outside it: a t3-code skill, an always-on instructions block, and T3 Code lines in the /continue, /brief and /planning actions and the kaneo skill installed at the same scope",
   settings: [],
   discover: () => ({}),
   ops: (entry, runtime, config) => {

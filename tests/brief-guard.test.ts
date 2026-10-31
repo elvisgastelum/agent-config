@@ -86,6 +86,8 @@ describe("brief guard: T3 Code delegate_task handoffs", () => {
       "Bash",
       "Write",
       "mcp__t3-code__delegate_task",
+      "mcp__t3-code__t3_thread_launch",
+      "mcp__t3-code__create_threads",
     ]);
   });
 
@@ -95,6 +97,47 @@ describe("brief guard: T3 Code delegate_task handoffs", () => {
     expect(matcher.test("mcp__t3-code__delegate_task")).toBe(true);
     for (const tool of ["TodoWrite", "TaskOutput", "BashOutput", "mcp__t3-code__delegate_task_x"])
       expect(matcher.test(tool)).toBe(false);
+  });
+
+  test("t3_thread_launch is checked like a handoff: its message and modelSelection.model", () => {
+    const launched = (message: string, model?: string) =>
+      decide({
+        tool_name: "mcp__t3-code__t3_thread_launch",
+        tool_input: { title: "FEX-1", message, ...(model ? { modelSelection: { model } } : {}) },
+      });
+    expect(launched("Phase: plan\nTicket: FEX-1", "claude-opus-5-5")).toBeUndefined();
+    const denied = launched("Phase: plan\nTicket: FEX-1", "claude-haiku-5-5");
+    expect(denied).toContain("not the fast rung");
+    expect(denied).toContain("In t3_thread_launch, set `modelSelection.model` to a deep model");
+    expect(launched("Phase: risk\nTicket: FEX-1")).toContain(
+      "In t3_thread_launch, set `modelSelection.model`",
+    );
+    // A brief hand-off has no phase line, and an idle thread has no message.
+    expect(launched("/continue FEX-1", "claude-haiku-5-5")).toBeUndefined();
+    expect(
+      decide({ tool_name: "mcp__t3-code__t3_thread_launch", tool_input: { title: "x" } }),
+    ).toBeUndefined();
+  });
+
+  test("create_threads checks every thread's prompt and target.model", () => {
+    const created = (...threads: { prompt: string; model?: string }[]) =>
+      decide({
+        tool_name: "mcp__t3-code__create_threads",
+        tool_input: {
+          threads: threads.map(({ prompt, model }) => ({
+            title: "t",
+            prompt,
+            ...(model ? { target: { model } } : {}),
+          })),
+        },
+      });
+    const ok = { prompt: "Phase: plan\nTicket: FEX-1", model: "claude-opus-5-5" };
+    const bad = { prompt: "Phase: plan\nTicket: FEX-2", model: "claude-haiku-5-5" };
+    expect(created(ok, { prompt: "Ticket: FEX-3" })).toBeUndefined();
+    expect(created(ok, bad)).toContain(
+      "In create_threads, set each thread's `target.model` to a deep model",
+    );
+    expect(decide({ tool_name: "mcp__t3-code__create_threads", tool_input: {} })).toBeUndefined();
   });
 
   test("the Agent tool's denial is unchanged", () => {

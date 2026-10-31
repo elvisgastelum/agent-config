@@ -143,3 +143,40 @@ test("a project-scope item leaves the user-scope actions alone", () => {
   expect(read(join(project, ".claude/skills/continue/SKILL.md"))).toContain(SECTION);
   expect(read(join(project, ".claude/skills/t3-code/SKILL.md"))).toContain("name: t3-code");
 });
+
+test("kaneo's skill gets T3 Code lines only when the item is installed at its scope", () => {
+  const kaneo = join(home, ".claude/skills/kaneo-work-tracking/SKILL.md");
+  expect(
+    run("install", "kaneo", "--runtime", "claude", "--url", "https://kaneo.example.com", "--yes")
+      .code,
+  ).toBe(0);
+  const plain = read(kaneo);
+  expect(plain).not.toContain(SECTION);
+
+  const installed = run("install", ITEM, "--runtime", "claude", "--yes", "--json");
+  expect(installed.code).toBe(0);
+  expect(
+    (JSON.parse(installed.stdout).plan as { item: string }[]).some((x) => x.item === "kaneo@user"),
+  ).toBe(true);
+  const text = read(kaneo);
+  expect(text.startsWith(plain.trimEnd())).toBe(true);
+  expect(text).toContain(SECTION);
+  expect(text).toContain("`t3_thread_update`");
+  expect(text).toContain("`link_pull_request`");
+  expect(text).toContain("`t3_thread_organize`");
+  expect(text).toContain("`write_pull_request_guides`");
+
+  expect(run("uninstall", ITEM, "--yes").code).toBe(0);
+  expect(read(kaneo)).toBe(plain);
+});
+
+test("/continue waits for a running ticket thread before taking the ticket over", () => {
+  expect(run("install", "continue", "--runtime", "claude", "--yes").code).toBe(0);
+  expect(run("install", ITEM, "--runtime", "claude", "--yes").code).toBe(0);
+  expect(read(actions.continue())).toContain("`t3_thread_wait`");
+});
+
+test("the brief guard's thread tools are listed in the README", () => {
+  const readme = read(join(import.meta.dirname, "..", "README.md"));
+  expect(readme).toContain("`t3_thread_launch` and `create_threads` handoffs");
+});

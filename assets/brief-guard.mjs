@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // agent-config brief guard: a Claude Code PreToolUse hook (Agent, Task, Bash, Write and T3 Code's
-// delegate_task, whose `task` is checked as a handoff and `target.model` as its model).
+// delegate_task, whose `task` is checked as a handoff and `target.model` as its model; t3_thread_launch
+// and create_threads are checked the same way through their first prompt and model).
 //
 // Holds a /brief run to its structure:
 // - A delegated handoff whose prompt starts with `Phase: <phase>` runs on the rung that phase
@@ -31,6 +32,14 @@ const GUARD = "brief-guard";
 const HANDOFF_TOOLS = new Set(["Agent", "Task"]);
 /** T3 Code's child-agent tool: its `task` is the handoff and `target.model` its model. */
 const T3_DELEGATE_TOOL = "mcp__t3-code__delegate_task";
+/** T3 Code's thread tools: the first prompt is the handoff (`message`, or each thread's `prompt`). */
+const T3_THREAD_LAUNCH_TOOL = "mcp__t3-code__t3_thread_launch";
+const T3_CREATE_THREADS_TOOL = "mcp__t3-code__create_threads";
+
+/** How a denial tells each T3 tool to set its model. */
+const DELEGATE_MODEL_FIX = "In delegate_task, set `target.model`";
+const LAUNCH_MODEL_FIX = "In t3_thread_launch, set `modelSelection.model`";
+const CREATE_MODEL_FIX = "In create_threads, set each thread's `target.model`";
 
 /** A handoff's first non-empty line names its phase, e.g. `Phase: plan`. */
 const PHASE_LINE = /^Phase:\s*([a-z]+)/i;
@@ -122,7 +131,26 @@ export function decide(input) {
   const args = input?.tool_input;
   if (HANDOFF_TOOLS.has(tool) && typeof args?.prompt === "string") return handoff(args);
   if (tool === T3_DELEGATE_TOOL && typeof args?.task === "string") {
-    return handoff({ prompt: args.task, model: args.target?.model, delegated: true });
+    return handoff({ prompt: args.task, model: args.target?.model, modelFix: DELEGATE_MODEL_FIX });
+  }
+  if (tool === T3_THREAD_LAUNCH_TOOL && typeof args?.message === "string") {
+    return handoff({
+      prompt: args.message,
+      model: args.modelSelection?.model,
+      modelFix: LAUNCH_MODEL_FIX,
+    });
+  }
+  if (tool === T3_CREATE_THREADS_TOOL && Array.isArray(args?.threads)) {
+    for (const thread of args.threads) {
+      if (typeof thread?.prompt !== "string") continue;
+      const denied = handoff({
+        prompt: thread.prompt,
+        model: thread.target?.model,
+        modelFix: CREATE_MODEL_FIX,
+      });
+      if (denied) return denied;
+    }
+    return undefined;
   }
   if (tool === SHELL_TOOL && typeof args?.command === "string") {
     return copy(args.command, input.cwd);
@@ -151,7 +179,7 @@ function rungOf(type, model) {
   return LADDER_AGENT.exec(type ?? "")?.[1];
 }
 
-function handoff({ prompt, subagent_type: type, model, delegated = false }) {
+function handoff({ prompt, subagent_type: type, model, modelFix }) {
   const [first = "", second = ""] = nonEmptyLines(prompt);
   const phase = PHASE_LINE.exec(first)?.[1]?.toLowerCase();
   const allowed = PHASE_RUNGS.get(phase);
@@ -168,8 +196,8 @@ function handoff({ prompt, subagent_type: type, model, delegated = false }) {
   const fast = review
     ? ` A fast review needs the line "${FAST_REVIEW_APPROVAL}" right under the phase line, and only when the user asked for it.`
     : "";
-  const fix = delegated
-    ? `In delegate_task, set \`target.model\` to a ${allowed.join(" or ")} model.`
+  const fix = modelFix
+    ? `${modelFix} to a ${allowed.join(" or ")} model.`
     : `Use ${agents} without a model override.`;
   return `${GUARD}: a \`Phase: ${phase}\` handoff runs on the ${allowed.join(" or ")} rung, not ${ran}.\n${fix}${fast}`;
 }
