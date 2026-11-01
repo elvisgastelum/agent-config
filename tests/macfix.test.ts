@@ -8,9 +8,12 @@ import {
   isSafeHost,
   remoteCommand,
   runFix,
+  remoteVersionProblem,
   runRemote,
   shellQuote,
   sshArgs,
+  sshHostsFrom,
+  versionAtLeast,
   sudoInvocation,
 } from "../src/macfix.ts";
 import { fakeMac, mutations, recorder } from "./macfix-helpers.ts";
@@ -141,4 +144,36 @@ test("ssh runs non-interactively and ends option parsing before the host", () =>
   const args = sshArgs("personal", "cmd");
   expect(args).toContain("BatchMode=yes");
   expect(args.slice(-3)).toEqual(["--", "personal", "cmd"]);
+});
+
+test("sshHostsFrom lists concrete host aliases once, skipping patterns", () => {
+  const config = [
+    "Host *",
+    "  ServerAliveInterval 30",
+    "host personal laptop.local",
+    "Host=work",
+    "Host *.corp !bad dev?",
+    "Host personal",
+    "Host -oProxyCommand=evil",
+    "Match host x",
+  ].join("\n");
+  expect(sshHostsFrom(config)).toEqual(["personal", "laptop.local", "work"]);
+  expect(sshHostsFrom("")).toEqual([]);
+});
+
+test("a remote agent-config older than the fix-claude-code command is named before anything runs", () => {
+  expect(remoteVersionProblem("mac", 0, "0.23.0\n")).toBeUndefined();
+  expect(remoteVersionProblem("mac", 0, "0.30.1\n")).toBeUndefined();
+  expect(remoteVersionProblem("mac", 0, "1.0.0")).toBeUndefined();
+  expect(remoteVersionProblem("mac", 0, "0.22.0\n")).toContain("older than 0.23.0");
+  expect(remoteVersionProblem("mac", 0, "0.22.0\n")).toContain("self-update");
+  expect(remoteVersionProblem("mac", 127, "")).toContain("install it there first");
+  expect(remoteVersionProblem("mac", 0, "not a version")).toContain("install it there first");
+  expect(remoteVersionProblem("mac", 255, "")).toContain("could not reach mac");
+});
+
+test("versionAtLeast compares each part as a number", () => {
+  expect(versionAtLeast("0.9.0", "0.23.0")).toBe(false);
+  expect(versionAtLeast("0.23.0", "0.23.0")).toBe(true);
+  expect(versionAtLeast("0.100.0", "0.23.0")).toBe(true);
 });

@@ -37,7 +37,7 @@ Options: \`--binary PATH\`, \`--timeout SECONDS\` (each launch test, default 20)
 The password is needed only for the \`sudo killall syspolicyd\` step, and only the user may provide it.
 
 - Never ask for it in chat, never read it, and never put it in a command, an argument, an environment variable or a file you write. Never echo or log it.
-- The user can type it hidden in the agent-config TUI (\`agent-config\`, then "Fix Claude Code permissions"): it goes to \`sudo -S\` and over ssh through stdin only, and is not saved.
+- The user can type it hidden in the agent-config picker: they run \`${CMD}\` with no arguments in a terminal (or \`agent-config\`, then "${MACFIX_TITLE}"), pick the Mac from their ssh hosts, and type the password. It goes to \`sudo -S\` and over ssh through stdin only, and is not saved.
 - Or in a terminal: \`${CMD} remote <host> fix\` prompts without echo. On this Mac, a file from \`--password-file\` or a pipe into \`--password-stdin\` is the user's to create; do not create one for them.
 - With passwordless sudo, \`fix\` needs no password at all.
 

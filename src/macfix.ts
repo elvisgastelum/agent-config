@@ -314,21 +314,87 @@ export function isSafeHost(host: string): boolean {
 export function remoteCommand(
   o: Pick<RemoteOptions, "mode" | "binary" | "launchTimeoutSec"> & { stdinPassword: boolean },
 ): string {
-  const launcher = '"${AGENT_CONFIG_BIN_DIR:-$HOME/.local/bin}/agent-config"';
-  const parts = [launcher, FIX_COMMAND, o.mode];
+  const parts = [LAUNCHER, FIX_COMMAND, o.mode];
   if (o.binary) parts.push("--binary", shellQuote(o.binary));
   if (o.launchTimeoutSec !== undefined) parts.push("--timeout", String(o.launchTimeoutSec));
   if (o.stdinPassword) parts.push("--password-stdin");
   return parts.join(" ");
 }
 
+/**
+ * The concrete host aliases an ssh config lists, in file order and without duplicates. Wildcard
+ * and negated patterns (`*`, `?`, `!`) name no single machine and are skipped; `Include` files
+ * are not followed.
+ */
+export function sshHostsFrom(config: string): string[] {
+  const hosts: string[] = [];
+  for (const line of config.split("\n")) {
+    const match = /^\s*Host\s*[=\s]\s*(.+?)\s*$/i.exec(line);
+    if (!match) continue;
+    for (const alias of match[1]!.split(/\s+/)) {
+      if (!/[*?!]/.test(alias) && isSafeHost(alias) && !hosts.includes(alias)) hosts.push(alias);
+    }
+  }
+  return hosts;
+}
+
+/** The host aliases in ~/.ssh/config; none when the file is missing or unreadable. */
+export function sshHosts(sys: Pick<System, "home"> = realSystem): string[] {
+  try {
+    return sshHostsFrom(readFileSync(join(sys.home(), ".ssh", "config"), "utf8"));
+  } catch {
+    return [];
+  }
+}
+
 export function sshArgs(host: string, command: string): string[] {
   return ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "--", host, command];
+}
+
+/** The first agent-config version that has the fix-claude-code command and its password flags. */
+export const MIN_REMOTE_VERSION = "0.23.0";
+
+const LAUNCHER = '"${AGENT_CONFIG_BIN_DIR:-$HOME/.local/bin}/agent-config"';
+
+/** Whether version `a` is at least `b`, both as x.y.z. */
+export function versionAtLeast(a: string, b: string): boolean {
+  const [x, y] = [a, b].map((v) => v.split(".").map(Number));
+  for (let i = 0; i < 3; i++) {
+    const d = (x?.[i] ?? 0) - (y?.[i] ?? 0);
+    if (d !== 0) return d > 0;
+  }
+  return true;
+}
+
+/**
+ * What to tell the user when the agent-config on the other Mac cannot run this command, or
+ * undefined when it can. `output` is what `agent-config --version` printed there.
+ */
+export function remoteVersionProblem(
+  host: string,
+  status: number | null,
+  output: string,
+): string | undefined {
+  const fix = "update it there (agent-config self-update, or re-run its install.sh), then retry";
+  if (status === 255) return `could not reach ${host} over ssh (key-based login is required)`;
+  const version = /^\d+\.\d+\.\d+$/.exec(output.trim())?.[0];
+  if (status !== 0 || version === undefined)
+    return `agent-config does not run on ${host}: install it there first (its install.sh)`;
+  if (!versionAtLeast(version, MIN_REMOTE_VERSION))
+    return `agent-config ${version} on ${host} is older than ${MIN_REMOTE_VERSION}, which added ${FIX_COMMAND}: ${fix}`;
+  return undefined;
 }
 
 /** Returns the remote command's exit code (255 when ssh itself fails). */
 export function runRemote(o: RemoteOptions): number {
   if (!isSafeHost(o.host)) throw new Error(`invalid host '${o.host}'`);
+  const probe = spawnSync("ssh", sshArgs(o.host, `${LAUNCHER} --version`), {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (probe.error) throw probe.error;
+  const problem = remoteVersionProblem(o.host, probe.status, probe.stdout ?? "");
+  if (problem) throw new Error(problem);
   const stdinPassword = o.mode === "fix" && o.password !== undefined;
   const command = remoteCommand({ ...o, stdinPassword });
   const r = spawnSync("ssh", sshArgs(o.host, command), {
