@@ -518,6 +518,7 @@ test("install model-ladder installs only the ladder; uninstall model-ladder keep
     "t3-code-integration",
     "statusline",
     "bypass-permissions",
+    "fix-claude-code-permissions",
   ]);
   expect(listed.items[0].entries).toMatchObject([{ scope: "user", runtimes: ["claude"] }]);
   expect(run("catalog").stdout).toContain("install: agent-config install model-ladder\n");

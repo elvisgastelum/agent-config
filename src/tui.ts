@@ -35,6 +35,16 @@ import {
   type Action,
   type PlannedOp,
 } from "./ops.ts";
+import {
+  isSafeHost,
+  passwordFromFile,
+  realSystem,
+  runFix,
+  runRemote,
+  type Mode,
+  type Reporter,
+} from "./macfix.ts";
+import { MACFIX_TITLE } from "./macfix-skill.ts";
 import { RUNTIME_COMPONENTS } from "./runtimes.ts";
 import {
   EFFORTS,
@@ -395,6 +405,111 @@ function doctorFlow(): void {
   p.note(lines.join("\n"), "Doctor");
 }
 
+const tuiReporter: Reporter = {
+  section: (t) => p.log.step(pc.bold(t)),
+  ok: (t) => p.log.success(t),
+  fail: (t) => p.log.error(t),
+  info: (t) => p.log.message(pc.dim(t)),
+};
+
+/**
+ * Where the admin password comes from: typed hidden here (masked, kept in memory for this one run,
+ * sent to sudo through stdin), read from a file, or not at all for passwordless sudo.
+ */
+async function askAdminPassword(): Promise<string | undefined> {
+  const source = ask(
+    await p.select({
+      message: "Admin password for sudo",
+      options: [
+        {
+          value: "type",
+          label: "Type it now",
+          hint: "hidden; not saved, not shown, not an argument",
+        },
+        { value: "file", label: "Read it from a file", hint: "the first line of a file you name" },
+        { value: "none", label: "No password", hint: "only works when sudo is passwordless" },
+      ],
+    }),
+  );
+  if (source === "type") {
+    return ask(
+      await p.password({
+        message: "Admin password",
+        mask: "•",
+        validate: (v) => (v ? undefined : "The password is empty"),
+      }),
+    );
+  }
+  if (source === "file") {
+    const path = ask(
+      await p.text({
+        message: "Password file",
+        validate: (v) => (v?.trim() ? undefined : "Enter a path"),
+      }),
+    );
+    return passwordFromFile(resolve(path.trim()));
+  }
+  return undefined;
+}
+
+async function fixFlow(): Promise<void> {
+  const where = ask(
+    await p.select({
+      message: MACFIX_TITLE,
+      options: [
+        { value: "local", label: "This Mac" },
+        {
+          value: "remote",
+          label: "Another Mac over ssh",
+          hint: "needs agent-config installed there",
+        },
+      ],
+    }),
+  );
+  const host =
+    where === "remote"
+      ? ask(
+          await p.text({
+            message: "ssh host (an alias or user@host)",
+            validate: (v) => (isSafeHost(v?.trim() ?? "") ? undefined : "Not a valid ssh host"),
+          }),
+        ).trim()
+      : undefined;
+  const mode = ask(
+    await p.select<Mode>({
+      message: "What to run",
+      options: [
+        { value: "diagnose", label: "Diagnose", hint: "read-only report" },
+        {
+          value: "fix",
+          label: "Fix",
+          hint: "remove the quarantine flag, restart syspolicyd if needed",
+        },
+      ],
+    }),
+  );
+  let password: string | undefined;
+  if (mode === "fix") {
+    try {
+      password = await askAdminPassword();
+    } catch (error) {
+      if (error instanceof Cancelled) throw error;
+      p.log.error(error instanceof Error ? error.message : String(error));
+      return;
+    }
+  }
+  try {
+    const code =
+      host === undefined
+        ? runFix(realSystem, { mode, ...(password !== undefined ? { password } : {}) }, tuiReporter)
+        : runRemote({ host, mode, ...(password !== undefined ? { password } : {}) });
+    if (code === 0) p.log.success("Claude Code launches.");
+    else p.log.warn(`Not fixed (exit ${code}).`);
+  } catch (error) {
+    p.log.error(error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function uninstallFlow(): Promise<void> {
   const entries = status();
   const installed = [...new Set(entries.map((e) => e.record.runtime))];
@@ -508,6 +623,11 @@ export async function runTui(): Promise<number> {
               : []),
             { value: "status", label: "Status", hint: "what is installed and whether it changed" },
             { value: "doctor", label: "Doctor", hint: "check runtimes and prerequisites" },
+            {
+              value: "fix-claude",
+              label: MACFIX_TITLE,
+              hint: "unblock a Claude Code binary macOS refuses to launch, here or over ssh",
+            },
             { value: "uninstall", label: "Uninstall", hint: "remove and restore" },
             {
               value: "self-update",
@@ -528,6 +648,7 @@ export async function runTui(): Promise<number> {
       if (choice === "catalog") await catalogFlow();
       if (choice === "status") statusFlow();
       if (choice === "doctor") doctorFlow();
+      if (choice === "fix-claude") await fixFlow();
       if (choice === "uninstall") await uninstallFlow();
       if (choice === "self-update" && (await selfUpdateFlow())) break;
       if (choice === "reset") {

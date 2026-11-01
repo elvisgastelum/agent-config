@@ -31,6 +31,7 @@ import {
   kaneoSkillMarkdown,
   kaneoUrlWarning,
 } from "./kaneo.ts";
+import { MACFIX_ITEM, MACFIX_SKILL, MACFIX_TITLE, macfixSkillMarkdown } from "./macfix-skill.ts";
 import { LADDER_ITEM, opKey, type Op } from "./ops.ts";
 import { BRIEF, BRIEF_GUARD_FILE, BRIEF_GUARD_MATCHER, briefMarkdown } from "./brief.ts";
 import {
@@ -1004,6 +1005,28 @@ const t3Code: CatalogItem = {
   },
 };
 
+// ---------------------------------------------------------------- fix claude code permissions
+
+const fixClaudeCodePermissions: CatalogItem = {
+  id: MACFIX_ITEM,
+  title: MACFIX_TITLE,
+  description:
+    "skill that unblocks a Claude Code binary macOS refuses to launch, on this Mac or another over ssh, with `agent-config fix-claude-code`; the admin password is typed hidden in the TUI or comes from a password file, and inside T3 Code through `request_secret`, never in chat",
+  settings: [],
+  userOnly: true,
+  discover: () => ({}),
+  ops: (entry, runtime) => [
+    {
+      runtime,
+      component: "catalog",
+      kind: "file",
+      path: join(layout(runtime, entry.project).skills, MACFIX_SKILL, "SKILL.md"),
+      content: macfixSkillMarkdown(),
+      label: `fix claude code permissions skill ${MACFIX_SKILL}`,
+    },
+  ],
+};
+
 export const CATALOG: CatalogItem[] = [
   modelLadder,
   kaneo,
@@ -1014,6 +1037,7 @@ export const CATALOG: CatalogItem[] = [
   t3Code,
   statusline,
   bypassPermissions,
+  fixClaudeCodePermissions,
 ];
 
 export function catalogItem(id: string): CatalogItem | undefined {

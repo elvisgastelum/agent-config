@@ -29,6 +29,18 @@ import {
 } from "./commands.ts";
 import { loadConfig, saveConfig, type Config } from "./config.ts";
 import { migrateLegacyLayout } from "./migrate.ts";
+import {
+  FIX_COMMAND,
+  isMode,
+  passwordFromFile,
+  passwordFromStdin,
+  promptHidden,
+  realSystem,
+  runFix,
+  runRemote,
+  type Mode,
+  type Reporter,
+} from "./macfix.ts";
 import { configPath, setting } from "./paths.ts";
 import {
   applyPlan,
@@ -83,6 +95,13 @@ Usage:
   agent-config config              print the saved configuration and its path
   agent-config self-update         update agent-config itself (--dry-run only checks);
                                    \`agent-config update\` and \`agi u\` are the same command
+  agent-config ${FIX_COMMAND} diagnose|fix
+                                   macOS: unblock a Claude Code binary that macOS refuses to launch
+                                   (diagnose changes nothing; fix removes its quarantine flag and, if
+                                   the launch still hangs, restarts syspolicyd with sudo)
+  agent-config ${FIX_COMMAND} remote <host> [diagnose|fix]
+                                   the same on another Mac over ssh (an ssh alias or user@host; that
+                                   Mac needs agent-config installed)
   agent-config delegate <role> [--tier t] [--runtime r] "<task>"
                                    run a ladder agent headlessly and print only its reply; role is
                                    read | explore | research | design | ux | edit | review;
@@ -109,6 +128,15 @@ Other flags:
   --json                         print one JSON document to stdout
   -v, --version / -h, --help
 
+Fix flags (\`${FIX_COMMAND}\`):
+  --binary <path>                target this claude binary instead of finding it
+  --timeout <seconds>            bound each launch test (default 20)
+  --password-stdin               read the admin password from the first line of stdin
+  --password-file <path>         read the admin password from the first line of a file
+  Without either flag, \`remote <host> fix\` prompts for the password without echo; a local \`fix\`
+  runs sudo non-interactively (the TUI's "Fix Claude Code permissions" asks hidden for both). The
+  password goes through stdin only, never as an argument, and is never saved.
+
 Delegate flags:
   --tier <fast|balanced|deep>    first rung (default: fast)
   --no-climb                     do not climb to the next rung on partial/escalate/failure
@@ -124,11 +152,20 @@ Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
 
 class UsageError extends Error {}
 
+const plainReporter: Reporter = {
+  section: (t) => console.log(t),
+  ok: (t) => console.log(`  ok   ${t}`),
+  fail: (t) => console.log(`  FAIL ${t}`),
+  info: (t) => console.log(`  ..   ${t}`),
+};
+
 const DELEGATE_ONLY = ["tier", "cwd", "no-climb", "timeout", "max-time", "verify"];
+const FIX_ONLY = ["binary", "password-stdin", "password-file"];
 const CATALOG_ONLY = ["project", "url"];
 const LADDER_ONLY = ["component", "model", "effort", "review", "min-lines"];
 const NOT_FOR_DELEGATE = [
   ...CATALOG_ONLY,
+  ...FIX_ONLY,
   "component",
   "model",
   "effort",
@@ -376,6 +413,9 @@ async function main(argv: string[]): Promise<number> {
       timeout: { type: "string" },
       "max-time": { type: "string" },
       verify: { type: "string" },
+      binary: { type: "string" },
+      "password-stdin": { type: "boolean" },
+      "password-file": { type: "string" },
       yes: { type: "boolean", short: "y" },
       "dry-run": { type: "boolean" },
       force: { type: "boolean" },
@@ -404,12 +444,18 @@ async function main(argv: string[]): Promise<number> {
   const misplaced =
     command === "delegate"
       ? given.find((k) => NOT_FOR_DELEGATE.includes(k))
-      : given.find((k) => DELEGATE_ONLY.includes(k));
+      : command === FIX_COMMAND
+        ? given.find((k) => DELEGATE_ONLY.includes(k) && k !== "timeout")
+        : given.find((k) => DELEGATE_ONLY.includes(k) || FIX_ONLY.includes(k));
   if (misplaced) {
     throw new UsageError(
       command === "delegate"
         ? `--${misplaced} does not apply to delegate`
-        : `--${misplaced} only applies to delegate`,
+        : command === FIX_COMMAND
+          ? `--${misplaced} only applies to delegate`
+          : FIX_ONLY.includes(misplaced)
+            ? `--${misplaced} only applies to ${FIX_COMMAND}`
+            : `--${misplaced} only applies to delegate`,
     );
   }
   const itemId = ["install", "apply", "uninstall"].includes(command) ? positionals[1] : undefined;
@@ -569,6 +615,52 @@ async function main(argv: string[]): Promise<number> {
         checks.map((c) => `${c.ok ? "ok  " : "warn"} ${c.name.padEnd(18)} ${c.detail}`).join("\n"),
       );
       return 0;
+    }
+    case FIX_COMMAND: {
+      if (json) throw new UsageError(`--json does not apply to ${FIX_COMMAND}`);
+      const withOther = given.filter((k) => ["yes", "dry-run", "force", "runtime"].includes(k));
+      if (withOther[0]) throw new UsageError(`--${withOther[0]} does not apply to ${FIX_COMMAND}`);
+      if (values["password-stdin"] && values["password-file"])
+        throw new UsageError("use either --password-stdin or --password-file, not both");
+      const timeoutSec = values.timeout === undefined ? undefined : Number(values.timeout);
+      if (timeoutSec !== undefined && !(timeoutSec > 0))
+        throw new UsageError("--timeout expects a positive number of seconds");
+      const resolvePassword = async (mode: Mode, canPrompt: boolean) => {
+        if (mode !== "fix") return undefined;
+        if (values["password-file"]) return passwordFromFile(values["password-file"]);
+        if (values["password-stdin"]) return passwordFromStdin();
+        return canPrompt ? promptHidden("Admin password: ") : undefined;
+      };
+      const [target, ...rest] = positionals.slice(1);
+      if (target === "diagnose" || target === "fix") {
+        if (rest.length > 0) throw new UsageError(`unexpected argument "${rest[0]}"`);
+        // Locally the terminal belongs to sudo's own checks, so it never prompts here.
+        return runFix(
+          realSystem,
+          {
+            mode: target,
+            ...(values.binary ? { binary: values.binary } : {}),
+            ...(timeoutSec !== undefined ? { launchTimeoutMs: timeoutSec * 1000 } : {}),
+            password: await resolvePassword(target, false),
+          },
+          plainReporter,
+        );
+      }
+      if (target === "remote") {
+        const [host, mode = "diagnose", ...extra] = rest;
+        if (host === undefined)
+          throw new UsageError("remote needs a host (an ssh alias or user@host)");
+        if (!isMode(mode) || extra.length > 0)
+          throw new UsageError("remote <host> takes diagnose or fix");
+        return runRemote({
+          host,
+          mode,
+          ...(values.binary ? { binary: values.binary } : {}),
+          ...(timeoutSec !== undefined ? { launchTimeoutSec: timeoutSec } : {}),
+          password: await resolvePassword(mode, true),
+        });
+      }
+      throw new UsageError(`${FIX_COMMAND} expects diagnose, fix or remote <host>`);
     }
     case "delegate": {
       if (process.env[DELEGATED_ENV] || process.env[LEGACY_DELEGATED_ENV]) {
