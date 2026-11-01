@@ -315,6 +315,7 @@ Starts every Claude Code session on this computer with bypass permissions on, so
 **Fix Claude Code Permissions (MacOS).** Unblocks a Claude Code binary that macOS refuses to launch, locally or over SSH, with no GUI session. The symptom: `claude --version` hangs and the kernel logs `AppleSystemPolicy: Security policy would not allow process`. The binary is fine (Anthropic Developer ID, Team `Q6L2SF6YDW`, notarized); `syspolicyd` is wedged or a Gatekeeper prompt sits on a screen nobody can see. Ported from [fix-claude-code-permissions](https://github.com/elvisgastelum/fix-claude-code-permissions). The command works without installing the item; the item adds the skill that tells an agent how to run it. User scope only, for any agent.
 
 ```sh
+agent-config fix-claude-code                                  # in a terminal: pick the Mac, diagnose or fix, type the password hidden
 agent-config fix-claude-code diagnose                         # read-only report
 agent-config fix-claude-code fix --password-stdin < file      # repair; sudo password from the first line of stdin
 agent-config fix-claude-code remote <host> diagnose           # <host>: an ssh alias or user@host
@@ -332,7 +333,7 @@ agent-config fix-claude-code remote <host> fix --password-file ./pw
 
 It never reboots, never edits other binaries and does not use `spctl --add`. If it still fails, approve the binary in System Settings > Privacy & Security > Open Anyway, or reboot (check first that remote login survives a reboot: FileVault pre-boot login blocks SSH).
 
-**The admin password** (only the `sudo` step needs it) is read from a hidden prompt, a file you name or stdin, and reaches `sudo -S` and `ssh` through stdin only: never an argument, never written to disk by agent-config, never saved in the configuration, never printed. Do not commit password files. The TUI (`agi`, then **Fix Claude Code Permissions (MacOS)**) is the alternative to a password file: pick this Mac or another one over ssh, diagnose or fix, then type the password masked, name a file, or give none (passwordless sudo).
+**The admin password** (only the `sudo` step needs it) is read from a hidden prompt, a file you name or stdin, and reaches `sudo -S` and `ssh` through stdin only: never an argument, never written to disk by agent-config, never saved in the configuration, never printed. Do not commit password files. The picker (`agent-config fix-claude-code` with no arguments in a terminal, or `agi` and then **Fix Claude Code Permissions (MacOS)**) is the alternative to a password file: pick this Mac or a host from your `~/.ssh/config` (or type one), diagnose or fix, then type the password masked, name a file, or give none (passwordless sudo).
 
 The installed `fix-claude-code-permissions` skill makes an agent diagnose first, repair only when you ask, and never ask for the password in chat or put it in a command. Inside T3 Code it asks for the password with `request_secret` (`delivery:"file"`): a private card, so the agent never sees the value, and the returned file path goes to `--password-file`. That gate is the `t3-code` MCP tools being available, so it needs no other item and is a no-op outside T3 Code.
 

@@ -6366,7 +6366,7 @@ function isSafeHost(host) {
 */
 function remoteCommand(o) {
 	const parts = [
-		"\"${AGENT_CONFIG_BIN_DIR:-$HOME/.local/bin}/agent-config\"",
+		LAUNCHER,
 		FIX_COMMAND,
 		o.mode
 	];
@@ -6374,6 +6374,28 @@ function remoteCommand(o) {
 	if (o.launchTimeoutSec !== void 0) parts.push("--timeout", String(o.launchTimeoutSec));
 	if (o.stdinPassword) parts.push("--password-stdin");
 	return parts.join(" ");
+}
+/**
+* The concrete host aliases an ssh config lists, in file order and without duplicates. Wildcard
+* and negated patterns (`*`, `?`, `!`) name no single machine and are skipped; `Include` files
+* are not followed.
+*/
+function sshHostsFrom(config) {
+	const hosts = [];
+	for (const line of config.split("\n")) {
+		const match = /^\s*Host\s*[=\s]\s*(.+?)\s*$/i.exec(line);
+		if (!match) continue;
+		for (const alias of match[1].split(/\s+/)) if (!/[*?!]/.test(alias) && isSafeHost(alias) && !hosts.includes(alias)) hosts.push(alias);
+	}
+	return hosts;
+}
+/** The host aliases in ~/.ssh/config; none when the file is missing or unreadable. */
+function sshHosts(sys = realSystem) {
+	try {
+		return sshHostsFrom(readFileSync(join(sys.home(), ".ssh", "config"), "utf8"));
+	} catch {
+		return [];
+	}
 }
 function sshArgs(host, command) {
 	return [
@@ -6386,9 +6408,43 @@ function sshArgs(host, command) {
 		command
 	];
 }
+/** The first agent-config version that has the fix-claude-code command and its password flags. */
+const MIN_REMOTE_VERSION = "0.23.0";
+const LAUNCHER = "\"${AGENT_CONFIG_BIN_DIR:-$HOME/.local/bin}/agent-config\"";
+/** Whether version `a` is at least `b`, both as x.y.z. */
+function versionAtLeast(a, b) {
+	const [x, y] = [a, b].map((v) => v.split(".").map(Number));
+	for (let i = 0; i < 3; i++) {
+		const d = (x?.[i] ?? 0) - (y?.[i] ?? 0);
+		if (d !== 0) return d > 0;
+	}
+	return true;
+}
+/**
+* What to tell the user when the agent-config on the other Mac cannot run this command, or
+* undefined when it can. `output` is what `agent-config --version` printed there.
+*/
+function remoteVersionProblem(host, status, output) {
+	const fix = "update it there (agent-config self-update, or re-run its install.sh), then retry";
+	if (status === 255) return `could not reach ${host} over ssh (key-based login is required)`;
+	const version = /^\d+\.\d+\.\d+$/.exec(output.trim())?.[0];
+	if (status !== 0 || version === void 0) return `agent-config does not run on ${host}: install it there first (its install.sh)`;
+	if (!versionAtLeast(version, "0.23.0")) return `agent-config ${version} on ${host} is older than ${MIN_REMOTE_VERSION}, which added ${FIX_COMMAND}: ${fix}`;
+}
 /** Returns the remote command's exit code (255 when ssh itself fails). */
 function runRemote(o) {
 	if (!isSafeHost(o.host)) throw new Error(`invalid host '${o.host}'`);
+	const probe = spawnSync("ssh", sshArgs(o.host, `${LAUNCHER} --version`), {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		]
+	});
+	if (probe.error) throw probe.error;
+	const problem = remoteVersionProblem(o.host, probe.status, probe.stdout ?? "");
+	if (problem) throw new Error(problem);
 	const stdinPassword = o.mode === "fix" && o.password !== void 0;
 	const command = remoteCommand({
 		...o,
@@ -6437,7 +6493,7 @@ Options: \`--binary PATH\`, \`--timeout SECONDS\` (each launch test, default 20)
 The password is needed only for the \`sudo killall syspolicyd\` step, and only the user may provide it.
 
 - Never ask for it in chat, never read it, and never put it in a command, an argument, an environment variable or a file you write. Never echo or log it.
-- The user can type it hidden in the agent-config TUI (\`agent-config\`, then "Fix Claude Code permissions"): it goes to \`sudo -S\` and over ssh through stdin only, and is not saved.
+- The user can type it hidden in the agent-config picker: they run \`${CMD}\` with no arguments in a terminal (or \`agent-config\`, then "${MACFIX_TITLE}"), pick the Mac from their ssh hosts, and type the password. It goes to \`sudo -S\` and over ssh through stdin only, and is not saved.
 - Or in a terminal: \`${CMD} remote <host> fix\` prompts without echo. On this Mac, a file from \`--password-file\` or a pipe into \`--password-stdin\` is the user's to create; do not create one for them.
 - With passwordless sudo, \`fix\` needs no password at all.
 
@@ -8219,21 +8275,37 @@ async function askAdminPassword() {
 		return passwordFromFile(resolve(path.trim()));
 	}
 }
-async function fixFlow() {
-	const host = ask(await select({
-		message: "Fix Claude Code Permissions (MacOS)",
-		options: [{
-			value: "local",
-			label: "This Mac"
-		}, {
-			value: "remote",
-			label: "Another Mac over ssh",
-			hint: "needs agent-config installed there"
-		}]
-	})) === "remote" ? ask(await text({
+const OTHER_HOST = "\0other";
+/** Which Mac to fix: this one, a host from ~/.ssh/config, or one typed by hand. */
+async function pickMachine() {
+	const picked = ask(await select({
+		message: `${MACFIX_TITLE}: which Mac?`,
+		options: [
+			{
+				value: "",
+				label: "This Mac"
+			},
+			...sshHosts().map((h) => ({
+				value: h,
+				label: h,
+				hint: "ssh host"
+			})),
+			{
+				value: OTHER_HOST,
+				label: "Another Mac over ssh",
+				hint: "type an alias or user@host; agent-config must be installed there"
+			}
+		]
+	}));
+	if (picked === "") return void 0;
+	if (picked !== OTHER_HOST) return picked;
+	return ask(await text({
 		message: "ssh host (an alias or user@host)",
 		validate: (v) => isSafeHost(v?.trim() ?? "") ? void 0 : "Not a valid ssh host"
-	})).trim() : void 0;
+	})).trim();
+}
+async function fixFlow() {
+	const host = await pickMachine();
 	const mode = ask(await select({
 		message: "What to run",
 		options: [{
@@ -8332,6 +8404,21 @@ async function selfUpdateFlow() {
 	}
 	log.info("Start agent-config again to use the new version.");
 	return true;
+}
+/** `agent-config fix-claude-code` in a terminal: only the fix flow, without the main menu. */
+async function runFixTui() {
+	intro(`${import_picocolors.default.bgCyan(import_picocolors.default.black(" agent-config "))} ${import_picocolors.default.dim(MACFIX_TITLE)}`);
+	try {
+		await fixFlow();
+	} catch (error) {
+		if (error instanceof Cancelled) {
+			cancel("Cancelled.");
+			return 130;
+		}
+		throw error;
+	}
+	outro("Done.");
+	return 0;
 }
 async function runTui() {
 	intro(`${import_picocolors.default.bgCyan(import_picocolors.default.black(" agent-config "))} ${import_picocolors.default.dim(`v${VERSION}`)}`);
@@ -8698,6 +8785,8 @@ Usage:
   agent-config config              print the saved configuration and its path
   agent-config self-update         update agent-config itself (--dry-run only checks);
                                    \`agent-config update\` and \`agi u\` are the same command
+  agent-config ${FIX_COMMAND}      in a terminal: pick the Mac (this one or an ssh host), then
+                                   diagnose or fix, with the admin password typed hidden
   agent-config ${FIX_COMMAND} diagnose|fix
                                    macOS: unblock a Claude Code binary that macOS refuses to launch
                                    (diagnose changes nothing; fix removes its quarantine flag and, if
@@ -9176,6 +9265,10 @@ async function main(argv) {
 					...timeoutSec !== void 0 ? { launchTimeoutSec: timeoutSec } : {},
 					password: await resolvePassword(mode, true)
 				});
+			}
+			if (target === void 0 && given.length === 0) {
+				if (process.stdin.isTTY && process.stdout.isTTY) return runFixTui();
+				throw new UsageError(`no terminal for the picker; pass diagnose, fix or remote <host> to ${FIX_COMMAND}`);
 			}
 			throw new UsageError(`${FIX_COMMAND} expects diagnose, fix or remote <host>`);
 		}

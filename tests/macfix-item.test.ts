@@ -102,3 +102,15 @@ test("a password file with an empty first line is refused, not sent", () => {
   expect(r.code).toBe(1);
   expect(r.stderr).toContain("the password is empty");
 });
+
+test("fix-claude-code with no target needs a terminal for the picker", () => {
+  const r = run(["fix-claude-code"]);
+  expect(r.code).toBe(2);
+  expect(r.stderr).toContain("no terminal for the picker");
+});
+
+test("fix-claude-code with a flag but no target is still a usage error", () => {
+  const r = run(["fix-claude-code", "--binary", "x"]);
+  expect(r.code).toBe(2);
+  expect(r.stderr).toContain("expects diagnose, fix or remote");
+});

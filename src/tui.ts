@@ -41,6 +41,7 @@ import {
   realSystem,
   runFix,
   runRemote,
+  sshHosts,
   type Mode,
   type Reporter,
 } from "./macfix.ts";
@@ -452,29 +453,36 @@ async function askAdminPassword(): Promise<string | undefined> {
   return undefined;
 }
 
-async function fixFlow(): Promise<void> {
-  const where = ask(
-    await p.select({
-      message: MACFIX_TITLE,
+const OTHER_HOST = "\u0000other";
+
+/** Which Mac to fix: this one, a host from ~/.ssh/config, or one typed by hand. */
+async function pickMachine(): Promise<string | undefined> {
+  const picked = ask(
+    await p.select<string>({
+      message: `${MACFIX_TITLE}: which Mac?`,
       options: [
-        { value: "local", label: "This Mac" },
+        { value: "", label: "This Mac" },
+        ...sshHosts().map((h) => ({ value: h, label: h, hint: "ssh host" })),
         {
-          value: "remote",
+          value: OTHER_HOST,
           label: "Another Mac over ssh",
-          hint: "needs agent-config installed there",
+          hint: "type an alias or user@host; agent-config must be installed there",
         },
       ],
     }),
   );
-  const host =
-    where === "remote"
-      ? ask(
-          await p.text({
-            message: "ssh host (an alias or user@host)",
-            validate: (v) => (isSafeHost(v?.trim() ?? "") ? undefined : "Not a valid ssh host"),
-          }),
-        ).trim()
-      : undefined;
+  if (picked === "") return undefined;
+  if (picked !== OTHER_HOST) return picked;
+  return ask(
+    await p.text({
+      message: "ssh host (an alias or user@host)",
+      validate: (v) => (isSafeHost(v?.trim() ?? "") ? undefined : "Not a valid ssh host"),
+    }),
+  ).trim();
+}
+
+async function fixFlow(): Promise<void> {
+  const host = await pickMachine();
   const mode = ask(
     await p.select<Mode>({
       message: "What to run",
@@ -591,6 +599,22 @@ async function selfUpdateFlow(): Promise<boolean> {
   }
   p.log.info("Start agent-config again to use the new version.");
   return true;
+}
+
+/** `agent-config fix-claude-code` in a terminal: only the fix flow, without the main menu. */
+export async function runFixTui(): Promise<number> {
+  p.intro(`${pc.bgCyan(pc.black(" agent-config "))} ${pc.dim(MACFIX_TITLE)}`);
+  try {
+    await fixFlow();
+  } catch (error) {
+    if (error instanceof Cancelled) {
+      p.cancel("Cancelled.");
+      return 130;
+    }
+    throw error;
+  }
+  p.outro("Done.");
+  return 0;
 }
 
 export async function runTui(): Promise<number> {

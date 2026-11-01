@@ -60,7 +60,7 @@ import {
   type Effort,
   type Runtime,
 } from "./tiers.ts";
-import { formatPlan, runTui } from "./tui.ts";
+import { formatPlan, runFixTui, runTui } from "./tui.ts";
 import { DELEGATED_ENV, LEGACY_DELEGATED_ENV, delegate } from "./delegate.ts";
 import {
   checkForUpdate,
@@ -95,6 +95,8 @@ Usage:
   agent-config config              print the saved configuration and its path
   agent-config self-update         update agent-config itself (--dry-run only checks);
                                    \`agent-config update\` and \`agi u\` are the same command
+  agent-config ${FIX_COMMAND}      in a terminal: pick the Mac (this one or an ssh host), then
+                                   diagnose or fix, with the admin password typed hidden
   agent-config ${FIX_COMMAND} diagnose|fix
                                    macOS: unblock a Claude Code binary that macOS refuses to launch
                                    (diagnose changes nothing; fix removes its quarantine flag and, if
@@ -659,6 +661,13 @@ async function main(argv: string[]): Promise<number> {
           ...(timeoutSec !== undefined ? { launchTimeoutSec: timeoutSec } : {}),
           password: await resolvePassword(mode, true),
         });
+      }
+      // No target in a terminal opens the picker: which Mac, diagnose or fix, and the password.
+      if (target === undefined && given.length === 0) {
+        if (process.stdin.isTTY && process.stdout.isTTY) return runFixTui();
+        throw new UsageError(
+          `no terminal for the picker; pass diagnose, fix or remote <host> to ${FIX_COMMAND}`,
+        );
       }
       throw new UsageError(`${FIX_COMMAND} expects diagnose, fix or remote <host>`);
     }
