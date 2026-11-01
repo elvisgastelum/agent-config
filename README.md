@@ -49,7 +49,7 @@ Uninstall restores what agent-config replaced: backed-up files come back, JSON k
 2. A colored plan per agent: `create`, `update`, `unchanged`, `skip`, with the target path.
 3. Confirm, apply, done. Choices are saved to `~/.config/agent-config/config.json`.
 
-Also: **Re-apply installed items** (writes every saved item again), **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (runtimes, Codex `multi_agent`, Pi subagent support, drift), **Uninstall**, **Update agent-config version** (checks GitHub, shows the installed and new versions, updates with rollback if the new version does not run, then offers to re-apply your saved configuration), **Reset ladder choices** (recommended parts and models; installed items stay).
+Also: **Fix Claude Code Permissions (MacOS)** (diagnose or repair this Mac, or another one over ssh; the admin password is typed hidden and never saved), **Re-apply installed items** (writes every saved item again), **Status** (each installed item: `ok`, `drifted`, `missing`), **Doctor** (runtimes, Codex `multi_agent`, Pi subagent support, drift), **Uninstall**, **Update agent-config version** (checks GitHub, shows the installed and new versions, updates with rollback if the new version does not run, then offers to re-apply your saved configuration), **Reset ladder choices** (recommended parts and models; installed items stay).
 
 ## Commands
 
@@ -134,6 +134,7 @@ agi install planning                            # /planning: plan work with you,
 agi install t3-code-integration                 # inside T3 Code: agents, worktrees, questions and visuals through its MCP
 agi install statusline                          # compact Claude Code status line
 agi install bypass-permissions                  # Claude Code starts with bypass permissions on
+agi install fix-claude-code-permissions         # skill: unblock a Claude Code binary macOS refuses to launch
 agi uninstall kaneo [--project .]               # remove that copy only
 ```
 
@@ -308,6 +309,39 @@ Starts every Claude Code session on this computer with bypass permissions on, so
 
 - Sets `permissions.defaultMode` to `"bypassPermissions"` and `skipDangerousModePermissionPrompt` to `true` in `~/.claude/settings.json`, so no confirmation is asked at startup. Uninstall puts back the previous values.
 - Bypass mode runs every tool call without asking, including file edits and shell commands. Install it only on a computer where that is acceptable; a sandbox or container is safest.
+
+### fix-claude-code-permissions
+
+**Fix Claude Code Permissions (MacOS).** Unblocks a Claude Code binary that macOS refuses to launch, locally or over SSH, with no GUI session. The symptom: `claude --version` hangs and the kernel logs `AppleSystemPolicy: Security policy would not allow process`. The binary is fine (Anthropic Developer ID, Team `Q6L2SF6YDW`, notarized); `syspolicyd` is wedged or a Gatekeeper prompt sits on a screen nobody can see. Ported from [fix-claude-code-permissions](https://github.com/elvisgastelum/fix-claude-code-permissions). The command works without installing the item; the item adds the skill that tells an agent how to run it. User scope only, for any agent.
+
+```sh
+agent-config fix-claude-code diagnose                         # read-only report
+agent-config fix-claude-code fix --password-stdin < file      # repair; sudo password from the first line of stdin
+agent-config fix-claude-code remote <host> diagnose           # <host>: an ssh alias or user@host
+agent-config fix-claude-code remote <host> fix                # prompts for the admin password without echo
+agent-config fix-claude-code remote <host> fix --password-file ./pw
+```
+
+`--binary PATH` targets another binary, `--timeout SECONDS` bounds each launch test (default 20). Exit codes: `0` launches fine, `1` still failing, `2` refused or bad usage, `130` cancelled. `remote` runs `agent-config fix-claude-code` from the launcher `install.sh` wrote on the other Mac, so install agent-config there first; ssh runs with `BatchMode=yes`, so it needs key-based login.
+
+`fix` does, in order, and stops as soon as `claude --version` works:
+
+1. Refuses to touch anything unless the binary is validly signed by Anthropic's Team ID and notarized.
+2. Removes `com.apple.quarantine` from that one binary and re-tests.
+3. If the launch still hangs, runs `sudo killall syspolicyd` (launchd respawns it) and re-tests.
+
+It never reboots, never edits other binaries and does not use `spctl --add`. If it still fails, approve the binary in System Settings > Privacy & Security > Open Anyway, or reboot (check first that remote login survives a reboot: FileVault pre-boot login blocks SSH).
+
+**The admin password** (only the `sudo` step needs it) is read from a hidden prompt, a file you name or stdin, and reaches `sudo -S` and `ssh` through stdin only: never an argument, never written to disk by agent-config, never saved in the configuration, never printed. Do not commit password files. The TUI (`agi`, then **Fix Claude Code Permissions (MacOS)**) is the alternative to a password file: pick this Mac or another one over ssh, diagnose or fix, then type the password masked, name a file, or give none (passwordless sudo).
+
+The installed `fix-claude-code-permissions` skill makes an agent diagnose first, repair only when you ask, and never ask for the password in chat or put it in a command. Inside T3 Code it asks for the password with `request_secret` (`delivery:"file"`): a private card, so the agent never sees the value, and the returned file path goes to `--password-file`. That gate is the `t3-code` MCP tools being available, so it needs no other item and is a no-op outside T3 Code.
+
+| Agent    | Skill                                                            |
+| -------- | ---------------------------------------------------------------- |
+| Claude   | `~/.claude/skills/fix-claude-code-permissions/SKILL.md`          |
+| OpenCode | `~/.config/opencode/skills/fix-claude-code-permissions/SKILL.md` |
+| Codex    | `~/.codex/skills/fix-claude-code-permissions/SKILL.md`           |
+| Pi       | `~/.pi/agent/skills/fix-claude-code-permissions/SKILL.md`        |
 
 ## How the routing works
 

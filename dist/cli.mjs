@@ -7,8 +7,8 @@ import l__default, * as l from "node:readline";
 import { ReadStream } from "node:tty";
 import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 //#region \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -746,6 +746,32 @@ var a = class extends y {
 		});
 	}
 };
+let u$1 = class u extends y {
+	_mask = "•";
+	get cursor() {
+		return this._cursor;
+	}
+	get masked() {
+		return this.userInput.replaceAll(/./g, this._mask);
+	}
+	get userInputWithCursor() {
+		if (this.state === "submit" || this.state === "cancel") return this.masked;
+		const t = this.userInput;
+		if (this.cursor >= t.length) return `${this.masked}${styleText(["inverse", "hidden"], "_")}`;
+		const s = this.masked, r = s.slice(0, this.cursor), i = s.slice(this.cursor, this.cursor + 1), o = s.slice(this.cursor + 1);
+		return `${r}${styleText("inverse", i)}${o}`;
+	}
+	clear() {
+		this._clearUserInput();
+	}
+	constructor({ mask: t, ...s }) {
+		super(s), this._mask = t ?? "•", this.on("userInput", (r) => {
+			this._setValue(r);
+		}), this.on("finalize", () => {
+			this.value === void 0 && (this.value = "");
+		});
+	}
+};
 let n$1 = class n extends y {
 	options;
 	cursor = 0;
@@ -815,6 +841,7 @@ const S_RADIO_INACTIVE = unicodeOr("○", " ");
 const S_CHECKBOX_ACTIVE = unicodeOr("◻", "[•]");
 const S_CHECKBOX_SELECTED = unicodeOr("◼", "[+]");
 const S_CHECKBOX_INACTIVE = unicodeOr("◻", "[ ]");
+const S_PASSWORD_MASK = unicodeOr("▪", "•");
 const S_BAR_H = unicodeOr("─", "-");
 const S_CORNER_TOP_RIGHT = unicodeOr("╮", "+");
 const S_CONNECT_LEFT = unicodeOr("├", "+");
@@ -1102,6 +1129,33 @@ ${h}
 ${styleText("gray", l$1 + S_BAR_H.repeat(t + 2) + S_CORNER_BOTTOM_RIGHT)}
 `);
 };
+const password = (e) => new u$1({
+	validate: e.validate,
+	mask: e.mask ?? S_PASSWORD_MASK,
+	signal: e.signal,
+	input: e.input,
+	output: e.output,
+	render() {
+		const r = e.withGuide ?? settings.withGuide, o = `${r ? `${styleText("gray", S_BAR)}
+` : ""}${symbol(this.state)}  ${e.message}
+`, m = this.userInputWithCursor, i = this.masked;
+		switch (this.state) {
+			case "error": {
+				const s = r ? `${styleText("yellow", S_BAR)}  ` : "", n = r ? `${styleText("yellow", S_BAR_END)}  ` : "", d = i ?? "";
+				return e.clearOnError && this.clear(), `${o.trim()}
+${s}${d}
+${n}${styleText("yellow", this.error)}
+`;
+			}
+			case "submit": return `${o}${r ? `${styleText("gray", S_BAR)}  ` : ""}${i ? styleText("dim", i) : ""}`;
+			case "cancel": return `${o}${r ? `${styleText("gray", S_BAR)}  ` : ""}${i ? styleText(["strikethrough", "dim"], i) : ""}${i && r ? `
+${styleText("gray", S_BAR)}` : ""}`;
+			default: return `${o}${r ? `${styleText("cyan", S_BAR)}  ` : ""}${m}
+${r ? styleText("cyan", S_BAR_END) : ""}
+`;
+		}
+	}
+}).prompt();
 const W = (l) => styleText("magenta", l);
 const spinner = ({ indicator: l = "dots", onCancel: h, output: n = process.stdout, cancelMessage: G, errorMessage: O, frames: E = unicode ? [
 	"◒",
@@ -5686,6 +5740,719 @@ After the cleanup, explain the wave at the user's level: plain words with each t
 - **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met.
 `;
 }
+function defaultConfig() {
+	return {
+		version: 1,
+		components: [...COMPONENTS],
+		tiers: {
+			claude: defaultTierMap("claude"),
+			opencode: defaultTierMap("opencode"),
+			codex: defaultTierMap("codex"),
+			pi: defaultTierMap("pi")
+		},
+		reviewTiers: { ...DEFAULT_REVIEW_TIERS },
+		minLines: 350,
+		catalog: []
+	};
+}
+/** Loads the saved config over the defaults, dropping anything unrecognized. */
+function loadConfig() {
+	const config = defaultConfig();
+	let raw;
+	try {
+		raw = JSON.parse(readFileSync(configPath(), "utf8"));
+	} catch {
+		return config;
+	}
+	if (Array.isArray(raw.components)) config.components = raw.components.filter((c) => COMPONENTS.includes(c));
+	for (const runtime of RUNTIMES) for (const tier of TIERS) {
+		const saved = raw.tiers?.[runtime]?.[tier];
+		if (!saved) continue;
+		if (typeof saved.model === "string") config.tiers[runtime][tier].model = saved.model;
+		if (EFFORTS.includes(saved.effort)) config.tiers[runtime][tier].effort = saved.effort;
+	}
+	for (const [lens, tier] of Object.entries(raw.reviewTiers ?? {})) if (isReviewLens(lens) && typeof tier === "string" && isTier(tier)) config.reviewTiers[lens] = tier;
+	if (typeof raw.minLines === "number" && raw.minLines > 0) config.minLines = Math.floor(raw.minLines);
+	if (Array.isArray(raw.catalog)) config.catalog = raw.catalog.flatMap(catalogEntry);
+	const legacy = Array.isArray(raw.runtimes) ? raw.runtimes.filter(isRuntime) : [];
+	if (legacy.length > 0 && !config.catalog.some((e) => e.item === "model-ladder")) config.catalog.unshift({
+		item: LADDER_ITEM,
+		runtimes: legacy,
+		settings: {}
+	});
+	return config;
+}
+/**
+* Catalog items saved under their old id. Only the saved entry is renamed: the manifest keeps the
+* old item's records, which a full re-apply undoes as retired while it installs the new ones.
+*/
+const RENAMED_ITEMS = { "kick-off": "brief" };
+/** A saved catalog entry, or nothing when it names an unknown item or is malformed. */
+function catalogEntry(raw) {
+	if (!raw || typeof raw !== "object") return [];
+	const e = raw;
+	const item = typeof e.item === "string" ? catalogItem(RENAMED_ITEMS[e.item] ?? e.item) : void 0;
+	if (!item) return [];
+	if (e.project !== void 0 && (typeof e.project !== "string" || !isAbsolute(e.project) || item.userOnly)) return [];
+	const settings = {};
+	for (const [k, v] of Object.entries(e.settings ?? {})) if (typeof v === "string") settings[k] = v;
+	return [{
+		item: item.id,
+		...e.project ? { project: e.project } : {},
+		runtimes: Array.isArray(e.runtimes) ? e.runtimes.filter(isRuntime) : [],
+		settings
+	}];
+}
+function saveConfig(config) {
+	const path = configPath();
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+}
+//#endregion
+//#region src/selfupdate.ts
+/** The checkout this CLI runs from (dist/cli.mjs and src/selfupdate.ts sit one level below). */
+function checkoutRoot() {
+	return dirname(dirname(fileURLToPath(import.meta.url)));
+}
+function installHome() {
+	return setting("HOME") || defaultInstallHome();
+}
+function defaultInstallHome() {
+	return join(home(), ".local", "share", "agent-config");
+}
+/** Where the pre-rename installer put the checkout. */
+function legacyInstallHome() {
+	return join(home(), ".local", "share", LEGACY_NAME);
+}
+function git(root, ...args) {
+	return execFileSync("git", [
+		"-C",
+		root,
+		...args
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"pipe"
+		],
+		timeout: 6e4
+	}).trim();
+}
+function samePath(a, b) {
+	try {
+		return realpathSync(a) === realpathSync(b);
+	} catch {
+		return false;
+	}
+}
+function gitError(error) {
+	const stderr = error?.stderr?.toString().trim();
+	if (stderr) return stderr.split("\n").slice(-2).join(" ");
+	return error instanceof Error ? error.message.split("\n")[0] ?? error.message : String(error);
+}
+function checkForUpdate(root = checkoutRoot()) {
+	const base = {
+		ref: "",
+		current: {
+			version: VERSION,
+			commit: ""
+		},
+		behind: 0
+	};
+	const refuse = (reason, extra = {}) => ({
+		...base,
+		...extra,
+		updatable: false,
+		reason
+	});
+	if (!existsSync(join(root, ".git"))) return refuse("not a git checkout; re-run the install one-liner");
+	if (!samePath(root, installHome())) return refuse(`running from ${root}, not the installed copy (${installHome()}); use git pull here`);
+	let ref;
+	let current;
+	try {
+		ref = git(root, "rev-parse", "--abbrev-ref", "HEAD");
+		current = {
+			version: VERSION,
+			commit: git(root, "rev-parse", "--short", "HEAD")
+		};
+	} catch (error) {
+		return refuse(`cannot read the installed checkout: ${gitError(error)}`);
+	}
+	if (ref === "HEAD") return refuse("the installed copy is pinned to a fixed commit or tag (detached HEAD); re-run the installer with AGENT_CONFIG_REF=<branch> to follow a branch", { current });
+	try {
+		git(root, "fetch", "--quiet", "origin", ref);
+	} catch (error) {
+		return refuse(`could not fetch origin/${ref}: ${gitError(error)}`, {
+			ref,
+			current
+		});
+	}
+	try {
+		const behind = Number(git(root, "rev-list", "--count", `HEAD..origin/${ref}`)) || 0;
+		let version = current.version;
+		try {
+			version = JSON.parse(git(root, "show", `origin/${ref}:package.json`)).version ?? version;
+		} catch {}
+		const latest = {
+			version,
+			commit: git(root, "rev-parse", "--short", `origin/${ref}`)
+		};
+		const relocate = samePath(root, legacyInstallHome()) && !existsSync(defaultInstallHome());
+		return {
+			updatable: true,
+			ref,
+			current,
+			latest,
+			behind,
+			...relocate ? { relocate } : {}
+		};
+	} catch (error) {
+		return refuse(`cannot compare with origin/${ref}: ${gitError(error)}`, {
+			ref,
+			current
+		});
+	}
+}
+const ENTRY = join("dist", "cli.mjs");
+function runs(root) {
+	return spawnSync(process.execPath, [join(root, ENTRY), "--version"], {
+		stdio: "ignore",
+		timeout: 3e4
+	}).status === 0;
+}
+function runUpdate(check, root = checkoutRoot()) {
+	const before = check.current.commit;
+	const moving = samePath(root, legacyInstallHome()) && !existsSync(defaultInstallHome());
+	const target = moving ? defaultInstallHome() : installHome();
+	let finalRoot = root;
+	const res = spawnSync("bash", [join(root, "install.sh")], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"ignore",
+			"pipe"
+		],
+		timeout: 9e5,
+		env: {
+			...process.env,
+			AGENT_CONFIG_HOME: target,
+			AGENT_CONFIG_REF: check.ref,
+			AGENT_CONFIG_NO_RUN: "1",
+			NO_COLOR: "1"
+		}
+	});
+	const log = res.stderr ?? "";
+	if (moving && !existsSync(root) && existsSync(target)) finalRoot = target;
+	let after = "";
+	try {
+		after = git(finalRoot, "rev-parse", "--short", "HEAD");
+	} catch {}
+	if (res.status === 0) {
+		const moved = finalRoot === target && moving ? `, moved to ${target}` : "";
+		return {
+			ok: true,
+			message: `Updated to v${check.latest?.version} (${after})${moved}`,
+			log,
+			commit: after,
+			root: finalRoot
+		};
+	}
+	const killed = res.error || res.signal ? " (the installer was interrupted)" : "";
+	if (after === before && runs(finalRoot)) return {
+		ok: false,
+		message: `Update failed${killed}; the previous version is still installed.`,
+		log,
+		root: finalRoot
+	};
+	return {
+		ok: false,
+		message: `Update failed${killed} and the installed copy may be inconsistent (at ${after || "an unknown commit"}); re-run the install one-liner to repair it.`,
+		log,
+		root: finalRoot
+	};
+}
+/**
+* Adds the `agi` alias (a relative symlink to the agent-config wrapper) when it is missing.
+* Updating runs the old checkout's install.sh, which may predate the alias, so the installed
+* command adds it on its next run. Only for the wrapper's bin dir; anything already there stays.
+*/
+function ensureAgiAlias() {
+	const bin = setting("BIN_DIR");
+	if (!bin || !existsSync(join(bin, "agent-config"))) return;
+	const agi = join(bin, "agi");
+	try {
+		lstatSync(agi);
+		return;
+	} catch {}
+	try {
+		symlinkSync("agent-config", agi);
+	} catch {}
+}
+/** Re-applies the saved configuration with the freshly installed CLI (new prompts and agents). */
+function reapplyWithNewVersion(root = checkoutRoot()) {
+	return spawnSync(process.execPath, [
+		join(root, ENTRY),
+		"install",
+		"--yes"
+	], { stdio: "inherit" }).status ?? 1;
+}
+//#endregion
+//#region src/commands.ts
+/** The user cancelled a prompt (Ctrl+C); the CLI exits 130. */
+var Cancelled = class extends Error {};
+function onPath(bin) {
+	try {
+		execFileSync("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+function detect() {
+	return RUNTIMES.map((runtime) => ({
+		runtime,
+		bin: onPath(RUNTIME_BIN[runtime]),
+		dir: existsSync(runtimeDir(runtime))
+	}));
+}
+function detectedRuntimes() {
+	return detect().filter((d) => d.bin || d.dir).map((d) => d.runtime);
+}
+/**
+* Plans every saved catalog entry, or with `only` just those (keys such as "kaneo@user" or
+* "model-ladder@user"), leaving the other entries alone.
+*/
+function buildPlan(config, given) {
+	const only = given && withT3Composed(config, given);
+	const manifest = loadManifest().records;
+	const records = new Map(manifest.map((r) => [recordKey(r), r]));
+	const ops = catalogOps(config, only);
+	const wanted = new Set(ops.map(opKey));
+	const missing = new Set(missingProjects(config).map(entryKey));
+	const planned = new Set((only ?? config.catalog.map(entryKey)).filter((k) => !missing.has(k)));
+	const ladder = ladderRuntimes(config);
+	const retired = (key, version) => {
+		const { item, project } = parseEntryKey(key);
+		return !catalogItem(item) && !(version && isNewer(version)) && (project === void 0 || existsSync(project));
+	};
+	return [...manifest.filter((r) => r.item !== void 0 && (planned.has(r.item) || !only && retired(r.item, r.version)) && !wanted.has(recordKey(r)) && (r.item !== "model-ladder@user" || ladder.includes(r.runtime) && config.components.includes(r.component))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
+}
+/**
+* After uninstalling some runtimes, puts back catalog files the remaining runtimes still use: a
+* project's AGENTS.md block is shared by OpenCode, Codex and Pi but recorded under one of them.
+*/
+function restoreShared(config, removed) {
+	const paths = new Set(removed);
+	return applyPlan(buildPlan(config, config.catalog.map(entryKey)).filter((x) => (x.action === "create" || x.action === "update") && paths.has(x.op.path))).errors;
+}
+/**
+* Undoes what agent-config installed, limited to one catalog entry (`key`) and/or some runtimes,
+* then updates the saved configuration so `install` does not bring it back. An entry whose files
+* were kept because the user changed them stays saved, so a later `--force` run can remove them.
+*/
+function uninstallSelection(selection, force = false) {
+	const { key, runtimes } = selection;
+	const results = uninstall((r) => (key === void 0 || r.item === key) && (runtimes.length === 0 || runtimes.includes(r.runtime)), force);
+	const kept = new Set(results.filter((r) => r.outcome === "kept-modified").map((r) => r.record.item));
+	const config = loadConfig();
+	forgetCatalog(config, (e) => (key === void 0 || entryKey(e) === key) && (e.item === "model-ladder" || !kept.has(entryKey(e))), runtimes);
+	saveConfig(config);
+	const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
+	const restoreErrors = runtimes.length > 0 ? restoreShared(config, removed) : [];
+	if (key !== void 0 && parseEntryKey(key).item === "t3-code-integration") {
+		const composed = withT3Composed(config, [key]).filter((k) => k !== key);
+		if (composed.length > 0) restoreErrors.push(...applyPlan(buildPlan(config, composed)).errors);
+	}
+	return {
+		results,
+		restoreErrors
+	};
+}
+function tildify(path) {
+	const h = home();
+	return path.startsWith(`${h}/`) ? `~${path.slice(h.length)}` : path;
+}
+function status() {
+	return loadManifest().records.map((record) => ({
+		record,
+		state: recordState(record)
+	}));
+}
+function doctor() {
+	const checks = [];
+	checks.push({
+		name: "node",
+		ok: Number(process.versions.node.split(".")[0]) >= 22,
+		detail: process.version
+	});
+	for (const d of detect()) checks.push({
+		name: d.runtime,
+		ok: d.bin || d.dir,
+		detail: d.bin || d.dir ? `${d.bin ? "cli on PATH" : "cli not on PATH"}, ${tildify(runtimeDir(d.runtime))}` : "not installed"
+	});
+	const codexConfig = join(codexDir(), "config.toml");
+	if (existsSync(codexConfig)) {
+		const text = readFileSync(codexConfig, "utf8");
+		const enabled = /^\s*multi_agent\s*=\s*true/m.test(text);
+		checks.push({
+			name: "codex multi_agent",
+			ok: enabled,
+			detail: enabled ? "enabled" : "add `multi_agent = true` under [features] in ~/.codex/config.toml so Codex can spawn ladder agents"
+		});
+	}
+	if (existsSync(piDir())) {
+		const settings = join(piDir(), "settings.json");
+		const text = existsSync(settings) ? readFileSync(settings, "utf8") : "";
+		const subagents = /subagent|gentle-pi/.test(text) || existsSync(join(piDir(), "subagents.json"));
+		checks.push({
+			name: "pi subagents",
+			ok: subagents,
+			detail: subagents ? "subagent support found" : "install a Pi subagent extension (for example gentle-pi) so Pi can call ladder agents"
+		});
+	}
+	if (existsSync(legacyInstallHome())) checks.push({
+		name: "install location",
+		ok: false,
+		detail: `${tildify(legacyInstallHome())} is the pre-rename location; run \`agent-config self-update\` or the install one-liner to move it to ${tildify(defaultInstallHome())}`
+	});
+	const gentle = onPath("gentle-ai");
+	checks.push({
+		name: "gentle-ai",
+		ok: true,
+		detail: gentle ? "installed (review-models applies)" : "not installed (review-models skips)"
+	});
+	const installed = status();
+	const drifted = installed.filter((s) => s.state !== "ok");
+	checks.push({
+		name: "managed files",
+		ok: drifted.length === 0,
+		detail: drifted.length === 0 ? "all as installed" : `${drifted.length} changed or missing (often \`gentle-ai sync\` resetting review models); run \`agent-config install\` to reapply`
+	});
+	const others = installed.filter((s) => s.record.version !== VERSION);
+	const versions = [...new Set(others.map((s) => s.record.version ?? "unrecorded"))].sort();
+	checks.push({
+		name: "installed version",
+		ok: others.length === 0,
+		detail: others.length === 0 ? `all at ${VERSION}` : `${others.length} installed by another version (${versions.join(", ")}); run \`agent-config install\` to bring them to ${VERSION}`
+	});
+	return checks;
+}
+//#endregion
+//#region src/macfix.ts
+/** Anthropic PBC's public Apple Developer Team ID. Not a secret: it is in every signed build. */
+const ANTHROPIC_TEAM_ID = "Q6L2SF6YDW";
+const SYSPOLICYD_RESTART_WAIT_MS = 4e3;
+/** The command that runs this tool, as `agent-config fix-claude-code`. */
+const FIX_COMMAND = "fix-claude-code";
+const isMode = (v) => v === "diagnose" || v === "fix";
+const realSystem = {
+	run(cmd, args, opts = {}) {
+		const r = spawnSync(cmd, args, {
+			encoding: "utf8",
+			input: opts.input,
+			timeout: opts.timeoutMs,
+			killSignal: "SIGKILL",
+			maxBuffer: 8388608,
+			stdio: [
+				opts.input === void 0 ? "ignore" : "pipe",
+				"pipe",
+				"pipe"
+			]
+		});
+		return {
+			status: r.status,
+			stdout: r.stdout ?? "",
+			stderr: r.stderr ?? "",
+			timedOut: r.error?.code === "ETIMEDOUT"
+		};
+	},
+	isFile(path) {
+		try {
+			return statSync(path).isFile();
+		} catch {
+			return false;
+		}
+	},
+	realpath: (path) => realpathSync(path),
+	home: () => homedir(),
+	env: (name) => process.env[name],
+	sleep(ms) {
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+	}
+};
+function listsQuarantine(xattrOutput) {
+	return xattrOutput.split("\n").some((line) => line.trim() === "com.apple.quarantine");
+}
+function parseTeamId(codesignOutput) {
+	return /^TeamIdentifier=(.+)$/m.exec(codesignOutput)?.[1]?.trim();
+}
+/** The password goes through stdin only, so it never shows up in a process listing. */
+function sudoInvocation(password, command) {
+	if (password === void 0) return { args: ["-n", ...command] };
+	return {
+		args: [
+			"-S",
+			"-p",
+			"",
+			...command
+		],
+		input: `${password}\n`
+	};
+}
+function findBinary(sys, explicit) {
+	const candidates = [];
+	if (explicit) candidates.push(explicit);
+	else {
+		const found = sys.run(sys.env("SHELL") ?? "zsh", ["-lic", "command -v claude"], { timeoutMs: 15e3 }).stdout.trim().split("\n").pop();
+		if (found) candidates.push(found);
+		const brew = sys.env("HOMEBREW_PREFIX");
+		if (brew) candidates.push(join(brew, "bin", "claude"));
+		candidates.push(join(sys.home(), ".local", "bin", "claude"));
+		candidates.push(join(sys.home(), ".claude", "local", "claude"));
+	}
+	const hit = candidates.find((c) => sys.isFile(c));
+	return hit === void 0 ? void 0 : sys.realpath(hit);
+}
+function checkSignature(sys, bin, say) {
+	if (sys.run("codesign", [
+		"--verify",
+		"--strict",
+		bin
+	]).status === 0) say.ok("code signature valid");
+	else {
+		say.fail("code signature invalid");
+		return false;
+	}
+	const team = parseTeamId(sys.run("codesign", ["-dv", bin]).stderr);
+	if (team === "Q6L2SF6YDW") say.ok(`signed by Anthropic PBC (Team ${team})`);
+	else {
+		say.fail(`unexpected Team ID '${team ?? "none"}' (want ${ANTHROPIC_TEAM_ID})`);
+		return false;
+	}
+	if (sys.run("codesign", [
+		"--verify",
+		"-R=notarized",
+		"--check-notarization",
+		bin
+	]).status === 0) say.ok("notarized");
+	else {
+		say.fail("not notarized");
+		return false;
+	}
+	return true;
+}
+function launchTest(sys, bin, timeoutMs, say) {
+	const r = sys.run(bin, ["--version"], { timeoutMs });
+	if (r.status === 0) {
+		say.ok(`launches: ${r.stdout.trim()}`);
+		return true;
+	}
+	if (r.timedOut) say.fail(`launch hung for ${timeoutMs / 1e3}s and was killed`);
+	else say.fail(`launch exited ${r.status}: ${(r.stderr || r.stdout).trim()}`);
+	return false;
+}
+function syspolicydUptime(sys) {
+	const pid = sys.run("pgrep", ["-x", "syspolicyd"]).stdout.trim().split("\n")[0];
+	if (!pid) return "not running";
+	return sys.run("ps", [
+		"-o",
+		"etime=",
+		"-p",
+		pid
+	]).stdout.trim() || "unknown";
+}
+/** Returns a process exit code: 0 launches fine, 1 still failing, 2 refused. */
+function runFix(sys, opts, say) {
+	const timeoutMs = opts.launchTimeoutMs ?? 2e4;
+	const bin = findBinary(sys, opts.binary);
+	if (bin === void 0) {
+		say.fail("could not find a claude binary (use --binary PATH)");
+		return 2;
+	}
+	say.info(`binary: ${bin}`);
+	say.info(`syspolicyd uptime: ${syspolicydUptime(sys)}`);
+	say.section("signature");
+	if (!checkSignature(sys, bin, say)) {
+		say.fail("refusing to touch a binary that is not Anthropic-signed and notarized");
+		return 2;
+	}
+	say.section("quarantine");
+	let quarantined = listsQuarantine(sys.run("xattr", [bin]).stdout);
+	if (quarantined) say.info("com.apple.quarantine is set");
+	else say.ok("not quarantined");
+	say.section("launch");
+	if (launchTest(sys, bin, timeoutMs, say)) return 0;
+	if (opts.mode === "diagnose") {
+		say.info("run again with 'fix' to repair");
+		return 1;
+	}
+	say.section("fix");
+	if (quarantined) {
+		if (sys.run("xattr", [
+			"-d",
+			"com.apple.quarantine",
+			bin
+		]).status === 0) {
+			say.ok("removed quarantine flag");
+			quarantined = false;
+			if (launchTest(sys, bin, timeoutMs, say)) return 0;
+		} else say.fail("could not remove the quarantine flag");
+	}
+	say.info("restarting syspolicyd (launchd respawns it)");
+	const sudo = sudoInvocation(opts.password, ["killall", "syspolicyd"]);
+	if (sys.run("sudo", sudo.args, { input: sudo.input }).status !== 0) {
+		say.fail("sudo failed: wrong password, or none given (use --password-stdin / --password-file, or the TUI)");
+		return 1;
+	}
+	sys.sleep(SYSPOLICYD_RESTART_WAIT_MS);
+	say.ok("syspolicyd restarted");
+	if (launchTest(sys, bin, timeoutMs, say)) return 0;
+	say.info("still failing: approve it on the machine (System Settings > Privacy & Security > Open Anyway) or reboot");
+	return 1;
+}
+function firstLine(text) {
+	const line = text.split("\n")[0]?.replace(/\r$/, "") ?? "";
+	if (line === "") throw new Error("the password is empty");
+	return line;
+}
+const passwordFromFile = (path) => firstLine(readFileSync(path, "utf8"));
+/** Reads one line from piped stdin. File descriptor 0 is stdin. */
+const passwordFromStdin = () => firstLine(readFileSync(0, "utf8"));
+/** Prompts on the terminal without echoing what is typed. */
+function promptHidden(question) {
+	const stdin = process.stdin;
+	if (!stdin.isTTY) return Promise.reject(/* @__PURE__ */ new Error("no terminal to prompt on: use --password-file or --password-stdin"));
+	process.stderr.write(question);
+	stdin.setRawMode(true);
+	stdin.setEncoding("utf8");
+	stdin.resume();
+	return new Promise((resolve, reject) => {
+		let typed = "";
+		const finish = (settle) => {
+			stdin.off("data", onData);
+			stdin.setRawMode(false);
+			stdin.pause();
+			process.stderr.write("\n");
+			settle();
+		};
+		const onData = (chunk) => {
+			for (const ch of chunk) {
+				if (ch === "\r" || ch === "\n" || ch === "") {
+					finish(() => typed === "" ? reject(/* @__PURE__ */ new Error("the password is empty")) : resolve(typed));
+					return;
+				}
+				if (ch === "") {
+					finish(() => reject(new Cancelled("cancelled")));
+					return;
+				}
+				typed = ch === "" || ch === "\b" ? typed.slice(0, -1) : typed + ch;
+			}
+		};
+		stdin.on("data", onData);
+	});
+}
+function shellQuote(value) {
+	return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+/** An ssh alias or user@host. Anything starting with '-' would be parsed as an ssh option. */
+function isSafeHost(host) {
+	return /^[A-Za-z0-9_][A-Za-z0-9_.@:%-]*$/.test(host);
+}
+/**
+* The command run on the remote Mac. It calls the agent-config launcher that install.sh wrote
+* there, located through $HOME on the remote side. The password is never part of it: the remote
+* reads it from stdin.
+*/
+function remoteCommand(o) {
+	const parts = [
+		"\"${AGENT_CONFIG_BIN_DIR:-$HOME/.local/bin}/agent-config\"",
+		FIX_COMMAND,
+		o.mode
+	];
+	if (o.binary) parts.push("--binary", shellQuote(o.binary));
+	if (o.launchTimeoutSec !== void 0) parts.push("--timeout", String(o.launchTimeoutSec));
+	if (o.stdinPassword) parts.push("--password-stdin");
+	return parts.join(" ");
+}
+function sshArgs(host, command) {
+	return [
+		"-o",
+		"BatchMode=yes",
+		"-o",
+		"ConnectTimeout=15",
+		"--",
+		host,
+		command
+	];
+}
+/** Returns the remote command's exit code (255 when ssh itself fails). */
+function runRemote(o) {
+	if (!isSafeHost(o.host)) throw new Error(`invalid host '${o.host}'`);
+	const stdinPassword = o.mode === "fix" && o.password !== void 0;
+	const command = remoteCommand({
+		...o,
+		stdinPassword
+	});
+	const r = spawnSync("ssh", sshArgs(o.host, command), {
+		input: stdinPassword ? `${o.password}\n` : void 0,
+		stdio: [
+			stdinPassword ? "pipe" : "ignore",
+			"inherit",
+			"inherit"
+		]
+	});
+	if (r.error) throw r.error;
+	return r.status ?? 255;
+}
+//#endregion
+//#region src/macfix-skill.ts
+/** The catalog item's ID, and the name of the skill it installs. */
+const MACFIX_ITEM = "fix-claude-code-permissions";
+const MACFIX_SKILL = MACFIX_ITEM;
+const MACFIX_TITLE = "Fix Claude Code Permissions (MacOS)";
+const CMD = `agent-config ${FIX_COMMAND}`;
+/** The skill: diagnose first, repair only on request, and keep the admin password out of the chat. */
+function macfixSkillMarkdown() {
+	return `---
+name: ${MACFIX_SKILL}
+description: Use when the Claude Code binary on a Mac hangs or never starts (\`claude --version\` hangs, "AppleSystemPolicy: Security policy would not allow process", a stuck Gatekeeper prompt, a wedged syspolicyd), on this Mac or on another one over ssh with no GUI session. Diagnoses first, then repairs with \`${CMD}\`, taking the admin password without ever putting it in the chat or in a command.
+---
+
+# Fix Claude Code permissions (macOS)
+
+The Claude Code binary is fine (Anthropic Developer ID, Team \`Q6L2SF6YDW\`, notarized); macOS holds its launch, usually because \`syspolicyd\` is wedged or a Gatekeeper prompt sits on a screen nobody can see. \`${CMD}\` repairs it without a GUI.
+
+## Steps
+
+1. Diagnose first. It changes nothing: \`${CMD} diagnose\`, or \`${CMD} remote <host> diagnose\` for another Mac (\`<host>\` is an ssh alias or \`user@host\`; the Mac needs agent-config installed and key-based ssh).
+2. Exit codes: 0 launches fine (stop), 1 still failing, 2 refused (not Anthropic-signed and notarized, or no binary found: \`--binary PATH\`), 130 cancelled.
+3. Only when the user asks for the repair, run \`fix\`. It removes \`com.apple.quarantine\` from that one binary, and only if the launch still hangs runs \`sudo killall syspolicyd\` (launchd respawns it). It stops as soon as \`claude --version\` works, never reboots and never touches other binaries.
+4. If \`fix\` still fails: approve the binary on the machine (System Settings > Privacy & Security > Open Anyway) or reboot it. Check that remote login survives a reboot first (FileVault pre-boot login blocks ssh).
+
+Options: \`--binary PATH\`, \`--timeout SECONDS\` (each launch test, default 20), \`--password-stdin\`, \`--password-file PATH\`.
+
+## The admin password
+
+The password is needed only for the \`sudo killall syspolicyd\` step, and only the user may provide it.
+
+- Never ask for it in chat, never read it, and never put it in a command, an argument, an environment variable or a file you write. Never echo or log it.
+- The user can type it hidden in the agent-config TUI (\`agent-config\`, then "Fix Claude Code permissions"): it goes to \`sudo -S\` and over ssh through stdin only, and is not saved.
+- Or in a terminal: \`${CMD} remote <host> fix\` prompts without echo. On this Mac, a file from \`--password-file\` or a pipe into \`--password-stdin\` is the user's to create; do not create one for them.
+- With passwordless sudo, \`fix\` needs no password at all.
+
+${T3_SECTION_HEADING}
+
+${T3_GATE}
+
+When the repair needs the admin password, ask for it with \`request_secret\` (\`mcp__${T3_SERVER}__request_secret\` in Claude Code): it opens a private card, you never see the value, and with \`delivery:"file"\` it returns a private file path.
+
+1. Run \`diagnose\` first and confirm the user wants the repair.
+2. \`request_secret\` with \`label:"Admin password"\`, \`delivery:"file"\` and a \`reason\` naming the Mac (or host) and \`sudo killall syspolicyd\`. A cancel or timeout means no password: stop, or run \`fix\` without one only if the user says sudo is passwordless.
+3. Run the repair with the path as the only trace of the secret: \`${CMD} remote <host> fix --password-file <path>\` for another Mac, \`${CMD} fix --password-file <path>\` for this one. The tool reads the first line, sends it to \`sudo -S\` through stdin and prints nothing of it.
+4. Never \`cat\` the file, copy it, or paste its contents into any command. Report the exit code and the output lines, and a new \`request_secret\` for every new run.
+`;
+}
 //#endregion
 //#region src/runtimes.ts
 /** Which components mean something for each runtime. */
@@ -7013,7 +7780,23 @@ const CATALOG = [
 		}
 	},
 	statusline,
-	bypassPermissions
+	bypassPermissions,
+	{
+		id: MACFIX_ITEM,
+		title: MACFIX_TITLE,
+		description: "skill that unblocks a Claude Code binary macOS refuses to launch, on this Mac or another over ssh, with `agent-config fix-claude-code`; the admin password is typed hidden in the TUI or comes from a password file, and inside T3 Code through `request_secret`, never in chat",
+		settings: [],
+		userOnly: true,
+		discover: () => ({}),
+		ops: (entry, runtime) => [{
+			runtime,
+			component: "catalog",
+			kind: "file",
+			path: join(layout(runtime, entry.project).skills, MACFIX_SKILL, "SKILL.md"),
+			content: macfixSkillMarkdown(),
+			label: `fix claude code permissions skill ${MACFIX_SKILL}`
+		}]
+	}
 ];
 function catalogItem(id) {
 	return CATALOG.find((i) => i.id === id);
@@ -7099,404 +7882,6 @@ function forgetCatalog(config, match, runtimes) {
 			runtimes: left
 		}] : [];
 	});
-}
-function defaultConfig() {
-	return {
-		version: 1,
-		components: [...COMPONENTS],
-		tiers: {
-			claude: defaultTierMap("claude"),
-			opencode: defaultTierMap("opencode"),
-			codex: defaultTierMap("codex"),
-			pi: defaultTierMap("pi")
-		},
-		reviewTiers: { ...DEFAULT_REVIEW_TIERS },
-		minLines: 350,
-		catalog: []
-	};
-}
-/** Loads the saved config over the defaults, dropping anything unrecognized. */
-function loadConfig() {
-	const config = defaultConfig();
-	let raw;
-	try {
-		raw = JSON.parse(readFileSync(configPath(), "utf8"));
-	} catch {
-		return config;
-	}
-	if (Array.isArray(raw.components)) config.components = raw.components.filter((c) => COMPONENTS.includes(c));
-	for (const runtime of RUNTIMES) for (const tier of TIERS) {
-		const saved = raw.tiers?.[runtime]?.[tier];
-		if (!saved) continue;
-		if (typeof saved.model === "string") config.tiers[runtime][tier].model = saved.model;
-		if (EFFORTS.includes(saved.effort)) config.tiers[runtime][tier].effort = saved.effort;
-	}
-	for (const [lens, tier] of Object.entries(raw.reviewTiers ?? {})) if (isReviewLens(lens) && typeof tier === "string" && isTier(tier)) config.reviewTiers[lens] = tier;
-	if (typeof raw.minLines === "number" && raw.minLines > 0) config.minLines = Math.floor(raw.minLines);
-	if (Array.isArray(raw.catalog)) config.catalog = raw.catalog.flatMap(catalogEntry);
-	const legacy = Array.isArray(raw.runtimes) ? raw.runtimes.filter(isRuntime) : [];
-	if (legacy.length > 0 && !config.catalog.some((e) => e.item === "model-ladder")) config.catalog.unshift({
-		item: LADDER_ITEM,
-		runtimes: legacy,
-		settings: {}
-	});
-	return config;
-}
-/**
-* Catalog items saved under their old id. Only the saved entry is renamed: the manifest keeps the
-* old item's records, which a full re-apply undoes as retired while it installs the new ones.
-*/
-const RENAMED_ITEMS = { "kick-off": "brief" };
-/** A saved catalog entry, or nothing when it names an unknown item or is malformed. */
-function catalogEntry(raw) {
-	if (!raw || typeof raw !== "object") return [];
-	const e = raw;
-	const item = typeof e.item === "string" ? catalogItem(RENAMED_ITEMS[e.item] ?? e.item) : void 0;
-	if (!item) return [];
-	if (e.project !== void 0 && (typeof e.project !== "string" || !isAbsolute(e.project) || item.userOnly)) return [];
-	const settings = {};
-	for (const [k, v] of Object.entries(e.settings ?? {})) if (typeof v === "string") settings[k] = v;
-	return [{
-		item: item.id,
-		...e.project ? { project: e.project } : {},
-		runtimes: Array.isArray(e.runtimes) ? e.runtimes.filter(isRuntime) : [],
-		settings
-	}];
-}
-function saveConfig(config) {
-	const path = configPath();
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
-}
-//#endregion
-//#region src/selfupdate.ts
-/** The checkout this CLI runs from (dist/cli.mjs and src/selfupdate.ts sit one level below). */
-function checkoutRoot() {
-	return dirname(dirname(fileURLToPath(import.meta.url)));
-}
-function installHome() {
-	return setting("HOME") || defaultInstallHome();
-}
-function defaultInstallHome() {
-	return join(home(), ".local", "share", "agent-config");
-}
-/** Where the pre-rename installer put the checkout. */
-function legacyInstallHome() {
-	return join(home(), ".local", "share", LEGACY_NAME);
-}
-function git(root, ...args) {
-	return execFileSync("git", [
-		"-C",
-		root,
-		...args
-	], {
-		encoding: "utf8",
-		stdio: [
-			"ignore",
-			"pipe",
-			"pipe"
-		],
-		timeout: 6e4
-	}).trim();
-}
-function samePath(a, b) {
-	try {
-		return realpathSync(a) === realpathSync(b);
-	} catch {
-		return false;
-	}
-}
-function gitError(error) {
-	const stderr = error?.stderr?.toString().trim();
-	if (stderr) return stderr.split("\n").slice(-2).join(" ");
-	return error instanceof Error ? error.message.split("\n")[0] ?? error.message : String(error);
-}
-function checkForUpdate(root = checkoutRoot()) {
-	const base = {
-		ref: "",
-		current: {
-			version: VERSION,
-			commit: ""
-		},
-		behind: 0
-	};
-	const refuse = (reason, extra = {}) => ({
-		...base,
-		...extra,
-		updatable: false,
-		reason
-	});
-	if (!existsSync(join(root, ".git"))) return refuse("not a git checkout; re-run the install one-liner");
-	if (!samePath(root, installHome())) return refuse(`running from ${root}, not the installed copy (${installHome()}); use git pull here`);
-	let ref;
-	let current;
-	try {
-		ref = git(root, "rev-parse", "--abbrev-ref", "HEAD");
-		current = {
-			version: VERSION,
-			commit: git(root, "rev-parse", "--short", "HEAD")
-		};
-	} catch (error) {
-		return refuse(`cannot read the installed checkout: ${gitError(error)}`);
-	}
-	if (ref === "HEAD") return refuse("the installed copy is pinned to a fixed commit or tag (detached HEAD); re-run the installer with AGENT_CONFIG_REF=<branch> to follow a branch", { current });
-	try {
-		git(root, "fetch", "--quiet", "origin", ref);
-	} catch (error) {
-		return refuse(`could not fetch origin/${ref}: ${gitError(error)}`, {
-			ref,
-			current
-		});
-	}
-	try {
-		const behind = Number(git(root, "rev-list", "--count", `HEAD..origin/${ref}`)) || 0;
-		let version = current.version;
-		try {
-			version = JSON.parse(git(root, "show", `origin/${ref}:package.json`)).version ?? version;
-		} catch {}
-		const latest = {
-			version,
-			commit: git(root, "rev-parse", "--short", `origin/${ref}`)
-		};
-		const relocate = samePath(root, legacyInstallHome()) && !existsSync(defaultInstallHome());
-		return {
-			updatable: true,
-			ref,
-			current,
-			latest,
-			behind,
-			...relocate ? { relocate } : {}
-		};
-	} catch (error) {
-		return refuse(`cannot compare with origin/${ref}: ${gitError(error)}`, {
-			ref,
-			current
-		});
-	}
-}
-const ENTRY = join("dist", "cli.mjs");
-function runs(root) {
-	return spawnSync(process.execPath, [join(root, ENTRY), "--version"], {
-		stdio: "ignore",
-		timeout: 3e4
-	}).status === 0;
-}
-function runUpdate(check, root = checkoutRoot()) {
-	const before = check.current.commit;
-	const moving = samePath(root, legacyInstallHome()) && !existsSync(defaultInstallHome());
-	const target = moving ? defaultInstallHome() : installHome();
-	let finalRoot = root;
-	const res = spawnSync("bash", [join(root, "install.sh")], {
-		encoding: "utf8",
-		stdio: [
-			"ignore",
-			"ignore",
-			"pipe"
-		],
-		timeout: 9e5,
-		env: {
-			...process.env,
-			AGENT_CONFIG_HOME: target,
-			AGENT_CONFIG_REF: check.ref,
-			AGENT_CONFIG_NO_RUN: "1",
-			NO_COLOR: "1"
-		}
-	});
-	const log = res.stderr ?? "";
-	if (moving && !existsSync(root) && existsSync(target)) finalRoot = target;
-	let after = "";
-	try {
-		after = git(finalRoot, "rev-parse", "--short", "HEAD");
-	} catch {}
-	if (res.status === 0) {
-		const moved = finalRoot === target && moving ? `, moved to ${target}` : "";
-		return {
-			ok: true,
-			message: `Updated to v${check.latest?.version} (${after})${moved}`,
-			log,
-			commit: after,
-			root: finalRoot
-		};
-	}
-	const killed = res.error || res.signal ? " (the installer was interrupted)" : "";
-	if (after === before && runs(finalRoot)) return {
-		ok: false,
-		message: `Update failed${killed}; the previous version is still installed.`,
-		log,
-		root: finalRoot
-	};
-	return {
-		ok: false,
-		message: `Update failed${killed} and the installed copy may be inconsistent (at ${after || "an unknown commit"}); re-run the install one-liner to repair it.`,
-		log,
-		root: finalRoot
-	};
-}
-/**
-* Adds the `agi` alias (a relative symlink to the agent-config wrapper) when it is missing.
-* Updating runs the old checkout's install.sh, which may predate the alias, so the installed
-* command adds it on its next run. Only for the wrapper's bin dir; anything already there stays.
-*/
-function ensureAgiAlias() {
-	const bin = setting("BIN_DIR");
-	if (!bin || !existsSync(join(bin, "agent-config"))) return;
-	const agi = join(bin, "agi");
-	try {
-		lstatSync(agi);
-		return;
-	} catch {}
-	try {
-		symlinkSync("agent-config", agi);
-	} catch {}
-}
-/** Re-applies the saved configuration with the freshly installed CLI (new prompts and agents). */
-function reapplyWithNewVersion(root = checkoutRoot()) {
-	return spawnSync(process.execPath, [
-		join(root, ENTRY),
-		"install",
-		"--yes"
-	], { stdio: "inherit" }).status ?? 1;
-}
-//#endregion
-//#region src/commands.ts
-/** The user cancelled a prompt (Ctrl+C); the CLI exits 130. */
-var Cancelled = class extends Error {};
-function onPath(bin) {
-	try {
-		execFileSync("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" });
-		return true;
-	} catch {
-		return false;
-	}
-}
-function detect() {
-	return RUNTIMES.map((runtime) => ({
-		runtime,
-		bin: onPath(RUNTIME_BIN[runtime]),
-		dir: existsSync(runtimeDir(runtime))
-	}));
-}
-function detectedRuntimes() {
-	return detect().filter((d) => d.bin || d.dir).map((d) => d.runtime);
-}
-/**
-* Plans every saved catalog entry, or with `only` just those (keys such as "kaneo@user" or
-* "model-ladder@user"), leaving the other entries alone.
-*/
-function buildPlan(config, given) {
-	const only = given && withT3Composed(config, given);
-	const manifest = loadManifest().records;
-	const records = new Map(manifest.map((r) => [recordKey(r), r]));
-	const ops = catalogOps(config, only);
-	const wanted = new Set(ops.map(opKey));
-	const missing = new Set(missingProjects(config).map(entryKey));
-	const planned = new Set((only ?? config.catalog.map(entryKey)).filter((k) => !missing.has(k)));
-	const ladder = ladderRuntimes(config);
-	const retired = (key, version) => {
-		const { item, project } = parseEntryKey(key);
-		return !catalogItem(item) && !(version && isNewer(version)) && (project === void 0 || existsSync(project));
-	};
-	return [...manifest.filter((r) => r.item !== void 0 && (planned.has(r.item) || !only && retired(r.item, r.version)) && !wanted.has(recordKey(r)) && (r.item !== "model-ladder@user" || ladder.includes(r.runtime) && config.components.includes(r.component))).map(planRemoval), ...ops.map((op) => planOp(op, records.get(opKey(op))))];
-}
-/**
-* After uninstalling some runtimes, puts back catalog files the remaining runtimes still use: a
-* project's AGENTS.md block is shared by OpenCode, Codex and Pi but recorded under one of them.
-*/
-function restoreShared(config, removed) {
-	const paths = new Set(removed);
-	return applyPlan(buildPlan(config, config.catalog.map(entryKey)).filter((x) => (x.action === "create" || x.action === "update") && paths.has(x.op.path))).errors;
-}
-/**
-* Undoes what agent-config installed, limited to one catalog entry (`key`) and/or some runtimes,
-* then updates the saved configuration so `install` does not bring it back. An entry whose files
-* were kept because the user changed them stays saved, so a later `--force` run can remove them.
-*/
-function uninstallSelection(selection, force = false) {
-	const { key, runtimes } = selection;
-	const results = uninstall((r) => (key === void 0 || r.item === key) && (runtimes.length === 0 || runtimes.includes(r.runtime)), force);
-	const kept = new Set(results.filter((r) => r.outcome === "kept-modified").map((r) => r.record.item));
-	const config = loadConfig();
-	forgetCatalog(config, (e) => (key === void 0 || entryKey(e) === key) && (e.item === "model-ladder" || !kept.has(entryKey(e))), runtimes);
-	saveConfig(config);
-	const removed = results.filter((r) => r.outcome !== "kept-modified").map((r) => r.record.path);
-	const restoreErrors = runtimes.length > 0 ? restoreShared(config, removed) : [];
-	if (key !== void 0 && parseEntryKey(key).item === "t3-code-integration") {
-		const composed = withT3Composed(config, [key]).filter((k) => k !== key);
-		if (composed.length > 0) restoreErrors.push(...applyPlan(buildPlan(config, composed)).errors);
-	}
-	return {
-		results,
-		restoreErrors
-	};
-}
-function tildify(path) {
-	const h = home();
-	return path.startsWith(`${h}/`) ? `~${path.slice(h.length)}` : path;
-}
-function status() {
-	return loadManifest().records.map((record) => ({
-		record,
-		state: recordState(record)
-	}));
-}
-function doctor() {
-	const checks = [];
-	checks.push({
-		name: "node",
-		ok: Number(process.versions.node.split(".")[0]) >= 22,
-		detail: process.version
-	});
-	for (const d of detect()) checks.push({
-		name: d.runtime,
-		ok: d.bin || d.dir,
-		detail: d.bin || d.dir ? `${d.bin ? "cli on PATH" : "cli not on PATH"}, ${tildify(runtimeDir(d.runtime))}` : "not installed"
-	});
-	const codexConfig = join(codexDir(), "config.toml");
-	if (existsSync(codexConfig)) {
-		const text = readFileSync(codexConfig, "utf8");
-		const enabled = /^\s*multi_agent\s*=\s*true/m.test(text);
-		checks.push({
-			name: "codex multi_agent",
-			ok: enabled,
-			detail: enabled ? "enabled" : "add `multi_agent = true` under [features] in ~/.codex/config.toml so Codex can spawn ladder agents"
-		});
-	}
-	if (existsSync(piDir())) {
-		const settings = join(piDir(), "settings.json");
-		const text = existsSync(settings) ? readFileSync(settings, "utf8") : "";
-		const subagents = /subagent|gentle-pi/.test(text) || existsSync(join(piDir(), "subagents.json"));
-		checks.push({
-			name: "pi subagents",
-			ok: subagents,
-			detail: subagents ? "subagent support found" : "install a Pi subagent extension (for example gentle-pi) so Pi can call ladder agents"
-		});
-	}
-	if (existsSync(legacyInstallHome())) checks.push({
-		name: "install location",
-		ok: false,
-		detail: `${tildify(legacyInstallHome())} is the pre-rename location; run \`agent-config self-update\` or the install one-liner to move it to ${tildify(defaultInstallHome())}`
-	});
-	const gentle = onPath("gentle-ai");
-	checks.push({
-		name: "gentle-ai",
-		ok: true,
-		detail: gentle ? "installed (review-models applies)" : "not installed (review-models skips)"
-	});
-	const installed = status();
-	const drifted = installed.filter((s) => s.state !== "ok");
-	checks.push({
-		name: "managed files",
-		ok: drifted.length === 0,
-		detail: drifted.length === 0 ? "all as installed" : `${drifted.length} changed or missing (often \`gentle-ai sync\` resetting review models); run \`agent-config install\` to reapply`
-	});
-	const others = installed.filter((s) => s.record.version !== VERSION);
-	const versions = [...new Set(others.map((s) => s.record.version ?? "unrecorded"))].sort();
-	checks.push({
-		name: "installed version",
-		ok: others.length === 0,
-		detail: others.length === 0 ? `all at ${VERSION}` : `${others.length} installed by another version (${versions.join(", ")}); run \`agent-config install\` to bring them to ${VERSION}`
-	});
-	return checks;
 }
 //#endregion
 //#region src/tui.ts
@@ -7790,6 +8175,100 @@ function doctorFlow() {
 	const lines = doctor().map((c) => `${c.ok ? import_picocolors.default.green("✔") : import_picocolors.default.yellow("!")} ${c.name.padEnd(18)} ${import_picocolors.default.dim(c.detail)}`);
 	note(lines.join("\n"), "Doctor");
 }
+const tuiReporter = {
+	section: (t) => log.step(import_picocolors.default.bold(t)),
+	ok: (t) => log.success(t),
+	fail: (t) => log.error(t),
+	info: (t) => log.message(import_picocolors.default.dim(t))
+};
+/**
+* Where the admin password comes from: typed hidden here (masked, kept in memory for this one run,
+* sent to sudo through stdin), read from a file, or not at all for passwordless sudo.
+*/
+async function askAdminPassword() {
+	const source = ask(await select({
+		message: "Admin password for sudo",
+		options: [
+			{
+				value: "type",
+				label: "Type it now",
+				hint: "hidden; not saved, not shown, not an argument"
+			},
+			{
+				value: "file",
+				label: "Read it from a file",
+				hint: "the first line of a file you name"
+			},
+			{
+				value: "none",
+				label: "No password",
+				hint: "only works when sudo is passwordless"
+			}
+		]
+	}));
+	if (source === "type") return ask(await password({
+		message: "Admin password",
+		mask: "•",
+		validate: (v) => v ? void 0 : "The password is empty"
+	}));
+	if (source === "file") {
+		const path = ask(await text({
+			message: "Password file",
+			validate: (v) => v?.trim() ? void 0 : "Enter a path"
+		}));
+		return passwordFromFile(resolve(path.trim()));
+	}
+}
+async function fixFlow() {
+	const host = ask(await select({
+		message: "Fix Claude Code Permissions (MacOS)",
+		options: [{
+			value: "local",
+			label: "This Mac"
+		}, {
+			value: "remote",
+			label: "Another Mac over ssh",
+			hint: "needs agent-config installed there"
+		}]
+	})) === "remote" ? ask(await text({
+		message: "ssh host (an alias or user@host)",
+		validate: (v) => isSafeHost(v?.trim() ?? "") ? void 0 : "Not a valid ssh host"
+	})).trim() : void 0;
+	const mode = ask(await select({
+		message: "What to run",
+		options: [{
+			value: "diagnose",
+			label: "Diagnose",
+			hint: "read-only report"
+		}, {
+			value: "fix",
+			label: "Fix",
+			hint: "remove the quarantine flag, restart syspolicyd if needed"
+		}]
+	}));
+	let password;
+	if (mode === "fix") try {
+		password = await askAdminPassword();
+	} catch (error) {
+		if (error instanceof Cancelled) throw error;
+		log.error(error instanceof Error ? error.message : String(error));
+		return;
+	}
+	try {
+		const code = host === void 0 ? runFix(realSystem, {
+			mode,
+			...password !== void 0 ? { password } : {}
+		}, tuiReporter) : runRemote({
+			host,
+			mode,
+			...password !== void 0 ? { password } : {}
+		});
+		if (code === 0) log.success("Claude Code launches.");
+		else log.warn(`Not fixed (exit ${code}).`);
+	} catch (error) {
+		log.error(error instanceof Error ? error.message : String(error));
+	}
+}
 async function uninstallFlow() {
 	const entries = status();
 	const installed = [...new Set(entries.map((e) => e.record.runtime))];
@@ -7884,6 +8363,11 @@ async function runTui() {
 						hint: "check runtimes and prerequisites"
 					},
 					{
+						value: "fix-claude",
+						label: MACFIX_TITLE,
+						hint: "unblock a Claude Code binary macOS refuses to launch, here or over ssh"
+					},
+					{
 						value: "uninstall",
 						label: "Uninstall",
 						hint: "remove and restore"
@@ -7909,6 +8393,7 @@ async function runTui() {
 			if (choice === "catalog") await catalogFlow();
 			if (choice === "status") statusFlow();
 			if (choice === "doctor") doctorFlow();
+			if (choice === "fix-claude") await fixFlow();
 			if (choice === "uninstall") await uninstallFlow();
 			if (choice === "self-update" && await selfUpdateFlow()) break;
 			if (choice === "reset") {
@@ -8213,6 +8698,13 @@ Usage:
   agent-config config              print the saved configuration and its path
   agent-config self-update         update agent-config itself (--dry-run only checks);
                                    \`agent-config update\` and \`agi u\` are the same command
+  agent-config ${FIX_COMMAND} diagnose|fix
+                                   macOS: unblock a Claude Code binary that macOS refuses to launch
+                                   (diagnose changes nothing; fix removes its quarantine flag and, if
+                                   the launch still hangs, restarts syspolicyd with sudo)
+  agent-config ${FIX_COMMAND} remote <host> [diagnose|fix]
+                                   the same on another Mac over ssh (an ssh alias or user@host; that
+                                   Mac needs agent-config installed)
   agent-config delegate <role> [--tier t] [--runtime r] "<task>"
                                    run a ladder agent headlessly and print only its reply; role is
                                    read | explore | research | design | ux | edit | review;
@@ -8239,6 +8731,15 @@ Other flags:
   --json                         print one JSON document to stdout
   -v, --version / -h, --help
 
+Fix flags (\`${FIX_COMMAND}\`):
+  --binary <path>                target this claude binary instead of finding it
+  --timeout <seconds>            bound each launch test (default 20)
+  --password-stdin               read the admin password from the first line of stdin
+  --password-file <path>         read the admin password from the first line of a file
+  Without either flag, \`remote <host> fix\` prompts for the password without echo; a local \`fix\`
+  runs sudo non-interactively (the TUI's "Fix Claude Code permissions" asks hidden for both). The
+  password goes through stdin only, never as an argument, and is never saved.
+
 Delegate flags:
   --tier <fast|balanced|deep>    first rung (default: fast)
   --no-climb                     do not climb to the next rung on partial/escalate/failure
@@ -8252,6 +8753,12 @@ Exit codes: 0 ok, 1 a step failed, 2 usage error or refusal,
 3 uninstall kept files you edited (re-run with --force) / delegate ended partial or escalate,
 4 delegate refused: already running inside a agent-config delegated agent, 130 cancelled.`;
 var UsageError = class extends Error {};
+const plainReporter = {
+	section: (t) => console.log(t),
+	ok: (t) => console.log(`  ok   ${t}`),
+	fail: (t) => console.log(`  FAIL ${t}`),
+	info: (t) => console.log(`  ..   ${t}`)
+};
 const DELEGATE_ONLY = [
 	"tier",
 	"cwd",
@@ -8259,6 +8766,11 @@ const DELEGATE_ONLY = [
 	"timeout",
 	"max-time",
 	"verify"
+];
+const FIX_ONLY = [
+	"binary",
+	"password-stdin",
+	"password-file"
 ];
 const CATALOG_ONLY = ["project", "url"];
 const LADDER_ONLY = [
@@ -8270,6 +8782,7 @@ const LADDER_ONLY = [
 ];
 const NOT_FOR_DELEGATE = [
 	...CATALOG_ONLY,
+	...FIX_ONLY,
 	"component",
 	"model",
 	"effort",
@@ -8487,6 +9000,9 @@ async function main(argv) {
 			timeout: { type: "string" },
 			"max-time": { type: "string" },
 			verify: { type: "string" },
+			binary: { type: "string" },
+			"password-stdin": { type: "boolean" },
+			"password-file": { type: "string" },
 			yes: {
 				type: "boolean",
 				short: "y"
@@ -8513,8 +9029,8 @@ async function main(argv) {
 	for (const dir of migration.moved) process.stderr.write(`agent-config: moved ${dir} to its agent-config location (renamed from model-ladder)\n`);
 	for (const warning of migration.warnings) process.stderr.write(`agent-config: warning: ${warning}; continuing with the current layout\n`);
 	const given = Object.keys(values).filter((k) => values[k] !== void 0);
-	const misplaced = command === "delegate" ? given.find((k) => NOT_FOR_DELEGATE.includes(k)) : given.find((k) => DELEGATE_ONLY.includes(k));
-	if (misplaced) throw new UsageError(command === "delegate" ? `--${misplaced} does not apply to delegate` : `--${misplaced} only applies to delegate`);
+	const misplaced = command === "delegate" ? given.find((k) => NOT_FOR_DELEGATE.includes(k)) : command === "fix-claude-code" ? given.find((k) => DELEGATE_ONLY.includes(k) && k !== "timeout") : given.find((k) => DELEGATE_ONLY.includes(k) || FIX_ONLY.includes(k));
+	if (misplaced) throw new UsageError(command === "delegate" ? `--${misplaced} does not apply to delegate` : command === "fix-claude-code" ? `--${misplaced} only applies to delegate` : FIX_ONLY.includes(misplaced) ? `--${misplaced} only applies to ${FIX_COMMAND}` : `--${misplaced} only applies to delegate`);
 	const itemId = [
 		"install",
 		"apply",
@@ -8620,6 +9136,48 @@ async function main(argv) {
 			const checks = doctor();
 			out(json, { checks }, checks.map((c) => `${c.ok ? "ok  " : "warn"} ${c.name.padEnd(18)} ${c.detail}`).join("\n"));
 			return 0;
+		}
+		case FIX_COMMAND: {
+			if (json) throw new UsageError(`--json does not apply to ${FIX_COMMAND}`);
+			const withOther = given.filter((k) => [
+				"yes",
+				"dry-run",
+				"force",
+				"runtime"
+			].includes(k));
+			if (withOther[0]) throw new UsageError(`--${withOther[0]} does not apply to ${FIX_COMMAND}`);
+			if (values["password-stdin"] && values["password-file"]) throw new UsageError("use either --password-stdin or --password-file, not both");
+			const timeoutSec = values.timeout === void 0 ? void 0 : Number(values.timeout);
+			if (timeoutSec !== void 0 && !(timeoutSec > 0)) throw new UsageError("--timeout expects a positive number of seconds");
+			const resolvePassword = async (mode, canPrompt) => {
+				if (mode !== "fix") return void 0;
+				if (values["password-file"]) return passwordFromFile(values["password-file"]);
+				if (values["password-stdin"]) return passwordFromStdin();
+				return canPrompt ? promptHidden("Admin password: ") : void 0;
+			};
+			const [target, ...rest] = positionals.slice(1);
+			if (target === "diagnose" || target === "fix") {
+				if (rest.length > 0) throw new UsageError(`unexpected argument "${rest[0]}"`);
+				return runFix(realSystem, {
+					mode: target,
+					...values.binary ? { binary: values.binary } : {},
+					...timeoutSec !== void 0 ? { launchTimeoutMs: timeoutSec * 1e3 } : {},
+					password: await resolvePassword(target, false)
+				}, plainReporter);
+			}
+			if (target === "remote") {
+				const [host, mode = "diagnose", ...extra] = rest;
+				if (host === void 0) throw new UsageError("remote needs a host (an ssh alias or user@host)");
+				if (!isMode(mode) || extra.length > 0) throw new UsageError("remote <host> takes diagnose or fix");
+				return runRemote({
+					host,
+					mode,
+					...values.binary ? { binary: values.binary } : {},
+					...timeoutSec !== void 0 ? { launchTimeoutSec: timeoutSec } : {},
+					password: await resolvePassword(mode, true)
+				});
+			}
+			throw new UsageError(`${FIX_COMMAND} expects diagnose, fix or remote <host>`);
 		}
 		case "delegate": {
 			if (process.env["AGENT_CONFIG_DELEGATED"] || process.env["MODEL_LADDER_DELEGATED"]) {
