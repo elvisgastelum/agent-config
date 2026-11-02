@@ -3,7 +3,10 @@ import { PARALLEL_WAVE, continueMarkdown } from "../src/continue.ts";
 import { WAVE_RULE } from "../src/kaneo.ts";
 import { briefMarkdown } from "../src/brief.ts";
 import {
+  EPIC_BASE_RULE,
+  EPIC_BRANCH_LINE,
   EPIC_BRANCH_MERGE_OVERRIDE,
+  NO_EPIC_BRANCH,
   ROUTED_REVIEW,
   prDelivery,
   ticketPhases,
@@ -158,6 +161,64 @@ describe("continueMarkdown parallel modes on a store", () => {
   test("keeps the Kaneo parallel flow", () => {
     expect(text).toContain("Have the scribe move the Kaneo ticket to Done.");
     expect(text).toContain("comments the PR URL on its Kaneo ticket;");
+  });
+});
+
+describe("continueMarkdown parallel-wave on an epic branch", () => {
+  const section = waveSection(continueMarkdown("claude", MODELS, BRIEF_DIR));
+
+  test("reads the brief's epic branch line and makes it the wave branch", () => {
+    expect(section).toContain(
+      `- When the brief has a \`${EPIC_BRANCH_LINE}\` line that is not \`${NO_EPIC_BRANCH}\`, the integration branch (\`<integration branch>\` above) is the epic branch it names, \`<epic-branch>\`, and \`<base>\` is read from the line the same way /brief's loop reads it:`,
+    );
+  });
+
+  test("resolves the base once per run with the shared rule", () => {
+    expect(section).toContain(
+      `  - The parent resolves \`<base>\` once per run (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch or first uses an existing one, says which base it took, and uses that result for every later step.`,
+    );
+  });
+
+  test("creates the epic branch before the first worktree and uses it in every parallel step", () => {
+    expect(section).toContain(
+      "  - The parent creates and pushes `origin/<epic-branch>` from `origin/<base>` when it is missing, before the first worktree.",
+    );
+    expect(section).toContain(
+      "  - In place of `origin/<default-branch>`: parallel mode step 2.1 takes `origin/<epic-branch>` as the base, step 2.4 runs `git worktree add -b <branch> <path> origin/<epic-branch>`, and merge loop step 4.2 runs `git merge origin/<epic-branch>`.",
+    );
+    expect(section).toContain(
+      "  - A wave of one story runs the single-ticket flow with its branch cut from `origin/<epic-branch>` instead of the default branch and its PR opened into `<epic-branch>`.",
+    );
+    expect(section).toContain(
+      "  - Cleanup step 5.2 runs `git checkout <epic-branch> && git pull`, so the epic branch stays checked out.",
+    );
+  });
+
+  test("merges the base into the epic branch after the wave", () => {
+    expect(section).toContain(
+      "  - After the wave's cleanup, in the main checkout on `<epic-branch>`, the parent merges the base with a plain `git merge origin/<base>` (no rebase, no force-push) and pushes it; a conflict it cannot resolve with confidence stops the run and is reported, as the merge loop's stop rule says.",
+    );
+  });
+
+  test("never moves the epic to Done on an epic branch, and keeps the rule without one", () => {
+    expect(section).toContain(
+      "and have the scribe move the epic to Done only when every criterion is met.",
+    );
+    expect(section).toContain(
+      `With an epic branch (a \`${EPIC_BRANCH_LINE}\` line that is not \`${NO_EPIC_BRANCH}\`), no wave moves the epic to Done, the last one included: the epic still has to merge its epic branch into the base.`,
+    );
+  });
+
+  test("keeps the single and parallel mode steps and the no-brief fallback", () => {
+    const text = continueMarkdown("claude", MODELS, BRIEF_DIR);
+    for (const line of [
+      "3. `git fetch origin` and create the branch `<IDENTIFIER>/<short-kebab-description>` (e.g. `FEX-2/some-feature-getting-done`) from the up-to-date default branch.",
+      "1. `git fetch origin` and use the up-to-date default branch as the base.",
+      "4. `git worktree add -b <branch> <path> origin/<default-branch>`",
+      "2. In that ticket's worktree, merge the latest default branch into its branch: `git merge origin/<default-branch>`.",
+      "Without one, the integration branch is `dev` when `origin/dev` exists and the default branch otherwise",
+    ])
+      expect(text).toContain(line);
   });
 });
 

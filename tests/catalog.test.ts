@@ -738,4 +738,10 @@ describe("store fallback in /brief and /continue", () => {
     expect(readme).toContain("awaiting human merge");
     expect(readme).toContain("uses `origin/<epic-branch>` instead");
   });
+
+  test("README documents parallel-wave on an epic branch", () => {
+    const readme = read(join(import.meta.dirname, "..", "README.md"));
+    expect(readme).toContain("Epic branch");
+    expect(readme).toContain("An epic-branch brief keeps the wave on its epic branch");
+  });
 });

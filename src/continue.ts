@@ -5,6 +5,11 @@
 import { COMMIT_SKILL, COMMIT_WRITER } from "./commit.ts";
 import { EPIC_TITLE_PREFIX, KANEO_SKILL, SCRIBE, TOUCHES_LINE, WAVE_RULE } from "./kaneo.ts";
 import {
+  BASE_PLACEHOLDER,
+  EPIC_BASE_RULE,
+  EPIC_BRANCH_LINE,
+  EPIC_BRANCH_PLACEHOLDER,
+  NO_EPIC_BRANCH,
   ROUTED_REVIEW,
   modelRouting,
   phase,
@@ -123,6 +128,10 @@ export function continueMarkdown(
       : "Arguments passed to this run: `$ARGUMENTS` (empty means no arguments).";
   const scribe = CALL[runtime](SCRIBE);
   const deep = `\`${agentName("read", "deep")}\` (${models.deep})`;
+  // The brief's epic branch names. Built on call: loop.ts, which defines them, may still be loading.
+  const epic = EPIC_BRANCH_PLACEHOLDER;
+  const base = BASE_PLACEHOLDER;
+  const epicLine = `\`${EPIC_BRANCH_LINE}\``;
   const phases = ticketPhases(WAVE_BRANCH, WAVE_REVIEW)
     .map((step, i) => `   ${i + 1}. ${step}`)
     .join("\n");
@@ -262,6 +271,13 @@ Run parallel mode steps 2 to 5 with the wave as the picked tickets, and these ch
 - Each worker builds its ticket through these phases, every handoff starting with its phase line, then runs the checks, commits, pushes and opens the PR as parallel mode step 3 says:
 ${phases}
 - A worker reports itself blocked when the review still has findings after 3 rounds or CI fails twice after fixes.
+- When the brief has a ${epicLine} line that is not \`${NO_EPIC_BRANCH}\`, the integration branch (\`${WAVE_BRANCH}\` above) is the epic branch it names, \`${epic}\`, and \`${base}\` is read from the line the same way /brief's loop reads it:
+  - The parent resolves \`${base}\` once per run (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch or first uses an existing one, says which base it took, and uses that result for every later step.
+  - The parent creates and pushes \`origin/${epic}\` from \`origin/${base}\` when it is missing, before the first worktree.
+  - In place of \`origin/<default-branch>\`: parallel mode step 2.1 takes \`origin/${epic}\` as the base, step 2.4 runs \`git worktree add -b <branch> <path> origin/${epic}\`, and merge loop step 4.2 runs \`git merge origin/${epic}\`.
+  - A wave of one story runs the single-ticket flow with its branch cut from \`origin/${epic}\` instead of the default branch and its PR opened into \`${epic}\`.
+  - Cleanup step 5.2 runs \`git checkout ${epic} && git pull\`, so the epic branch stays checked out.
+  - After the wave's cleanup, in the main checkout on \`${epic}\`, the parent merges the base with a plain \`git merge origin/${base}\` (no rebase, no force-push) and pushes it; a conflict it cannot resolve with confidence stops the run and is reported, as the merge loop's stop rule says.
 
 ${modelRouting(runtime, models, WAVE_REVIEW)}
 
@@ -272,6 +288,6 @@ After the cleanup, explain the wave at the user's level: plain words with each t
 - **What changed**: per ticket, what someone can now do or what works differently, and why it matters for the epic.
 - **How it was checked**: risk level, review rounds, checks and CI.
 - **What to watch**: open findings, risks, and anything not merged with the reason.
-- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met.
+- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met. With an epic branch (a ${epicLine} line that is not \`${NO_EPIC_BRANCH}\`), no wave moves the epic to Done, the last one included: the epic still has to merge its epic branch into the base.
 `;
 }
