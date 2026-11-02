@@ -37,6 +37,8 @@ describe("storeAccess", () => {
     );
     expect(text).toContain(STORE_MIGRATION.check);
     expect(text).toContain(STORE_MIGRATION.addPrUrl);
+    expect(text).toContain(STORE_MIGRATION.epicsCheck);
+    expect(text).toContain(STORE_MIGRATION.addEpicPrUrl);
     expect(text).toContain("CREATE TABLE IF NOT EXISTS ticket_sessions");
   });
 

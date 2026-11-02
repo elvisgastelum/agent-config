@@ -136,13 +136,16 @@ const SESSIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ticket_sessions (
 );`;
 
 /**
- * Brings a store written before `tickets.pr_url` and `ticket_sessions` up to date. SQLite cannot
- * add a column only when it is missing, so the agent runs `check` first and `addPrUrl` when it
- * returns no row; `sessions` is idempotent.
+ * Brings a store written before `tickets.pr_url`, `epics.pr_url` and `ticket_sessions` up to date.
+ * SQLite cannot add a column only when it is missing, so the agent runs `check` first and `addPrUrl`
+ * when it returns no row; independently it runs `epicsCheck` and, when it returns no row,
+ * `addEpicPrUrl`; `sessions` is idempotent.
  */
 export const STORE_MIGRATION = {
   check: "SELECT 1 FROM pragma_table_info('tickets') WHERE name = 'pr_url';",
   addPrUrl: "ALTER TABLE tickets ADD COLUMN pr_url TEXT;",
+  epicsCheck: "SELECT 1 FROM pragma_table_info('epics') WHERE name = 'pr_url';",
+  addEpicPrUrl: "ALTER TABLE epics ADD COLUMN pr_url TEXT;",
   sessions: SESSIONS_SCHEMA,
 } as const;
 
@@ -183,7 +186,8 @@ CREATE TABLE IF NOT EXISTS epics (
   goal TEXT NOT NULL,
   done_when TEXT NOT NULL,
   position INTEGER NOT NULL,
-  tracker_id TEXT
+  tracker_id TEXT,
+  pr_url TEXT
 );
 CREATE TABLE IF NOT EXISTS tickets (
   id TEXT PRIMARY KEY,
@@ -505,7 +509,7 @@ ${PLAN_SCHEMA}
 
 Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist; \`busy_timeout\` makes a write wait up to 5 seconds while another session is writing the store, instead of failing at once. ${PYTHON_FALLBACK} ${STORE_PATH_RULE} Query the store with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
-A store created before \`tickets.pr_url\` and \`ticket_sessions\` existed needs them before its first write: when ${code(STORE_MIGRATION.check)} returns no row, run ${code(STORE_MIGRATION.addPrUrl)}, which fails when run twice, so the check always comes first; then run the \`ticket_sessions\` statement from the schema above, which is safe to repeat.
+A store created before \`tickets.pr_url\`, \`epics.pr_url\` and \`ticket_sessions\` existed needs them before its first write. The two column checks are independent: when ${code(STORE_MIGRATION.check)} returns no row, run ${code(STORE_MIGRATION.addPrUrl)}; separately, when ${code(STORE_MIGRATION.epicsCheck)} returns no row, run ${code(STORE_MIGRATION.addEpicPrUrl)}. Each ALTER fails when run twice, so its check always comes first; then run the \`ticket_sessions\` statement from the schema above, which is safe to repeat.
 
 ## Design system standard
 
