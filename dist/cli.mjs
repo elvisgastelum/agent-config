@@ -3522,8 +3522,11 @@ const MONTH_ORDER_EXAMPLE = "01-2027, 10-2026, 02-2026";
 const SESSIONS_TABLE = "ticket_sessions";
 const PR_URL_COLUMN = "tickets.pr_url";
 const EPIC_PR_URL_COLUMN = "epics.pr_url";
+const EPIC_MERGED_AT_COLUMN = "epics.merged_at";
 /** The status write for the ticket `<ID>`; built on call, since planning.ts imports this file's users. */
 const setStatus = (status) => `${STORE_WRITE_PREFIX} UPDATE tickets SET status = '${status}' WHERE id = '<ID>';`;
+/** The write that marks the epic `<epic id>` as reported merged, so later runs skip it; built on call like `setStatus`. */
+const setEpicMerged = () => `${STORE_WRITE_PREFIX} UPDATE epics SET merged_at = datetime('now') WHERE id = '<epic id>';`;
 /** The session row a session or orchestrator adds when it takes the ticket `<ID>`. */
 const START_SESSION = "INSERT INTO ticket_sessions (ticket_id, session_id, started_at, last_seen_at) VALUES ('<ID>', '<session id>', datetime('now'), datetime('now'));";
 /** The heading shared by every action's store section. */
@@ -3546,7 +3549,7 @@ function storeAccess(scribe) {
 
 **Reads and writes.** Query with small selects (\`sqlite3 -box <store> "SELECT …"\`). Start every write with ${code$2(STORE_WRITE_PREFIX)}: a leading \`5000\` line from a write is the busy_timeout prefix echoing, not an error. ${PYTHON_FALLBACK}
 
-**Migration.** Before the first write to a store, including the status update right after reading the ticket at pick, bring it up to date: when ${code$2(STORE_MIGRATION.check)} returns no row, run ${code$2(STORE_MIGRATION.addPrUrl)}; independently, when ${code$2(STORE_MIGRATION.epicsCheck)} returns no row, run ${code$2(STORE_MIGRATION.addEpicPrUrl)} (it adds ${code$2(EPIC_PR_URL_COLUMN)}). Each ALTER fails when run twice, so its check always comes first; then run \`CREATE TABLE IF NOT EXISTS ${SESSIONS_TABLE}\` from the planning schema (\`ticket_id\` referencing \`tickets(id)\` with \`ON DELETE CASCADE\`, \`session_id\`, \`started_at\`, \`last_seen_at\`, \`ended_at\`, primary key \`(ticket_id, session_id)\`), which is safe to repeat.
+**Migration.** Before the first write to a store, including the status update right after reading the ticket at pick, bring it up to date: when ${code$2(STORE_MIGRATION.check)} returns no row, run ${code$2(STORE_MIGRATION.addPrUrl)}; independently, when ${code$2(STORE_MIGRATION.epicsCheck)} returns no row, run ${code$2(STORE_MIGRATION.addEpicPrUrl)} (it adds ${code$2(EPIC_PR_URL_COLUMN)}); independently, when ${code$2(STORE_MIGRATION.epicsMergedCheck)} returns no row, run ${code$2(STORE_MIGRATION.addEpicMergedAt)} (it adds ${code$2(EPIC_MERGED_AT_COLUMN)}). Each ALTER fails when run twice, so its check always comes first; then run \`CREATE TABLE IF NOT EXISTS ${SESSIONS_TABLE}\` from the planning schema (\`ticket_id\` referencing \`tickets(id)\` with \`ON DELETE CASCADE\`, \`session_id\`, \`started_at\`, \`last_seen_at\`, \`ended_at\`, primary key \`(ticket_id, session_id)\`), which is safe to repeat.
 
 **Sessions.** A session's id is the runtime's session id when the runtime exposes one, otherwise a UUID generated at the start of the run and kept for the whole run. The session or orchestrator working a ticket writes the store itself, at the absolute path it was given, and owns its \`${SESSIONS_TABLE}\` row: it inserts the row (\`started_at\`, \`last_seen_at\`) when it takes the ticket, updates \`last_seen_at\` on each of its store writes, writes the PR URL to ${code$2(PR_URL_COLUMN)} after opening the PR, and sets \`ended_at\` when the PR is opened, it stops or it fails. Ended sessions never count as active.`;
 }
@@ -3887,8 +3890,8 @@ Agents run through ${CALL$1[runtime]("<name>")}. Every delegated handoff starts 
 
 **Epic branch.** These rules apply when the ${epicLine} line in \`## Epic\` is not \`${NO_EPIC_BRANCH}\`; \`${epic}\` is the branch it names.
 
-- The parent resolves \`${base}\` from that rule once (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch, or on its first use in a run when the branch already exists, says which base it took, and uses that result for every later step of the run.
-- The parent creates and pushes \`origin/${epic}\` from \`origin/${base}\` once, before the first worktree, when it is missing, and reuses it otherwise.
+- ${EPIC_BASE_RESOLVE}
+- ${EPIC_BRANCH_CREATE}
 - \`<branch>\` is the epic branch: Pick branches from it, Deliver opens the PR into it and Risk diffs against it.
 - ${EPIC_BRANCH_MERGE_OVERRIDE}
 - After every wave and before the epic PR, the parent merges the base into the epic branch with a plain \`git merge origin/${base}\` (no rebase, no force-push) and pushes it; a conflict it cannot resolve with confidence hits the stop rule.
@@ -5126,16 +5129,19 @@ const SESSIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ticket_sessions (
   PRIMARY KEY (ticket_id, session_id)
 );`;
 /**
-* Brings a store written before `tickets.pr_url`, `epics.pr_url` and `ticket_sessions` up to date.
+* Brings a store written before `tickets.pr_url`, `epics.pr_url`, `epics.merged_at` and `ticket_sessions`
+* up to date.
 * SQLite cannot add a column only when it is missing, so the agent runs `check` first and `addPrUrl`
 * when it returns no row; independently it runs `epicsCheck` and, when it returns no row,
-* `addEpicPrUrl`; `sessions` is idempotent.
+* `addEpicPrUrl`, and likewise `epicsMergedCheck` and `addEpicMergedAt`; `sessions` is idempotent.
 */
 const STORE_MIGRATION = {
 	check: "SELECT 1 FROM pragma_table_info('tickets') WHERE name = 'pr_url';",
 	addPrUrl: "ALTER TABLE tickets ADD COLUMN pr_url TEXT;",
 	epicsCheck: "SELECT 1 FROM pragma_table_info('epics') WHERE name = 'pr_url';",
 	addEpicPrUrl: "ALTER TABLE epics ADD COLUMN pr_url TEXT;",
+	epicsMergedCheck: "SELECT 1 FROM pragma_table_info('epics') WHERE name = 'merged_at';",
+	addEpicMergedAt: "ALTER TABLE epics ADD COLUMN merged_at TEXT;",
 	sessions: SESSIONS_SCHEMA
 };
 /**
@@ -5176,7 +5182,8 @@ CREATE TABLE IF NOT EXISTS epics (
   done_when TEXT NOT NULL,
   position INTEGER NOT NULL,
   tracker_id TEXT,
-  pr_url TEXT
+  pr_url TEXT,
+  merged_at TEXT
 );
 CREATE TABLE IF NOT EXISTS tickets (
   id TEXT PRIMARY KEY,
@@ -5469,7 +5476,7 @@ ${PLAN_SCHEMA}
 
 Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist; \`busy_timeout\` makes a write wait up to 5 seconds while another session is writing the store, instead of failing at once. ${PYTHON_FALLBACK} ${STORE_PATH_RULE} Query the store with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
-A store created before \`tickets.pr_url\`, \`epics.pr_url\` and \`ticket_sessions\` existed needs them before its first write. The two column checks are independent: when ${code(STORE_MIGRATION.check)} returns no row, run ${code(STORE_MIGRATION.addPrUrl)}; separately, when ${code(STORE_MIGRATION.epicsCheck)} returns no row, run ${code(STORE_MIGRATION.addEpicPrUrl)}. Each ALTER fails when run twice, so its check always comes first; then run the \`ticket_sessions\` statement from the schema above, which is safe to repeat.
+A store created before \`tickets.pr_url\`, \`epics.pr_url\`, \`epics.merged_at\` and \`ticket_sessions\` existed needs them before its first write. The three column checks are independent: when ${code(STORE_MIGRATION.check)} returns no row, run ${code(STORE_MIGRATION.addPrUrl)}; separately, when ${code(STORE_MIGRATION.epicsCheck)} returns no row, run ${code(STORE_MIGRATION.addEpicPrUrl)}; separately, when ${code(STORE_MIGRATION.epicsMergedCheck)} returns no row, run ${code(STORE_MIGRATION.addEpicMergedAt)}. Each ALTER fails when run twice, so its check always comes first; then run the \`ticket_sessions\` statement from the schema above, which is safe to repeat.
 
 ## Design system standard
 
@@ -5515,6 +5522,10 @@ const EPIC_BASE_RULE = "`dev` when `origin/dev` exists, else the default branch"
 const EPIC_BRANCH_PLACEHOLDER = "<epic-branch>";
 const BASE_PLACEHOLDER = "<base>";
 const EPIC_PR_URL_PLACEHOLDER = "<epic-pr-url>";
+/** How an epic-branch run resolves the base once: /brief's loop and /continue parallel-wave both follow it. */
+const EPIC_BASE_RESOLVE = `The parent resolves \`${BASE_PLACEHOLDER}\` from the line's base rule once per run (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch, or on its first use in a run when the branch already exists, says which base it took, and uses that result for every later step of the run.`;
+/** How an epic-branch run creates the epic branch: the same sentence in /brief's loop and in /continue. */
+const EPIC_BRANCH_CREATE = `The parent creates and pushes \`origin/${EPIC_BRANCH_PLACEHOLDER}\` from \`origin/${BASE_PLACEHOLDER}\` once, before the first worktree, when it is missing, and reuses it otherwise.`;
 /** What an epic-branch brief overrides in the /continue parallel mode it runs: every default-branch merge and checkout. */
 const EPIC_BRANCH_MERGE_OVERRIDE = `Every step of the run's parallel mode that merges or checks out the default branch uses \`origin/${EPIC_BRANCH_PLACEHOLDER}\` instead: each worktree is added from \`origin/${EPIC_BRANCH_PLACEHOLDER}\`, the merge loop runs \`git merge origin/${EPIC_BRANCH_PLACEHOLDER}\` in each ticket's worktree, and the cleanup runs \`git checkout ${EPIC_BRANCH_PLACEHOLDER} && git pull\`, so the epic branch stays checked out.`;
 /** How a scribe comment that gives a Kaneo epic its epic PR URL starts. */
@@ -5602,8 +5613,8 @@ const IN_PROGRESS_QUERY = "SELECT t.id, t.title, s.session_id, s.last_seen_at FR
 const MERGED_QUERY = "SELECT id, pr_url FROM tickets WHERE status = 'in_progress' AND pr_url IS NOT NULL";
 const GH_STATE = "gh pr view <pr_url> --json state";
 const MERGED_STATE = "MERGED";
-/** The store epics whose epic PR is open or merged. Built on call: store.ts may still be loading. */
-const epicPrQuery = () => `SELECT id, ${EPIC_PR_URL_COLUMN} FROM epics WHERE ${EPIC_PR_URL_COLUMN} IS NOT NULL`;
+/** The store epics with an epic PR that no run has reported merged yet. Built on call: store.ts may still be loading. */
+const epicPrQuery = () => `SELECT id, ${EPIC_PR_URL_COLUMN} FROM epics WHERE ${EPIC_PR_URL_COLUMN} IS NOT NULL AND ${EPIC_MERGED_AT_COLUMN} IS NULL`;
 /**
 * How a Kaneo run closes the epics an epic-branch brief left in review: the scribe finds them by
 * their epic PR comment, and a merged epic PR moves its epic to Done. Built on call, like the text.
@@ -5617,7 +5628,7 @@ function storeFlow(cmd) {
 
 1. **Find the store.** With an ID, follow the lookup order above. With none, use the stores only when Kaneo is not installed or \`whoami\` gets no answer: take the written stores that still have open tickets, and ask which plan when several do.
 2. **Bring it up to date** with the migration above, before anything else writes it.
-3. **Close merged tickets.** Run \`${MERGED_QUERY}\`, then for each in_progress ticket with a \`pr_url\`: run \`${GH_STATE}\`; when its state is \`${MERGED_STATE}\`, run \`${setStatus("done")}\` and set \`ended_at\` on its sessions that have none. Without \`gh\`, print that UPDATE line for the user to run instead. Then the store's epics: run \`${epicPrQuery()}\`, and for each epic with a PR URL, run \`${GH_STATE}\` on that URL; when its state is \`${MERGED_STATE}\`, report the epic \`merged\`, whatever the status of its tickets; otherwise report it \`${AWAITING_HUMAN_MERGE}\`. Without \`gh\`, print that command for the user to run instead. An epic without a PR URL is not reported. When the user approves an epic PR in the chat, merge it and report the epic merged. ${EPIC_MERGE_RULE}
+3. **Close merged tickets.** Run \`${MERGED_QUERY}\`, then for each in_progress ticket with a \`pr_url\`: run \`${GH_STATE}\`; when its state is \`${MERGED_STATE}\`, run \`${setStatus("done")}\` and set \`ended_at\` on its sessions that have none. Without \`gh\`, print that UPDATE line for the user to run instead. Then the store's epics: run \`${epicPrQuery()}\`, and for each epic with a PR URL, run \`${GH_STATE}\` on that URL; when its state is \`${MERGED_STATE}\`, report the epic \`merged\`, whatever the status of its tickets, and run \`${setEpicMerged()}\` so no later run lists it again; otherwise report it \`${AWAITING_HUMAN_MERGE}\`. Without \`gh\`, print that command for the user to run instead. An epic without a PR URL, or one already marked merged, is not reported. When the user approves an epic PR in the chat, merge it, report the epic merged and run that same UPDATE. ${EPIC_MERGE_RULE}
 4. **Offer the tickets.** With an ID, that ticket. Otherwise show the todo tickets, \`${TODO_QUERY}\` (wave 1 can start now), and every in_progress ticket with its non-ended sessions and their \`last_seen_at\`, \`${IN_PROGRESS_QUERY}\`. No timer decides it: the user decides whether to take one over, since a session may still be working it.
 5. **Take the ticket.** Run \`${setStatus("in_progress")}\` and then \`${START_SESSION}\` with this run's session id. Taking over an in_progress ticket appends a new row and leaves the earlier sessions' rows as they are.
 6. **Build it.** \`git fetch origin\`, branch \`<ID>/<short-kebab-description>\` from the up-to-date default branch, and build it as single-ticket flow steps 4 and 5 say.
@@ -5801,8 +5812,8 @@ Run parallel mode steps 2 to 5 with the wave as the picked tickets, and these ch
 ${phases}
 - A worker reports itself blocked when the review still has findings after 3 rounds or CI fails twice after fixes.
 - When the brief has a ${epicLine} line that is not \`${NO_EPIC_BRANCH}\`, the integration branch (\`${WAVE_BRANCH}\` above) is the epic branch it names, \`${epic}\`, and \`${base}\` is read from the line the same way /brief's loop reads it:
-  - The parent resolves \`${base}\` once per run (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch or first uses an existing one, says which base it took, and uses that result for every later step.
-  - The parent creates and pushes \`origin/${epic}\` from \`origin/${base}\` when it is missing, before the first worktree.
+  - ${EPIC_BASE_RESOLVE}
+  - ${EPIC_BRANCH_CREATE}
   - In place of \`origin/<default-branch>\`: parallel mode step 2.1 takes \`origin/${epic}\` as the base, step 2.4 runs \`git worktree add -b <branch> <path> origin/${epic}\`, and merge loop step 4.2 runs \`git merge origin/${epic}\`.
   - A wave of one story runs the single-ticket flow with its branch cut from \`origin/${epic}\` instead of the default branch and its PR opened into \`${epic}\`.
   - Cleanup step 5.2 runs \`git checkout ${epic} && git pull\`, so the epic branch stays checked out.
@@ -5817,7 +5828,7 @@ After the cleanup, explain the wave at the user's level: plain words with each t
 - **What changed**: per ticket, what someone can now do or what works differently, and why it matters for the epic.
 - **How it was checked**: risk level, review rounds, checks and CI.
 - **What to watch**: open findings, risks, and anything not merged with the reason.
-- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met. With an epic branch (a ${epicLine} line that is not \`${NO_EPIC_BRANCH}\`), no wave moves the epic to Done, the last one included: the epic still has to merge its epic branch into the base. After the last wave of an epic-branch brief, run its closing step instead of that check: ${epicClosingStep(deepReview)} In this mode, the missing work goes to the scribe as open stories of the epic and the run stops; the next \`${cmd} ${PARALLEL_WAVE}\` builds them.
+- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met. With an epic branch (a ${epicLine} line that is not \`${NO_EPIC_BRANCH}\`), no wave moves the epic to Done, the last one included: the epic still has to merge its epic branch into the base. After the last wave of an epic-branch brief, run its closing step instead of that check: ${epicClosingStep(deepReview)} In this mode, the missing work is added to the epic as open stories (through the scribe on Kaneo, as todo tickets with that \`epic_id\` in a store) and the run stops; the next \`${cmd} ${PARALLEL_WAVE}\` builds them.
 `;
 }
 function defaultConfig() {

@@ -139,7 +139,17 @@ function migrate(db: DatabaseSync): void {
   if (!hasPrUrl) db.exec(`${STORE_WRITE_PREFIX} ${STORE_MIGRATION.addPrUrl}`);
   const hasEpicPrUrl = db.prepare(STORE_MIGRATION.epicsCheck).get();
   if (!hasEpicPrUrl) db.exec(`${STORE_WRITE_PREFIX} ${STORE_MIGRATION.addEpicPrUrl}`);
+  const hasEpicMergedAt = db.prepare(STORE_MIGRATION.epicsMergedCheck).get();
+  if (!hasEpicMergedAt) db.exec(`${STORE_WRITE_PREFIX} ${STORE_MIGRATION.addEpicMergedAt}`);
   db.exec(`${STORE_WRITE_PREFIX} ${STORE_MIGRATION.sessions}`);
+}
+
+/** How many columns of a table have this name. */
+function columnCount(db: DatabaseSync, table: string, column: string): number {
+  const row = db
+    .prepare(`SELECT count(*) AS n FROM pragma_table_info('${table}') WHERE name = '${column}'`)
+    .get() as { n: number };
+  return row.n;
 }
 
 /** How many columns named `pr_url` a table has. */
@@ -167,6 +177,36 @@ describe("store migration", () => {
     expect(prUrlColumns(db, "tickets")).toBe(1);
     expect(prUrlColumns(db, "epics")).toBe(1);
     expect(db.prepare("SELECT id, pr_url FROM epics").all()).toEqual([{ id: "E1", pr_url: null }]);
+  });
+
+  test("new store has epics.merged_at", () => {
+    const db = store();
+    expect(db.prepare(STORE_MIGRATION.epicsMergedCheck).get()).toBeTruthy();
+    expect(columnCount(db, "epics", "merged_at")).toBe(1);
+  });
+
+  test("store with both pr_url columns but no epics.merged_at gains it", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(OLD_SCHEMA);
+    db.exec(STORE_MIGRATION.addPrUrl);
+    db.exec(STORE_MIGRATION.addEpicPrUrl);
+    db.exec(
+      "INSERT INTO epics VALUES ('E1', 'Epic', 'goal', 'done', 1, NULL, 'https://x/pull/1');",
+    );
+    expect(db.prepare(STORE_MIGRATION.epicsMergedCheck).get()).toBeUndefined();
+    migrate(db);
+    expect(columnCount(db, "epics", "merged_at")).toBe(1);
+    expect(db.prepare("SELECT id, pr_url, merged_at FROM epics").all()).toEqual([
+      { id: "E1", pr_url: "https://x/pull/1", merged_at: null },
+    ]);
+  });
+
+  test("running the migration twice leaves one merged_at column", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(OLD_SCHEMA);
+    migrate(db);
+    expect(() => migrate(db)).not.toThrow();
+    expect(columnCount(db, "epics", "merged_at")).toBe(1);
   });
 
   test("store with neither pr_url column gains both", () => {

@@ -7,7 +7,8 @@ import { EPIC_TITLE_PREFIX, KANEO_SKILL, SCRIBE, TOUCHES_LINE, WAVE_RULE } from 
 import {
   AWAITING_HUMAN_MERGE,
   BASE_PLACEHOLDER,
-  EPIC_BASE_RULE,
+  EPIC_BASE_RESOLVE,
+  EPIC_BRANCH_CREATE,
   EPIC_BRANCH_LINE,
   EPIC_BRANCH_PLACEHOLDER,
   EPIC_MERGE_RULE,
@@ -23,9 +24,11 @@ import {
 } from "./loop.ts";
 import { PLANS_DIR, STORE_WRITE_PREFIX } from "./planning.ts";
 import {
+  EPIC_MERGED_AT_COLUMN,
   EPIC_PR_URL_COLUMN,
   START_SESSION,
   STORE_HEADING,
+  setEpicMerged,
   setStatus,
   storeAccess,
 } from "./store.ts";
@@ -75,9 +78,9 @@ const MERGED_QUERY =
 export const GH_STATE = "gh pr view <pr_url> --json state";
 const MERGED_STATE = "MERGED";
 
-/** The store epics whose epic PR is open or merged. Built on call: store.ts may still be loading. */
+/** The store epics with an epic PR that no run has reported merged yet. Built on call: store.ts may still be loading. */
 export const epicPrQuery = (): string =>
-  `SELECT id, ${EPIC_PR_URL_COLUMN} FROM epics WHERE ${EPIC_PR_URL_COLUMN} IS NOT NULL`;
+  `SELECT id, ${EPIC_PR_URL_COLUMN} FROM epics WHERE ${EPIC_PR_URL_COLUMN} IS NOT NULL AND ${EPIC_MERGED_AT_COLUMN} IS NULL`;
 
 /**
  * How a Kaneo run closes the epics an epic-branch brief left in review: the scribe finds them by
@@ -93,7 +96,7 @@ function storeFlow(cmd: string): string {
 
 1. **Find the store.** With an ID, follow the lookup order above. With none, use the stores only when Kaneo is not installed or \`whoami\` gets no answer: take the written stores that still have open tickets, and ask which plan when several do.
 2. **Bring it up to date** with the migration above, before anything else writes it.
-3. **Close merged tickets.** Run \`${MERGED_QUERY}\`, then for each in_progress ticket with a \`pr_url\`: run \`${GH_STATE}\`; when its state is \`${MERGED_STATE}\`, run \`${setStatus("done")}\` and set \`ended_at\` on its sessions that have none. Without \`gh\`, print that UPDATE line for the user to run instead. Then the store's epics: run \`${epicPrQuery()}\`, and for each epic with a PR URL, run \`${GH_STATE}\` on that URL; when its state is \`${MERGED_STATE}\`, report the epic \`merged\`, whatever the status of its tickets; otherwise report it \`${AWAITING_HUMAN_MERGE}\`. Without \`gh\`, print that command for the user to run instead. An epic without a PR URL is not reported. When the user approves an epic PR in the chat, merge it and report the epic merged. ${EPIC_MERGE_RULE}
+3. **Close merged tickets.** Run \`${MERGED_QUERY}\`, then for each in_progress ticket with a \`pr_url\`: run \`${GH_STATE}\`; when its state is \`${MERGED_STATE}\`, run \`${setStatus("done")}\` and set \`ended_at\` on its sessions that have none. Without \`gh\`, print that UPDATE line for the user to run instead. Then the store's epics: run \`${epicPrQuery()}\`, and for each epic with a PR URL, run \`${GH_STATE}\` on that URL; when its state is \`${MERGED_STATE}\`, report the epic \`merged\`, whatever the status of its tickets, and run \`${setEpicMerged()}\` so no later run lists it again; otherwise report it \`${AWAITING_HUMAN_MERGE}\`. Without \`gh\`, print that command for the user to run instead. An epic without a PR URL, or one already marked merged, is not reported. When the user approves an epic PR in the chat, merge it, report the epic merged and run that same UPDATE. ${EPIC_MERGE_RULE}
 4. **Offer the tickets.** With an ID, that ticket. Otherwise show the todo tickets, \`${TODO_QUERY}\` (wave 1 can start now), and every in_progress ticket with its non-ended sessions and their \`last_seen_at\`, \`${IN_PROGRESS_QUERY}\`. No timer decides it: the user decides whether to take one over, since a session may still be working it.
 5. **Take the ticket.** Run \`${setStatus("in_progress")}\` and then \`${START_SESSION}\` with this run's session id. Taking over an in_progress ticket appends a new row and leaves the earlier sessions' rows as they are.
 6. **Build it.** \`git fetch origin\`, branch \`<ID>/<short-kebab-description>\` from the up-to-date default branch, and build it as single-ticket flow steps 4 and 5 say.
@@ -302,8 +305,8 @@ Run parallel mode steps 2 to 5 with the wave as the picked tickets, and these ch
 ${phases}
 - A worker reports itself blocked when the review still has findings after 3 rounds or CI fails twice after fixes.
 - When the brief has a ${epicLine} line that is not \`${NO_EPIC_BRANCH}\`, the integration branch (\`${WAVE_BRANCH}\` above) is the epic branch it names, \`${epic}\`, and \`${base}\` is read from the line the same way /brief's loop reads it:
-  - The parent resolves \`${base}\` once per run (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch or first uses an existing one, says which base it took, and uses that result for every later step.
-  - The parent creates and pushes \`origin/${epic}\` from \`origin/${base}\` when it is missing, before the first worktree.
+  - ${EPIC_BASE_RESOLVE}
+  - ${EPIC_BRANCH_CREATE}
   - In place of \`origin/<default-branch>\`: parallel mode step 2.1 takes \`origin/${epic}\` as the base, step 2.4 runs \`git worktree add -b <branch> <path> origin/${epic}\`, and merge loop step 4.2 runs \`git merge origin/${epic}\`.
   - A wave of one story runs the single-ticket flow with its branch cut from \`origin/${epic}\` instead of the default branch and its PR opened into \`${epic}\`.
   - Cleanup step 5.2 runs \`git checkout ${epic} && git pull\`, so the epic branch stays checked out.
@@ -318,6 +321,6 @@ After the cleanup, explain the wave at the user's level: plain words with each t
 - **What changed**: per ticket, what someone can now do or what works differently, and why it matters for the epic.
 - **How it was checked**: risk level, review rounds, checks and CI.
 - **What to watch**: open findings, risks, and anything not merged with the reason.
-- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met. With an epic branch (a ${epicLine} line that is not \`${NO_EPIC_BRANCH}\`), no wave moves the epic to Done, the last one included: the epic still has to merge its epic branch into the base. After the last wave of an epic-branch brief, run its closing step instead of that check: ${epicClosingStep(deepReview)} In this mode, the missing work goes to the scribe as open stories of the epic and the run stops; the next \`${cmd} ${PARALLEL_WAVE}\` builds them.
+- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met. With an epic branch (a ${epicLine} line that is not \`${NO_EPIC_BRANCH}\`), no wave moves the epic to Done, the last one included: the epic still has to merge its epic branch into the base. After the last wave of an epic-branch brief, run its closing step instead of that check: ${epicClosingStep(deepReview)} In this mode, the missing work is added to the epic as open stories (through the scribe on Kaneo, as todo tickets with that \`epic_id\` in a store) and the run stops; the next \`${cmd} ${PARALLEL_WAVE}\` builds them.
 `;
 }

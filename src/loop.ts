@@ -59,6 +59,12 @@ export const EPIC_BRANCH_PLACEHOLDER = "<epic-branch>";
 export const BASE_PLACEHOLDER = "<base>";
 export const EPIC_PR_URL_PLACEHOLDER = "<epic-pr-url>";
 
+/** How an epic-branch run resolves the base once: /brief's loop and /continue parallel-wave both follow it. */
+export const EPIC_BASE_RESOLVE = `The parent resolves \`${BASE_PLACEHOLDER}\` from the line's base rule once per run (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch, or on its first use in a run when the branch already exists, says which base it took, and uses that result for every later step of the run.`;
+
+/** How an epic-branch run creates the epic branch: the same sentence in /brief's loop and in /continue. */
+export const EPIC_BRANCH_CREATE = `The parent creates and pushes \`origin/${EPIC_BRANCH_PLACEHOLDER}\` from \`origin/${BASE_PLACEHOLDER}\` once, before the first worktree, when it is missing, and reuses it otherwise.`;
+
 /** What an epic-branch brief overrides in the /continue parallel mode it runs: every default-branch merge and checkout. */
 export const EPIC_BRANCH_MERGE_OVERRIDE = `Every step of the run's parallel mode that merges or checks out the default branch uses \`origin/${EPIC_BRANCH_PLACEHOLDER}\` instead: each worktree is added from \`origin/${EPIC_BRANCH_PLACEHOLDER}\`, the merge loop runs \`git merge origin/${EPIC_BRANCH_PLACEHOLDER}\` in each ticket's worktree, and the cleanup runs \`git checkout ${EPIC_BRANCH_PLACEHOLDER} && git pull\`, so the epic branch stays checked out.`;
 

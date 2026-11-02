@@ -10,7 +10,9 @@ import { WAVE_RULE } from "../src/kaneo.ts";
 import { briefMarkdown } from "../src/brief.ts";
 import {
   AWAITING_HUMAN_MERGE,
+  EPIC_BASE_RESOLVE,
   EPIC_BASE_RULE,
+  EPIC_BRANCH_CREATE,
   EPIC_BRANCH_LINE,
   EPIC_BRANCH_MERGE_OVERRIDE,
   EPIC_MERGE_RULE,
@@ -22,7 +24,12 @@ import {
   ticketPhases,
 } from "../src/loop.ts";
 import { STORE_WRITE_PREFIX } from "../src/planning.ts";
-import { EPIC_PR_URL_COLUMN, storeAccess } from "../src/store.ts";
+import {
+  EPIC_MERGED_AT_COLUMN,
+  EPIC_PR_URL_COLUMN,
+  setEpicMerged,
+  storeAccess,
+} from "../src/store.ts";
 
 const MODELS = { fast: "fast-model", balanced: "balanced-model", deep: "deep-model" };
 const BRIEF_DIR = "~/state/briefs";
@@ -184,15 +191,12 @@ describe("continueMarkdown parallel-wave on an epic branch", () => {
   });
 
   test("resolves the base once per run with the shared rule", () => {
-    expect(section).toContain(
-      `  - The parent resolves \`<base>\` once per run (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch or first uses an existing one, says which base it took, and uses that result for every later step.`,
-    );
+    expect(section).toContain(`  - ${EPIC_BASE_RESOLVE}`);
+    expect(section).toContain(EPIC_BASE_RULE);
   });
 
   test("creates the epic branch before the first worktree and uses it in every parallel step", () => {
-    expect(section).toContain(
-      "  - The parent creates and pushes `origin/<epic-branch>` from `origin/<base>` when it is missing, before the first worktree.",
-    );
+    expect(section).toContain(`  - ${EPIC_BRANCH_CREATE}`);
     expect(section).toContain(
       "  - In place of `origin/<default-branch>`: parallel mode step 2.1 takes `origin/<epic-branch>` as the base, step 2.4 runs `git worktree add -b <branch> <path> origin/<epic-branch>`, and merge loop step 4.2 runs `git merge origin/<epic-branch>`.",
     );
@@ -295,7 +299,7 @@ describe("continueMarkdown closes an epic-branch epic", () => {
     expect(section.indexOf(closing)).toBeGreaterThan(section.indexOf("**What is next**"));
     expect(closing).toContain(EPIC_MERGE_RULE);
     expect(section).toContain(
-      `${closing} In this mode, the missing work goes to the scribe as open stories of the epic and the run stops; the next \`/continue ${PARALLEL_WAVE}\` builds them.`,
+      `${closing} In this mode, the missing work is added to the epic as open stories (through the scribe on Kaneo, as todo tickets with that \`epic_id\` in a store) and the run stops; the next \`/continue ${PARALLEL_WAVE}\` builds them.`,
     );
   });
 
@@ -303,16 +307,19 @@ describe("continueMarkdown closes an epic-branch epic", () => {
     const section = storeSection(text);
     const step3 = section.split("3. **Close merged tickets.**")[1]!.split("\n4. ")[0]!;
     expect(epicPrQuery()).toBe(
-      `SELECT id, ${EPIC_PR_URL_COLUMN} FROM epics WHERE ${EPIC_PR_URL_COLUMN} IS NOT NULL`,
+      `SELECT id, ${EPIC_PR_URL_COLUMN} FROM epics WHERE ${EPIC_PR_URL_COLUMN} IS NOT NULL AND ${EPIC_MERGED_AT_COLUMN} IS NULL`,
     );
     expect(step3).toContain(`run \`${epicPrQuery()}\``);
     expect(step3).toContain(`for each epic with a PR URL, run \`${GH_STATE}\` on that URL`);
     expect(step3).toContain(
       "when its state is `MERGED`, report the epic `merged`, whatever the status of its tickets",
     );
+    expect(step3).toContain(`and run \`${setEpicMerged()}\` so no later run lists it again`);
     expect(step3).toContain(`otherwise report it \`${AWAITING_HUMAN_MERGE}\``);
     expect(step3).toContain("Without `gh`, print that command for the user to run instead.");
-    expect(step3).toContain("An epic without a PR URL is not reported.");
+    expect(step3).toContain(
+      "An epic without a PR URL, or one already marked merged, is not reported.",
+    );
     expect(step3).toContain(EPIC_MERGE_RULE);
     expect(text.split("epics WHERE").length - 1).toBe(1);
   });

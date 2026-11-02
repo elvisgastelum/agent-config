@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vite-plus/test";
 import { EPIC_BRANCH_LINE, briefMarkdown } from "../src/brief.ts";
 import {
+  EPIC_BASE_RESOLVE,
   EPIC_BASE_RULE,
+  EPIC_BRANCH_CREATE,
   EPIC_BRANCH_MERGE_OVERRIDE,
   EPIC_PR_COMMENT,
   epicClosingStep,
@@ -112,12 +114,8 @@ describe("epic branch", () => {
   });
 
   test("resolves the base once and keeps the epic branch current", () => {
-    expect(template).toContain(
-      "The parent resolves `<base>` from that rule once (after `git fetch origin`: `dev` when `origin/dev` exists, else the default branch) when it creates the epic branch, or on its first use in a run when the branch already exists, says which base it took, and uses that result for every later step of the run.",
-    );
-    expect(template).toContain(
-      "The parent creates and pushes `origin/<epic-branch>` from `origin/<base>` once, before the first worktree, when it is missing, and reuses it otherwise.",
-    );
+    expect(template).toContain(EPIC_BASE_RESOLVE);
+    expect(template).toContain(EPIC_BRANCH_CREATE);
     expect(template).toContain(
       "`<branch>` is the epic branch: Pick branches from it, Deliver opens the PR into it and Risk diffs against it.",
     );
