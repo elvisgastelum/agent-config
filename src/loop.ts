@@ -59,6 +59,9 @@ export const EPIC_BRANCH_PLACEHOLDER = "<epic-branch>";
 export const BASE_PLACEHOLDER = "<base>";
 export const EPIC_PR_URL_PLACEHOLDER = "<epic-pr-url>";
 
+/** What an epic-branch brief overrides in the /continue parallel mode it runs: every default-branch merge and checkout. */
+export const EPIC_BRANCH_MERGE_OVERRIDE = `Every step of the run's parallel mode that merges or checks out the default branch uses \`origin/${EPIC_BRANCH_PLACEHOLDER}\` instead: each worktree is added from \`origin/${EPIC_BRANCH_PLACEHOLDER}\`, the merge loop runs \`git merge origin/${EPIC_BRANCH_PLACEHOLDER}\` in each ticket's worktree, and the cleanup runs \`git checkout ${EPIC_BRANCH_PLACEHOLDER} && git pull\`, so the epic branch stays checked out.`;
+
 /** How a scribe comment that gives a Kaneo epic its epic PR URL starts. */
 export const EPIC_PR_COMMENT = "Epic PR:";
 

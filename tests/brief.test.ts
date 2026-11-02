@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vite-plus/test";
 import { EPIC_BRANCH_LINE, briefMarkdown } from "../src/brief.ts";
-import { EPIC_BASE_RULE, EPIC_PR_COMMENT, epicClosingStep, prDelivery } from "../src/loop.ts";
+import {
+  EPIC_BASE_RULE,
+  EPIC_BRANCH_MERGE_OVERRIDE,
+  EPIC_PR_COMMENT,
+  epicClosingStep,
+  prDelivery,
+} from "../src/loop.ts";
 import { STORE_WRITE_PREFIX } from "../src/planning.ts";
 import { START_SESSION, setStatus, storeAccess } from "../src/store.ts";
 
@@ -91,6 +97,12 @@ describe("epic branch", () => {
       "- Epic branch: <epic-branch> off `dev` when `origin/dev` exists, else the default branch",
     );
     expect(lines).toContain("- Epic branch: none");
+  });
+
+  test("writes the epic branch merge override in the template", () => {
+    expect(template.split("\n")).toContain(`- ${EPIC_BRANCH_MERGE_OVERRIDE}`);
+    expect(template).toContain("`git merge origin/<epic-branch>`");
+    expect(template).toContain("`git checkout <epic-branch> && git pull`");
   });
 
   test("runs no git command in /brief's own steps", () => {
