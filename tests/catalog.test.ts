@@ -726,6 +726,7 @@ describe("store fallback in /brief and /continue", () => {
     const readme = read(join(import.meta.dirname, "..", "README.md"));
     expect(readme).toContain("### Plan store fallback");
     expect(readme).toContain("`tickets.pr_url`");
+    expect(readme).toContain("`epics.pr_url`");
     expect(readme).toContain("`ticket_sessions`");
     expect(readme).toContain("`Plan: <ID> — <title> (.plans/<MM-yyyy>/<slug>/plan.sqlite)`");
     expect(readme).toContain(".plans/` is untracked");

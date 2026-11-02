@@ -3518,9 +3518,10 @@ const storeGlob = () => `${PLANS_DIR}/*/*/${PLAN_DB}`;
 const WRITTEN_STATUS = "written";
 /** Month folders sorted newest first: by year, then by month. */
 const MONTH_ORDER_EXAMPLE = "01-2027, 10-2026, 02-2026";
-/** The ticket table's columns that track who works a ticket and its PR. */
+/** The columns that track who works a ticket and the ticket and epic PRs. */
 const SESSIONS_TABLE = "ticket_sessions";
 const PR_URL_COLUMN = "tickets.pr_url";
+const EPIC_PR_URL_COLUMN = "epics.pr_url";
 /** The status write for the ticket `<ID>`; built on call, since planning.ts imports this file's users. */
 const setStatus = (status) => `${STORE_WRITE_PREFIX} UPDATE tickets SET status = '${status}' WHERE id = '<ID>';`;
 /** The session row a session or orchestrator adds when it takes the ticket `<ID>`. */
@@ -3545,7 +3546,7 @@ function storeAccess(scribe) {
 
 **Reads and writes.** Query with small selects (\`sqlite3 -box <store> "SELECT …"\`). Start every write with ${code$2(STORE_WRITE_PREFIX)}: a leading \`5000\` line from a write is the busy_timeout prefix echoing, not an error. ${PYTHON_FALLBACK}
 
-**Migration.** Before the first write to a store, including the status update right after reading the ticket at pick, bring it up to date: when ${code$2(STORE_MIGRATION.check)} returns no row, run ${code$2(STORE_MIGRATION.addPrUrl)}, which fails when run twice, so the check always comes first; then run \`CREATE TABLE IF NOT EXISTS ${SESSIONS_TABLE}\` from the planning schema (\`ticket_id\` referencing \`tickets(id)\` with \`ON DELETE CASCADE\`, \`session_id\`, \`started_at\`, \`last_seen_at\`, \`ended_at\`, primary key \`(ticket_id, session_id)\`), which is safe to repeat.
+**Migration.** Before the first write to a store, including the status update right after reading the ticket at pick, bring it up to date: when ${code$2(STORE_MIGRATION.check)} returns no row, run ${code$2(STORE_MIGRATION.addPrUrl)}; independently, when ${code$2(STORE_MIGRATION.epicsCheck)} returns no row, run ${code$2(STORE_MIGRATION.addEpicPrUrl)} (it adds ${code$2(EPIC_PR_URL_COLUMN)}). Each ALTER fails when run twice, so its check always comes first; then run \`CREATE TABLE IF NOT EXISTS ${SESSIONS_TABLE}\` from the planning schema (\`ticket_id\` referencing \`tickets(id)\` with \`ON DELETE CASCADE\`, \`session_id\`, \`started_at\`, \`last_seen_at\`, \`ended_at\`, primary key \`(ticket_id, session_id)\`), which is safe to repeat.
 
 **Sessions.** A session's id is the runtime's session id when the runtime exposes one, otherwise a UUID generated at the start of the run and kept for the whole run. The session or orchestrator working a ticket writes the store itself, at the absolute path it was given, and owns its \`${SESSIONS_TABLE}\` row: it inserts the row (\`started_at\`, \`last_seen_at\`) when it takes the ticket, updates \`last_seen_at\` on each of its store writes, writes the PR URL to ${code$2(PR_URL_COLUMN)} after opening the PR, and sets \`ended_at\` when the PR is opened, it stops or it fails. Ended sessions never count as active.`;
 }
@@ -5105,13 +5106,16 @@ const SESSIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ticket_sessions (
   PRIMARY KEY (ticket_id, session_id)
 );`;
 /**
-* Brings a store written before `tickets.pr_url` and `ticket_sessions` up to date. SQLite cannot
-* add a column only when it is missing, so the agent runs `check` first and `addPrUrl` when it
-* returns no row; `sessions` is idempotent.
+* Brings a store written before `tickets.pr_url`, `epics.pr_url` and `ticket_sessions` up to date.
+* SQLite cannot add a column only when it is missing, so the agent runs `check` first and `addPrUrl`
+* when it returns no row; independently it runs `epicsCheck` and, when it returns no row,
+* `addEpicPrUrl`; `sessions` is idempotent.
 */
 const STORE_MIGRATION = {
 	check: "SELECT 1 FROM pragma_table_info('tickets') WHERE name = 'pr_url';",
 	addPrUrl: "ALTER TABLE tickets ADD COLUMN pr_url TEXT;",
+	epicsCheck: "SELECT 1 FROM pragma_table_info('epics') WHERE name = 'pr_url';",
+	addEpicPrUrl: "ALTER TABLE epics ADD COLUMN pr_url TEXT;",
 	sessions: SESSIONS_SCHEMA
 };
 /**
@@ -5151,7 +5155,8 @@ CREATE TABLE IF NOT EXISTS epics (
   goal TEXT NOT NULL,
   done_when TEXT NOT NULL,
   position INTEGER NOT NULL,
-  tracker_id TEXT
+  tracker_id TEXT,
+  pr_url TEXT
 );
 CREATE TABLE IF NOT EXISTS tickets (
   id TEXT PRIMARY KEY,
@@ -5444,7 +5449,7 @@ ${PLAN_SCHEMA}
 
 Start every write with ${code(STORE_WRITE_PREFIX)}: SQLite checks the links between tables only when a connection asks, and then refuses a ticket, epic or blocker that does not exist; \`busy_timeout\` makes a write wait up to 5 seconds while another session is writing the store, instead of failing at once. ${PYTHON_FALLBACK} ${STORE_PATH_RULE} Query the store with small selects (\`sqlite3 -box <path> "SELECT …"\`), never a full dump. \`SELECT * FROM waves ORDER BY wave\` lists the open tickets with the wave each can start in.
 
-A store created before \`tickets.pr_url\` and \`ticket_sessions\` existed needs them before its first write: when ${code(STORE_MIGRATION.check)} returns no row, run ${code(STORE_MIGRATION.addPrUrl)}, which fails when run twice, so the check always comes first; then run the \`ticket_sessions\` statement from the schema above, which is safe to repeat.
+A store created before \`tickets.pr_url\`, \`epics.pr_url\` and \`ticket_sessions\` existed needs them before its first write. The two column checks are independent: when ${code(STORE_MIGRATION.check)} returns no row, run ${code(STORE_MIGRATION.addPrUrl)}; separately, when ${code(STORE_MIGRATION.epicsCheck)} returns no row, run ${code(STORE_MIGRATION.addEpicPrUrl)}. Each ALTER fails when run twice, so its check always comes first; then run the \`ticket_sessions\` statement from the schema above, which is safe to repeat.
 
 ## Design system standard
 

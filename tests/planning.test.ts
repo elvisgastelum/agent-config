@@ -137,10 +137,55 @@ CREATE TABLE blocks (blocker TEXT NOT NULL REFERENCES tickets(id), blocked TEXT 
 function migrate(db: DatabaseSync): void {
   const hasPrUrl = db.prepare(STORE_MIGRATION.check).get();
   if (!hasPrUrl) db.exec(`${STORE_WRITE_PREFIX} ${STORE_MIGRATION.addPrUrl}`);
+  const hasEpicPrUrl = db.prepare(STORE_MIGRATION.epicsCheck).get();
+  if (!hasEpicPrUrl) db.exec(`${STORE_WRITE_PREFIX} ${STORE_MIGRATION.addEpicPrUrl}`);
   db.exec(`${STORE_WRITE_PREFIX} ${STORE_MIGRATION.sessions}`);
 }
 
+/** How many columns named `pr_url` a table has. */
+function prUrlColumns(db: DatabaseSync, table: string): number {
+  const row = db
+    .prepare(`SELECT count(*) AS n FROM pragma_table_info('${table}') WHERE name = 'pr_url'`)
+    .get() as { n: number };
+  return row.n;
+}
+
 describe("store migration", () => {
+  test("new store has epics.pr_url", () => {
+    const db = store();
+    expect(db.prepare(STORE_MIGRATION.epicsCheck).get()).toBeTruthy();
+    expect(prUrlColumns(db, "epics")).toBe(1);
+  });
+
+  test("store with tickets.pr_url but no epics.pr_url gains epics.pr_url", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(OLD_SCHEMA);
+    db.exec(STORE_MIGRATION.addPrUrl);
+    db.exec("INSERT INTO epics VALUES ('E1', 'Epic', 'goal', 'done', 1, NULL);");
+    expect(db.prepare(STORE_MIGRATION.epicsCheck).get()).toBeUndefined();
+    migrate(db);
+    expect(prUrlColumns(db, "tickets")).toBe(1);
+    expect(prUrlColumns(db, "epics")).toBe(1);
+    expect(db.prepare("SELECT id, pr_url FROM epics").all()).toEqual([{ id: "E1", pr_url: null }]);
+  });
+
+  test("store with neither pr_url column gains both", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(OLD_SCHEMA);
+    migrate(db);
+    expect(prUrlColumns(db, "tickets")).toBe(1);
+    expect(prUrlColumns(db, "epics")).toBe(1);
+  });
+
+  test("running the migration twice leaves one pr_url column each", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(OLD_SCHEMA);
+    migrate(db);
+    expect(() => migrate(db)).not.toThrow();
+    expect(prUrlColumns(db, "tickets")).toBe(1);
+    expect(prUrlColumns(db, "epics")).toBe(1);
+  });
+
   test("old-schema store migrates then accepts write", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(OLD_SCHEMA);
