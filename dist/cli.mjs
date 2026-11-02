@@ -3763,6 +3763,8 @@ const indent = (text) => text.replace(/^/gm, "   ");
 /** The brief's placeholders, filled in by the brief run that writes it. */
 const BRANCH_PLACEHOLDER = "<branch>";
 const REVIEW_PLACEHOLDER = "<review routing>";
+/** When the epic branch is not offered at question 3. */
+const SINGLE_TICKET = "one ticket in total (no parent epic, or an epic with exactly one ticket)";
 function briefMarkdown(runtime, models, briefDir) {
 	const cmd = actionCommand(runtime, BRIEF);
 	const cont = actionCommand(runtime, CONTINUE);
@@ -3776,6 +3778,11 @@ function briefMarkdown(runtime, models, briefDir) {
 	const steps = ticketPhases(BRANCH_PLACEHOLDER, REVIEW_PLACEHOLDER);
 	const phases = steps.map((step, i) => `${i + 2}. ${step}`).join("\n");
 	const deliver = steps.length + 2;
+	const epic = EPIC_BRANCH_PLACEHOLDER;
+	const base = BASE_PLACEHOLDER;
+	const epicLine = `\`${EPIC_BRANCH_LINE}\``;
+	const epicBranchItem = `- ${EPIC_BRANCH_LINE} ${epic} off ${EPIC_BASE_RULE}`;
+	const noEpicBranchItem = `- ${EPIC_BRANCH_LINE} ${NO_EPIC_BRANCH}`;
 	return `${actionFrontmatter(runtime, BRIEF, DESCRIPTION$2, BRIEF_HINT)}
 
 ## Arguments
@@ -3826,7 +3833,7 @@ Ask these four ${ask}, recommending the first option of each, and wait for the a
 
 1. **Missing tickets**: create them in Kaneo now / list them in the brief for the new session to create first / leave them out.
 2. **Parallelism**: parallel waves of up to N tickets (\`${cont} parallel N\`, N = the widest wave) / one ticket at a time (\`${cont}\`). Recommend one at a time when no wave has two tickets.
-3. **Integration branch**: \`dev\` / the repository's default branch / another branch. Every ticket branch starts from it and every PR merges into it.
+3. **Integration branch**: the epic branch \`<EPIC-ID>/<kebab-epic-title>\` (recommended; the epic's title without its \`${EPIC_TITLE_PREFIX}\` prefix, in kebab case; a store epic with no Kaneo ID uses its store ID) / \`dev\` / the repository's default branch / another branch. Every ticket branch starts from it and every PR merges into it. The epic branch is not offered when the epic is ${SINGLE_TICKET}; then the options are \`dev\` / the repository's default branch / another branch. The epic branch's base is not asked: the brief carries its rule (${EPIC_BASE_RULE}) and the new session resolves it, so this step runs no git command.
 4. **Reviews**: routed by risk (${routed}) / always ${deepReview} / fast allowed for none risk.
 
 When the user chose to create the missing tickets, have the scribe create them, sized, labelled and related as the \`${KANEO_SKILL}\` skill says, and put their identifiers in the queue.
@@ -3839,7 +3846,7 @@ The brief's review routing, from answer 4:
 
 ## 3. Write the brief and copy it
 
-1. Write the brief to \`${briefDir}/<EPIC-ID>.md\` (create the folder) from the template below. Replace every \`<…>\` and keep the rest as written: the loop, routing and stop sections are what the new session runs on.
+1. Write the brief to \`${briefDir}/<EPIC-ID>.md\` (create the folder) from the template below. Replace every \`<…>\` and keep the rest as written: the loop, routing and stop sections are what the new session runs on. Keep one of the two ${epicLine} lines: the first, with the epic branch in place of \`${epic}\`, when answer 3 was the epic branch; otherwise \`${noEpicBranchItem}\`. Elsewhere \`${epic}\`, \`${base}\` and \`${EPIC_PR_URL_PLACEHOLDER}\` stay as written: the new session fills them in.
 2. Then copy it to the clipboard with a command of its own (nothing else in it), using the first tool that exists: \`pbcopy < <file>\` (macOS), \`wl-copy < <file>\`, \`xclip -selection clipboard < <file>\`, \`xsel --clipboard --input < <file>\` or \`clip.exe < <file>\`. When none exists, say so and give the path.
 3. Report the path, whether the brief is on the clipboard, one line per wave, and: open a fresh session in this repository and paste it.
 
@@ -3859,6 +3866,8 @@ ${cont} parallel <N>
 - Done when: <each acceptance criterion of the epic, one per line>
 - State: <done>/<total> tickets done, <open> open, <created> created by the brief run.
 - Integration branch: \`<branch>\`. Every ticket branch starts from \`origin/<branch>\` and every PR merges into it.
+${epicBranchItem}
+${noEpicBranchItem}
 
 ## Queue
 
@@ -3876,6 +3885,14 @@ Work only these tickets, in this order. Tickets in one wave do not depend on eac
 
 Agents run through ${CALL$1[runtime]("<name>")}. Every delegated handoff starts with its phase line, such as \`${phase("plan")}\`, so the run can be checked. In parallel waves each ticket goes to one ${agent$1(ORCHESTRATOR)} worker in its own worktree, which runs steps 2 to ${deliver} there and hands every read and write to the ladder.
 
+**Epic branch.** These rules apply when the ${epicLine} line in \`## Epic\` is not \`${NO_EPIC_BRANCH}\`; \`${epic}\` is the branch it names.
+
+- The parent resolves \`${base}\` from that rule once (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch, or on its first use in a run when the branch already exists, says which base it took, and uses that result for every later step of the run.
+- The parent creates and pushes \`origin/${epic}\` from \`origin/${base}\` once, before the first worktree, when it is missing, and reuses it otherwise.
+- \`<branch>\` is the epic branch: Pick branches from it, Deliver opens the PR into it and Risk diffs against it.
+- After every wave and before the epic PR, the parent merges the base into the epic branch with a plain \`git merge origin/${base}\` (no rebase, no force-push) and pushes it; a conflict it cannot resolve with confidence hits the stop rule.
+- A ticket is Done when its PR merged into the epic branch. The loop moves the epic to Done only after merging the epic PR the user approved in the chat (or seeing it MERGED), never before.
+
 1. **Pick.** Have ${agent$1(SCRIBE)} re-read the ticket and its blockers. Still blocked: skip it, say why and take the next. Otherwise move it to In Progress and branch \`<ID>/<short-kebab-description>\` from \`origin/<branch>\`.
    A store ticket: re-read it and its blockers from the store at the absolute path in \`## Epic\`, then run \`${setStatus("in_progress")}\` and \`${START_SESSION}\` with this session's id.
 ${phases}
@@ -3890,9 +3907,11 @@ ${modelRouting(runtime, models, REVIEW_PLACEHOLDER)}
 
 ## Stop and report
 
-Stop and ask the user when a ticket stays blocked, the review still has findings after 3 rounds, CI fails twice after fixes, a merge conflict cannot be resolved with confidence, a PR cannot merge (required review, branch protection), or the epic's criteria are ambiguous.
+Stop and ask the user when a ticket stays blocked, the review still has findings after 3 rounds, CI fails twice after fixes, a merge conflict cannot be resolved with confidence, a PR cannot merge (required review, branch protection), or the epic's criteria are ambiguous. The epic PR is exempt from the "a PR cannot merge" rule: it waits for the user's approval by design.
 
-When the queue is empty, have ${deepReview} check the epic's "Done when" list against the merged code (\`${phase("review")}\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
+When the queue is empty and the ${epicLine} line is \`${NO_EPIC_BRANCH}\`, have ${deepReview} check the epic's "Done when" list against the merged code (\`${phase("review")}\`). Move the epic to Done only when every criterion is met; otherwise add what is missing to the queue and continue. Report a table: ticket, PR, risk, review rounds, status (merged / open / blocked), and what is left.
+
+When the queue is empty and the brief has an epic branch: ${epicClosingStep(deepReview)}
 \`\`\`\`
 `;
 }
@@ -5484,6 +5503,32 @@ const storePrLine = () => `Plan: <ID> — <title> (${PLANS_DIR}/<MM-yyyy>/<slug>
 function prDelivery() {
 	return `- For a Kaneo ticket, the PR body starts with \`${KANEO_PR_LINE}\`, and the scribe comments the PR URL on the ticket.
 - For a store ticket, the PR body starts with \`${storePrLine()}\` and has no Kaneo link line; \`${PLANS_DIR}\` is untracked, so the path points into the main checkout. After opening the PR, the session or orchestrator that opened it writes the PR URL to \`tickets.pr_url\` and sets \`ended_at\` on its \`ticket_sessions\` row.`;
+}
+/** The brief's `## Epic` line that names the epic branch, or `none`; /continue reads it too. */
+const EPIC_BRANCH_LINE = "Epic branch:";
+/** The epic branch line's value when a brief has no epic branch. */
+const NO_EPIC_BRANCH = "none";
+/** How the loop picks the epic branch's base. A brief carries it as text and never resolves it. */
+const EPIC_BASE_RULE = "`dev` when `origin/dev` exists, else the default branch";
+/** Placeholders the brief keeps as written in its loop: the run fills them in. */
+const EPIC_BRANCH_PLACEHOLDER = "<epic-branch>";
+const BASE_PLACEHOLDER = "<base>";
+const EPIC_PR_URL_PLACEHOLDER = "<epic-pr-url>";
+/** How a scribe comment that gives a Kaneo epic its epic PR URL starts. */
+const EPIC_PR_COMMENT = "Epic PR:";
+/** The epic's status while its epic PR waits for the user. */
+const AWAITING_HUMAN_MERGE = "awaiting human merge";
+/** Who merges the epic PR, and when. */
+const EPIC_MERGE_RULE = `The agent merges the epic PR only after the user approves it in the chat; until then its status is \`${AWAITING_HUMAN_MERGE}\`. After the approved merge, the Kaneo epic moves to Done and a store epic is reported merged.`;
+/**
+* What the loop does when the queue of an epic-branch brief is empty: the deep Done-when review over
+* the whole epic branch, then one epic PR into the base that waits for the user. Built on call:
+* store.ts imports planning.ts, which imports this file.
+*/
+function epicClosingStep(reviewer) {
+	const epic = EPIC_BRANCH_PLACEHOLDER;
+	const base = BASE_PLACEHOLDER;
+	return `Merge \`origin/${base}\` into the epic branch as after every wave, then have ${reviewer} check the epic's "Done when" list over \`origin/${base}...origin/${epic}\` (\`${phase("review")}\`); when a criterion is not met, add what is missing to the queue and continue. When it passes, open one PR \`${epic}\` -> \`${base}\` whose body links every ticket, and do not merge it on its own. ${EPIC_MERGE_RULE} A store epic: write the PR URL to \`${EPIC_PR_URL_COLUMN}\`. A Kaneo epic: have the scribe comment \`${EPIC_PR_COMMENT} ${EPIC_PR_URL_PLACEHOLDER}\` on the epic and move it to the project's review column (In Review) when one exists; otherwise it stays In Progress and the report says so. The report gives the epic the status \`${AWAITING_HUMAN_MERGE}\` and leaves deleting the epic branch to the human.`;
 }
 /** The brief's recommended review routing: the reviewer's rung follows the diff's risk. */
 const ROUTED_REVIEW = `none and low risk: ${agent(BALANCED_REVIEWER)}; medium and high: ${agent(DEEP_REVIEWER)}`;

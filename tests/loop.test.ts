@@ -1,12 +1,18 @@
 import { describe, expect, test } from "vite-plus/test";
 import {
+  EPIC_BASE_RULE,
+  EPIC_BRANCH_LINE,
+  EPIC_MERGE_RULE,
+  EPIC_PR_COMMENT,
   KANEO_PR_LINE,
   ROUTED_REVIEW,
+  epicClosingStep,
   modelRouting,
   prDelivery,
   storePrLine,
 } from "../src/loop.ts";
 import { STORE_WRITE_PREFIX } from "../src/planning.ts";
+import { EPIC_PR_URL_COLUMN } from "../src/store.ts";
 import { RUNTIMES } from "../src/tiers.ts";
 
 const MODELS = { fast: "fast-model", balanced: "balanced-model", deep: "deep-model" };
@@ -54,5 +60,36 @@ describe("prDelivery", () => {
     expect(KANEO_PR_LINE).toBe("Kaneo: [<IDENTIFIER> — <ticket title>](<ticket URL>)");
     const kaneo = text.split("\n").find((line) => line.includes("Kaneo ticket"))!;
     expect(kaneo).toContain(`starts with \`${KANEO_PR_LINE}\``);
+  });
+});
+
+describe("epic constants", () => {
+  test("names the epic branch line, base rule and PR comment", () => {
+    expect(EPIC_BRANCH_LINE).toBe("Epic branch:");
+    expect(EPIC_BASE_RULE).toBe("`dev` when `origin/dev` exists, else the default branch");
+    expect(EPIC_PR_COMMENT).toBe("Epic PR:");
+  });
+
+  test("merges the epic PR only after the user approves it", () => {
+    expect(EPIC_MERGE_RULE).toContain(
+      "merges the epic PR only after the user approves it in the chat",
+    );
+    expect(EPIC_MERGE_RULE).toContain("`awaiting human merge`");
+  });
+
+  test("closing step checks, opens the PR, records it and waits for the human", () => {
+    const step = epicClosingStep("`ladder-reviewer-deep`");
+    expect(step).toContain("over `origin/<base>...origin/<epic-branch>`");
+    expect(step).toContain(
+      "open one PR `<epic-branch>` -> `<base>` whose body links every ticket, and do not merge it on its own",
+    );
+    expect(step).toContain(EPIC_MERGE_RULE);
+    expect(step).toContain(`\`${EPIC_PR_URL_COLUMN}\``);
+    expect(step).toContain(`comment \`${EPIC_PR_COMMENT} <epic-pr-url>\` on the epic`);
+    expect(step).toContain(
+      "move it to the project's review column (In Review) when one exists; otherwise it stays In Progress and the report says so",
+    );
+    expect(step).toContain("leaves deleting the epic branch to the human");
+    expect(step).toContain("Phase: review");
   });
 });

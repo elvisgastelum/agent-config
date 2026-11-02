@@ -5,6 +5,7 @@
 import { COMMIT_WRITER } from "./commit.ts";
 import { SCRIBE } from "./kaneo.ts";
 import { PLAN_DB, PLANS_DIR, STORE_WRITE_PREFIX } from "./planning.ts";
+import { EPIC_PR_URL_COLUMN } from "./store.ts";
 import { ORCHESTRATOR, agentName, type Runtime } from "./tiers.ts";
 
 /** Models the loop names, one per rung. */
@@ -42,6 +43,40 @@ export const storePrLine = (): string =>
 export function prDelivery(): string {
   return `- For a Kaneo ticket, the PR body starts with \`${KANEO_PR_LINE}\`, and the scribe comments the PR URL on the ticket.
 - For a store ticket, the PR body starts with \`${storePrLine()}\` and has no Kaneo link line; \`${PLANS_DIR}\` is untracked, so the path points into the main checkout. After opening the PR, the session or orchestrator that opened it writes the PR URL to \`tickets.pr_url\` and sets \`ended_at\` on its \`ticket_sessions\` row.`;
+}
+
+/** The brief's `## Epic` line that names the epic branch, or `none`; /continue reads it too. */
+export const EPIC_BRANCH_LINE = "Epic branch:";
+
+/** The epic branch line's value when a brief has no epic branch. */
+export const NO_EPIC_BRANCH = "none";
+
+/** How the loop picks the epic branch's base. A brief carries it as text and never resolves it. */
+export const EPIC_BASE_RULE = "`dev` when `origin/dev` exists, else the default branch";
+
+/** Placeholders the brief keeps as written in its loop: the run fills them in. */
+export const EPIC_BRANCH_PLACEHOLDER = "<epic-branch>";
+export const BASE_PLACEHOLDER = "<base>";
+export const EPIC_PR_URL_PLACEHOLDER = "<epic-pr-url>";
+
+/** How a scribe comment that gives a Kaneo epic its epic PR URL starts. */
+export const EPIC_PR_COMMENT = "Epic PR:";
+
+/** The epic's status while its epic PR waits for the user. */
+export const AWAITING_HUMAN_MERGE = "awaiting human merge";
+
+/** Who merges the epic PR, and when. */
+export const EPIC_MERGE_RULE = `The agent merges the epic PR only after the user approves it in the chat; until then its status is \`${AWAITING_HUMAN_MERGE}\`. After the approved merge, the Kaneo epic moves to Done and a store epic is reported merged.`;
+
+/**
+ * What the loop does when the queue of an epic-branch brief is empty: the deep Done-when review over
+ * the whole epic branch, then one epic PR into the base that waits for the user. Built on call:
+ * store.ts imports planning.ts, which imports this file.
+ */
+export function epicClosingStep(reviewer: string): string {
+  const epic = EPIC_BRANCH_PLACEHOLDER;
+  const base = BASE_PLACEHOLDER;
+  return `Merge \`origin/${base}\` into the epic branch as after every wave, then have ${reviewer} check the epic's "Done when" list over \`origin/${base}...origin/${epic}\` (\`${phase("review")}\`); when a criterion is not met, add what is missing to the queue and continue. When it passes, open one PR \`${epic}\` -> \`${base}\` whose body links every ticket, and do not merge it on its own. ${EPIC_MERGE_RULE} A store epic: write the PR URL to \`${EPIC_PR_URL_COLUMN}\`. A Kaneo epic: have the scribe comment \`${EPIC_PR_COMMENT} ${EPIC_PR_URL_PLACEHOLDER}\` on the epic and move it to the project's review column (In Review) when one exists; otherwise it stays In Progress and the report says so. The report gives the epic the status \`${AWAITING_HUMAN_MERGE}\` and leaves deleting the epic branch to the human.`;
 }
 
 /** The brief's recommended review routing: the reviewer's rung follows the diff's risk. */

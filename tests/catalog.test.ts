@@ -731,4 +731,10 @@ describe("store fallback in /brief and /continue", () => {
     expect(readme).toContain("`Plan: <ID> — <title> (.plans/<MM-yyyy>/<slug>/plan.sqlite)`");
     expect(readme).toContain(".plans/` is untracked");
   });
+
+  test("README documents the brief epic branch", () => {
+    const readme = read(join(import.meta.dirname, "..", "README.md"));
+    expect(readme).toContain("epic branch");
+    expect(readme).toContain("awaiting human merge");
+  });
 });
