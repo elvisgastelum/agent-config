@@ -1,18 +1,28 @@
 import { describe, expect, test } from "vite-plus/test";
-import { PARALLEL_WAVE, continueMarkdown } from "../src/continue.ts";
+import {
+  GH_STATE,
+  PARALLEL_WAVE,
+  continueMarkdown,
+  epicPrQuery,
+  kaneoEpicCloseStep,
+} from "../src/continue.ts";
 import { WAVE_RULE } from "../src/kaneo.ts";
 import { briefMarkdown } from "../src/brief.ts";
 import {
+  AWAITING_HUMAN_MERGE,
   EPIC_BASE_RULE,
   EPIC_BRANCH_LINE,
   EPIC_BRANCH_MERGE_OVERRIDE,
+  EPIC_MERGE_RULE,
+  EPIC_PR_COMMENT,
   NO_EPIC_BRANCH,
+  epicClosingStep,
   ROUTED_REVIEW,
   prDelivery,
   ticketPhases,
 } from "../src/loop.ts";
 import { STORE_WRITE_PREFIX } from "../src/planning.ts";
-import { storeAccess } from "../src/store.ts";
+import { EPIC_PR_URL_COLUMN, storeAccess } from "../src/store.ts";
 
 const MODELS = { fast: "fast-model", balanced: "balanced-model", deep: "deep-model" };
 const BRIEF_DIR = "~/state/briefs";
@@ -268,5 +278,87 @@ describe("briefMarkdown", () => {
     expect(text).toContain(
       "| parallel workers, one per ticket | `ladder-orchestrator` (deep-model) |",
     );
+  });
+});
+
+const SCRIBE_CALL = 'the Agent tool with `subagent_type: "kaneo-scribe"`';
+const KANEO_PICK = "for the project's open epics";
+
+describe("continueMarkdown closes an epic-branch epic", () => {
+  const text = continueMarkdown("claude", MODELS, BRIEF_DIR);
+  const closeStep = kaneoEpicCloseStep(SCRIBE_CALL);
+
+  test("runs the shared closing step after the last wave of an epic-branch brief", () => {
+    const section = waveSection(text);
+    const closing = epicClosingStep("`ladder-reviewer-deep` (deep-model)");
+    expect(section).toContain(closing);
+    expect(section.indexOf(closing)).toBeGreaterThan(section.indexOf("**What is next**"));
+    expect(closing).toContain(EPIC_MERGE_RULE);
+    expect(section).toContain(
+      `${closing} In this mode, the missing work goes to the scribe as open stories of the epic and the run stops; the next \`/continue ${PARALLEL_WAVE}\` builds them.`,
+    );
+  });
+
+  test("checks store epic PRs in store flow step 3 and reports them merged or awaiting", () => {
+    const section = storeSection(text);
+    const step3 = section.split("3. **Close merged tickets.**")[1]!.split("\n4. ")[0]!;
+    expect(epicPrQuery()).toBe(
+      `SELECT id, ${EPIC_PR_URL_COLUMN} FROM epics WHERE ${EPIC_PR_URL_COLUMN} IS NOT NULL`,
+    );
+    expect(step3).toContain(`run \`${epicPrQuery()}\``);
+    expect(step3).toContain(`for each epic with a PR URL, run \`${GH_STATE}\` on that URL`);
+    expect(step3).toContain(
+      "when its state is `MERGED`, report the epic `merged`, whatever the status of its tickets",
+    );
+    expect(step3).toContain(`otherwise report it \`${AWAITING_HUMAN_MERGE}\``);
+    expect(step3).toContain("Without `gh`, print that command for the user to run instead.");
+    expect(step3).toContain("An epic without a PR URL is not reported.");
+    expect(step3).toContain(EPIC_MERGE_RULE);
+    expect(text.split("epics WHERE").length - 1).toBe(1);
+  });
+
+  test("keeps the existing ticket close step", () => {
+    expect(storeSection(text)).toContain(
+      "3. **Close merged tickets.** Run `SELECT id, pr_url FROM tickets WHERE status = 'in_progress' AND pr_url IS NOT NULL`, then for each in_progress ticket with a `pr_url`: run `gh pr view <pr_url> --json state`; when its state is `MERGED`, run `",
+    );
+  });
+
+  test("the Kaneo epic close step reads the epic PR comment, checks it and moves merged epics to Done", () => {
+    expect(closeStep).toContain(`\`${EPIC_PR_COMMENT} <url>\``);
+    expect(closeStep).toContain(`run \`${GH_STATE}\` on its URL`);
+    expect(closeStep).toContain(
+      "when its state is `MERGED`, have the scribe move the epic to Done",
+    );
+    expect(closeStep).toContain(
+      `otherwise it stays in its column with the status \`${AWAITING_HUMAN_MERGE}\``,
+    );
+    expect(closeStep).toContain("Without `gh`, print that command for the user to run");
+    expect(closeStep).toContain(
+      "When the user approves an epic PR in the chat, merge it, then have the scribe move the epic to Done.",
+    );
+    expect(closeStep).toContain(EPIC_MERGE_RULE);
+    expect(closeStep).toContain("An epic without that comment is left as it is.");
+    expect(closeStep).toContain("or In Progress when the project has no review column");
+    expect(closeStep).toContain("Run it once per run: skip it when this run already did.");
+  });
+
+  test("renders the Kaneo epic close step before the single-ticket pick", () => {
+    const flow = text.split("## Single-ticket flow")[1]!.split("\n## ")[0]!;
+    const pick = flow.indexOf("(To Do / Backlog) in priority order with their blocking relations");
+    expect(flow.indexOf(closeStep)).toBeGreaterThan(-1);
+    expect(flow.indexOf(closeStep)).toBeLessThan(pick);
+  });
+
+  test("renders the Kaneo epic close step before parallel-wave step 1.1", () => {
+    const pickEpic = waveSection(text).split("### 1. Pick the epic")[1]!.split("### 2.")[0]!;
+    expect(pickEpic.indexOf(closeStep)).toBeGreaterThan(-1);
+    expect(pickEpic.indexOf(closeStep)).toBeLessThan(pickEpic.indexOf("1. Load the"));
+    expect(pickEpic.indexOf(closeStep)).toBeLessThan(pickEpic.indexOf(KANEO_PICK));
+  });
+
+  test("renders the Kaneo epic close step before plain parallel mode step 1.1", () => {
+    const parallel = text.split("\n## Parallel mode\n")[1]!.split("### 2.")[0]!;
+    expect(parallel.indexOf(closeStep)).toBeGreaterThan(-1);
+    expect(parallel.indexOf(closeStep)).toBeLessThan(parallel.indexOf("1. Load the"));
   });
 });
