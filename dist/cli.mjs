@@ -5602,13 +5602,22 @@ const IN_PROGRESS_QUERY = "SELECT t.id, t.title, s.session_id, s.last_seen_at FR
 const MERGED_QUERY = "SELECT id, pr_url FROM tickets WHERE status = 'in_progress' AND pr_url IS NOT NULL";
 const GH_STATE = "gh pr view <pr_url> --json state";
 const MERGED_STATE = "MERGED";
+/** The store epics whose epic PR is open or merged. Built on call: store.ts may still be loading. */
+const epicPrQuery = () => `SELECT id, ${EPIC_PR_URL_COLUMN} FROM epics WHERE ${EPIC_PR_URL_COLUMN} IS NOT NULL`;
+/**
+* How a Kaneo run closes the epics an epic-branch brief left in review: the scribe finds them by
+* their epic PR comment, and a merged epic PR moves its epic to Done. Built on call, like the text.
+*/
+function kaneoEpicCloseStep(scribe) {
+	return `**Close merged epics.** Run it once per run: skip it when this run already did. Ask ${scribe} for the project's epics in the review column (In Review), or In Progress when the project has no review column, that carry an \`${EPIC_PR_COMMENT} <url>\` comment, each with that URL. For each one, run \`${GH_STATE}\` on its URL: when its state is \`${MERGED_STATE}\`, have the scribe move the epic to Done; otherwise it stays in its column with the status \`${AWAITING_HUMAN_MERGE}\`. Without \`gh\`, print that command for the user to run and leave the epic where it is. When the user approves an epic PR in the chat, merge it, then have the scribe move the epic to Done. ${EPIC_MERGE_RULE} An epic without that comment is left as it is.`;
+}
 /** The single-ticket flow on a plan store, after the shared store rules. */
 function storeFlow(cmd) {
 	return `### Single-ticket flow on a store
 
 1. **Find the store.** With an ID, follow the lookup order above. With none, use the stores only when Kaneo is not installed or \`whoami\` gets no answer: take the written stores that still have open tickets, and ask which plan when several do.
 2. **Bring it up to date** with the migration above, before anything else writes it.
-3. **Close merged tickets.** Run \`${MERGED_QUERY}\`, then for each in_progress ticket with a \`pr_url\`: run \`${GH_STATE}\`; when its state is \`${MERGED_STATE}\`, run \`${setStatus("done")}\` and set \`ended_at\` on its sessions that have none. Without \`gh\`, print that UPDATE line for the user to run instead.
+3. **Close merged tickets.** Run \`${MERGED_QUERY}\`, then for each in_progress ticket with a \`pr_url\`: run \`${GH_STATE}\`; when its state is \`${MERGED_STATE}\`, run \`${setStatus("done")}\` and set \`ended_at\` on its sessions that have none. Without \`gh\`, print that UPDATE line for the user to run instead. Then the store's epics: run \`${epicPrQuery()}\`, and for each epic with a PR URL, run \`${GH_STATE}\` on that URL; when its state is \`${MERGED_STATE}\`, report the epic \`merged\`, whatever the status of its tickets; otherwise report it \`${AWAITING_HUMAN_MERGE}\`. Without \`gh\`, print that command for the user to run instead. An epic without a PR URL is not reported. When the user approves an epic PR in the chat, merge it and report the epic merged. ${EPIC_MERGE_RULE}
 4. **Offer the tickets.** With an ID, that ticket. Otherwise show the todo tickets, \`${TODO_QUERY}\` (wave 1 can start now), and every in_progress ticket with its non-ended sessions and their \`last_seen_at\`, \`${IN_PROGRESS_QUERY}\`. No timer decides it: the user decides whether to take one over, since a session may still be working it.
 5. **Take the ticket.** Run \`${setStatus("in_progress")}\` and then \`${START_SESSION}\` with this run's session id. Taking over an in_progress ticket appends a new row and leaves the earlier sessions' rows as they are.
 6. **Build it.** \`git fetch origin\`, branch \`<ID>/<short-kebab-description>\` from the up-to-date default branch, and build it as single-ticket flow steps 4 and 5 say.
@@ -5646,6 +5655,8 @@ function continueMarkdown(runtime, models, briefDir) {
 	const epic = EPIC_BRANCH_PLACEHOLDER;
 	const base = BASE_PLACEHOLDER;
 	const epicLine = `\`${EPIC_BRANCH_LINE}\``;
+	const closeEpics = kaneoEpicCloseStep(scribe);
+	const deepReview = `\`${agentName("review", "deep")}\` (${models.deep})`;
 	const phases = ticketPhases(WAVE_BRANCH, WAVE_REVIEW).map((step, i) => `   ${i + 1}. ${step}`).join("\n");
 	return `${actionFrontmatter(runtime, CONTINUE, DESCRIPTION, ARGUMENT_HINT)}
 
@@ -5679,6 +5690,8 @@ When one of these agents is not installed, do the step yourself with bounded rea
 
 ## Single-ticket flow
 
+On Kaneo, before step 1: ${closeEpics}
+
 Continue the next Kaneo ticket's work, move it to in progress, then commit and create the merge request. When the ID, or the board without one, comes from a plan store (see "${STORE_HEADING}"), follow the store flow there instead:
 
 1. Load the \`${KANEO_SKILL}\` skill. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order with their blocking relations, and pick the first one that is not blocked by an unfinished ticket.
@@ -5701,6 +5714,8 @@ ${storeFlow(cmd)}
 Goal: take up to N Kaneo tickets that can be worked at the same time, build each in its own worktree until it is ready to merge, then merge them one by one, bringing each next branch up to date with the latest default branch before it merges.
 
 ### 1. Pick tickets that can run in parallel
+
+On Kaneo, before step 1: ${closeEpics}
 
 1. Load the \`${KANEO_SKILL}\` skill.
 2. Ask ${scribe} for the open tickets of the current project (To Do / Backlog) in priority order, each with its relations.
@@ -5762,6 +5777,8 @@ Goal: build the next wave of one epic, every story that can start now, all at on
 
 ### 1. Pick the epic
 
+On Kaneo, before step 1: ${closeEpics}
+
 1. Load the \`${KANEO_SKILL}\` skill: its "Plan an epic" section says how epics and their stories are marked. Ask ${scribe} for the project's open epics (tasks titled \`${EPIC_TITLE_PREFIX}…\`), each with its "Done when" list and its open stories, and every story with its \`blocks\` relations, including those to stories of other epics.
 2. Hand that summary to ${deep} (\`${phase("plan")}\`): order the epics (an epic waits while one of its stories is blocked by an open story of another epic) and recommend the one to work first, with a one-line reason: what it unblocks, its risk, its priority.
 3. One epic can start: take it. Several can start in any order: ask the user which one, the recommendation first. When the user skips the question, says to choose, or the run cannot ask, take the recommendation and say so. None can start: report what blocks each and stop.
@@ -5800,7 +5817,7 @@ After the cleanup, explain the wave at the user's level: plain words with each t
 - **What changed**: per ticket, what someone can now do or what works differently, and why it matters for the epic.
 - **How it was checked**: risk level, review rounds, checks and CI.
 - **What to watch**: open findings, risks, and anything not merged with the reason.
-- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met. With an epic branch (a ${epicLine} line that is not \`${NO_EPIC_BRANCH}\`), no wave moves the epic to Done, the last one included: the epic still has to merge its epic branch into the base.
+- **What is next**: the epic's progress (done / total) and the next wave's tickets; \`${cmd} ${PARALLEL_WAVE}\` builds it. When this was the epic's last wave, have ${deep} check the merged code against the epic's "Done when" list (\`${phase("review")}\`), and have the scribe move the epic to Done only when every criterion is met. With an epic branch (a ${epicLine} line that is not \`${NO_EPIC_BRANCH}\`), no wave moves the epic to Done, the last one included: the epic still has to merge its epic branch into the base. After the last wave of an epic-branch brief, run its closing step instead of that check: ${epicClosingStep(deepReview)} In this mode, the missing work goes to the scribe as open stories of the epic and the run stops; the next \`${cmd} ${PARALLEL_WAVE}\` builds them.
 `;
 }
 function defaultConfig() {

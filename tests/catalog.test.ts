@@ -744,4 +744,9 @@ describe("store fallback in /brief and /continue", () => {
     expect(readme).toContain("Epic branch");
     expect(readme).toContain("An epic-branch brief keeps the wave on its epic branch");
   });
+
+  test("README documents how /continue closes an epic-branch epic", () => {
+    const readme = read(join(import.meta.dirname, "..", "README.md"));
+    expect(readme).toContain("moves the epic to Done once");
+  });
 });
