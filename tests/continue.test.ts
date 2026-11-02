@@ -2,7 +2,12 @@ import { describe, expect, test } from "vite-plus/test";
 import { PARALLEL_WAVE, continueMarkdown } from "../src/continue.ts";
 import { WAVE_RULE } from "../src/kaneo.ts";
 import { briefMarkdown } from "../src/brief.ts";
-import { ROUTED_REVIEW, prDelivery, ticketPhases } from "../src/loop.ts";
+import {
+  EPIC_BRANCH_MERGE_OVERRIDE,
+  ROUTED_REVIEW,
+  prDelivery,
+  ticketPhases,
+} from "../src/loop.ts";
 import { STORE_WRITE_PREFIX } from "../src/planning.ts";
 import { storeAccess } from "../src/store.ts";
 
@@ -153,6 +158,21 @@ describe("continueMarkdown parallel modes on a store", () => {
   test("keeps the Kaneo parallel flow", () => {
     expect(text).toContain("Have the scribe move the Kaneo ticket to Done.");
     expect(text).toContain("comments the PR URL on its Kaneo ticket;");
+  });
+});
+
+describe("continueMarkdown without a brief", () => {
+  test("keeps parallel mode on the default branch without a brief", () => {
+    const text = continueMarkdown("claude", MODELS, BRIEF_DIR);
+    for (const line of [
+      "1. `git fetch origin` and use the up-to-date default branch as the base.",
+      "4. `git worktree add -b <branch> <path> origin/<default-branch>`",
+      "2. In that ticket's worktree, merge the latest default branch into its branch: `git merge origin/<default-branch>`.",
+      "2. Update the main checkout: `git checkout <default-branch> && git pull`.",
+    ]) {
+      expect(text).toContain(line);
+    }
+    expect(text).not.toContain(EPIC_BRANCH_MERGE_OVERRIDE);
   });
 });
 

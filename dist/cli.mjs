@@ -3890,6 +3890,7 @@ Agents run through ${CALL$1[runtime]("<name>")}. Every delegated handoff starts 
 - The parent resolves \`${base}\` from that rule once (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch, or on its first use in a run when the branch already exists, says which base it took, and uses that result for every later step of the run.
 - The parent creates and pushes \`origin/${epic}\` from \`origin/${base}\` once, before the first worktree, when it is missing, and reuses it otherwise.
 - \`<branch>\` is the epic branch: Pick branches from it, Deliver opens the PR into it and Risk diffs against it.
+- ${EPIC_BRANCH_MERGE_OVERRIDE}
 - After every wave and before the epic PR, the parent merges the base into the epic branch with a plain \`git merge origin/${base}\` (no rebase, no force-push) and pushes it; a conflict it cannot resolve with confidence hits the stop rule.
 - A ticket is Done when its PR merged into the epic branch. The loop moves the epic to Done only after merging the epic PR the user approved in the chat (or seeing it MERGED), never before.
 
@@ -5514,6 +5515,8 @@ const EPIC_BASE_RULE = "`dev` when `origin/dev` exists, else the default branch"
 const EPIC_BRANCH_PLACEHOLDER = "<epic-branch>";
 const BASE_PLACEHOLDER = "<base>";
 const EPIC_PR_URL_PLACEHOLDER = "<epic-pr-url>";
+/** What an epic-branch brief overrides in the /continue parallel mode it runs: every default-branch merge and checkout. */
+const EPIC_BRANCH_MERGE_OVERRIDE = `Every step of the run's parallel mode that merges or checks out the default branch uses \`origin/${EPIC_BRANCH_PLACEHOLDER}\` instead: each worktree is added from \`origin/${EPIC_BRANCH_PLACEHOLDER}\`, the merge loop runs \`git merge origin/${EPIC_BRANCH_PLACEHOLDER}\` in each ticket's worktree, and the cleanup runs \`git checkout ${EPIC_BRANCH_PLACEHOLDER} && git pull\`, so the epic branch stays checked out.`;
 /** How a scribe comment that gives a Kaneo epic its epic PR URL starts. */
 const EPIC_PR_COMMENT = "Epic PR:";
 /** The epic's status while its epic PR waits for the user. */

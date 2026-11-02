@@ -10,6 +10,7 @@ import {
   BASE_PLACEHOLDER,
   EPIC_BASE_RULE,
   EPIC_BRANCH_LINE,
+  EPIC_BRANCH_MERGE_OVERRIDE,
   EPIC_BRANCH_PLACEHOLDER,
   EPIC_PR_URL_PLACEHOLDER,
   NO_EPIC_BRANCH,
@@ -218,6 +219,7 @@ Agents run through ${CALL[runtime]("<name>")}. Every delegated handoff starts wi
 - The parent resolves \`${base}\` from that rule once (after \`git fetch origin\`: ${EPIC_BASE_RULE}) when it creates the epic branch, or on its first use in a run when the branch already exists, says which base it took, and uses that result for every later step of the run.
 - The parent creates and pushes \`origin/${epic}\` from \`origin/${base}\` once, before the first worktree, when it is missing, and reuses it otherwise.
 - \`<branch>\` is the epic branch: Pick branches from it, Deliver opens the PR into it and Risk diffs against it.
+- ${EPIC_BRANCH_MERGE_OVERRIDE}
 - After every wave and before the epic PR, the parent merges the base into the epic branch with a plain \`git merge origin/${base}\` (no rebase, no force-push) and pushes it; a conflict it cannot resolve with confidence hits the stop rule.
 - A ticket is Done when its PR merged into the epic branch. The loop moves the epic to Done only after merging the epic PR the user approved in the chat (or seeing it MERGED), never before.
 

@@ -736,5 +736,6 @@ describe("store fallback in /brief and /continue", () => {
     const readme = read(join(import.meta.dirname, "..", "README.md"));
     expect(readme).toContain("epic branch");
     expect(readme).toContain("awaiting human merge");
+    expect(readme).toContain("uses `origin/<epic-branch>` instead");
   });
 });
